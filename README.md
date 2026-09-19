@@ -2,7 +2,7 @@
 
 CLI tool that clones a Telegram channel, group or forum you have joined into another one (existing or newly created; forum topics are mapped topic to topic), using your own Telegram API credentials (MTProto, via [Telethon](https://github.com/LonamiWebs/Telethon)).
 
-> Status: **phase 2 (copy, saved jobs, pause/resume) done; tested with fakes and run by hand on a real account with a channel that allows forwarding (albums and kill-then-resume work; a "Restrict saving content" source is not tried yet)**. `login`, `logout`, `whoami`, `channels`, `new` (saves a job), `run`, `pause` and `stop` exist. Filters, flood auto-wait, delta `sync`, reupload and the TUI come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
+> Status: **phase 2 (copy, saved jobs, pause/resume) done; tested with fakes and run by hand on a real account with a channel that allows forwarding (albums and kill-then-resume work; a "Restrict saving content" group you do not administer is refused as designed; an admin-owned restricted source is not tried yet)**. `login`, `logout`, `whoami`, `channels`, `new` (saves a job), `run`, `pause` and `stop` exist. Filters, flood auto-wait, delta `sync`, reupload and the TUI come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
 
 ## Goals
 

@@ -6,7 +6,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 
 - [x] Phase 0 — Scaffold (2026-09-19)
 - [x] Phase 1 — Login, channels, tạo kênh (2026-09-19)
-- [x] Phase 2 — Copy + state + pause/resume (2026-09-20; đã chạy được trên Telegram thật với kênh cho phép forward, chưa thử kênh `noforwards`, xem "Phase 2 — ghi chú")
+- [x] Phase 2 — Copy + state + pause/resume (2026-09-20; đã chạy được trên Telegram thật với kênh cho phép forward, kênh `noforwards` mới thử phía không phải admin, xem "Phase 2 — ghi chú")
 - [ ] Phase 3 — Filters
 - [ ] Phase 4 — Limiter & flood
 - [ ] Phase 5 — Delta sync
@@ -54,7 +54,7 @@ Các lựa chọn khi làm (không phải D1–D9):
 - **Tiến độ** là dòng chữ thường (`ui/progress.py`, không ANSI, tối đa một dòng/5 giây). TUI Rich có phím `p`/`q` là phase 7. Ctrl+C lần một: xong batch hiện tại, lưu, thoát mã 130; lần hai: thoát ngay.
 - `MediaKind` thêm `geo`, `contact`, `game`, `invoice` cho khớp danh sách giá trị `media` của `03-filters.md`; loại lạ (dice, ...) tạm xếp vào `document`.
 
-Đã kiểm chứng (2026-09-20, người dùng chạy tay): `new`/`run` copy được từ một kênh cho phép forward. Cũng đã chạy đúng trên tài khoản thật: **album** (forward cả danh sách id giữ nguyên album ở đích, xong spike 2) và **kill giữa chừng rồi resume** (reconcile trên đích thật, không trùng/sót). Chưa thử: nguồn `noforwards` (đường lỗi `ForwardsRestricted` → mã 4 mới chỉ test bằng fake). Còn lại chưa kiểm chứng (người dùng chạy tay):
+Đã kiểm chứng (2026-09-20, người dùng chạy tay): `new`/`run` copy được từ một kênh cho phép forward. Cũng đã chạy đúng trên tài khoản thật: **album** (forward cả danh sách id giữ nguyên album ở đích, xong spike 2) và **kill giữa chừng rồi resume** (reconcile trên đích thật, không trùng/sót). Nguồn `noforwards` là group mà user không phải admin: `new` từ chối đúng như thiết kế (thông báo `err.source_restricted`, D3, mã 4), tức là `Chat.noforwards`/`Channel.noforwards` được nhận ra ở group. Chưa thử: nguồn `noforwards` mà user là admin (cảnh báo `noforwards_admin`, rồi `run` gặp `ForwardsRestricted` → mã 4 mới chỉ test bằng fake). Còn lại chưa kiểm chứng (người dùng chạy tay):
 
 - `forward_messages` trả `None` cho id đã xóa và ném `MessageIdInvalidError` khi mọi id đều đã xóa: đọc từ mã Telethon 1.45, chưa thử thật.
 - `get_input_entity(marked id)` trong `run` dựa vào cache entity trong file session (do `iter_dialogs` của `new`/`channels` ghi). Nếu thiếu, gateway báo `NoPermission` "not accessible": chạy `tgmirror channels` để làm mới.
