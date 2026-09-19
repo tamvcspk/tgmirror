@@ -54,12 +54,10 @@ Các lựa chọn khi làm (không phải D1–D9):
 - **Tiến độ** là dòng chữ thường (`ui/progress.py`, không ANSI, tối đa một dòng/5 giây). TUI Rich có phím `p`/`q` là phase 7. Ctrl+C lần một: xong batch hiện tại, lưu, thoát mã 130; lần hai: thoát ngay.
 - `MediaKind` thêm `geo`, `contact`, `game`, `invoice` cho khớp danh sách giá trị `media` của `03-filters.md`; loại lạ (dice, ...) tạm xếp vào `document`.
 
-Đã kiểm chứng (2026-09-20, người dùng chạy tay): `new`/`run` copy được từ một kênh cho phép forward. Chưa thử: nguồn `noforwards` (đường lỗi `ForwardsRestricted` → mã 4 mới chỉ test bằng fake). Người dùng không báo riêng về album, kill giữa chừng/reconcile hay các loại tin đặc thù, nên các mục dưới vẫn coi là chưa kiểm chứng (người dùng chạy tay; gợi ý: kênh thử nhỏ, `tgmirror new --src ... --dst-new ... --yes --run`, giết tiến trình giữa chừng rồi `tgmirror run <job>`):
+Đã kiểm chứng (2026-09-20, người dùng chạy tay): `new`/`run` copy được từ một kênh cho phép forward. Cũng đã chạy đúng trên tài khoản thật: **album** (forward cả danh sách id giữ nguyên album ở đích, xong spike 2) và **kill giữa chừng rồi resume** (reconcile trên đích thật, không trùng/sót). Chưa thử: nguồn `noforwards` (đường lỗi `ForwardsRestricted` → mã 4 mới chỉ test bằng fake). Còn lại chưa kiểm chứng (người dùng chạy tay):
 
-- Spike 2: forward cả danh sách id của một album với `drop_author=True` có giữ nguyên album ở đích không (code giả định là có).
 - `forward_messages` trả `None` cho id đã xóa và ném `MessageIdInvalidError` khi mọi id đều đã xóa: đọc từ mã Telethon 1.45, chưa thử thật.
 - `get_input_entity(marked id)` trong `run` dựa vào cache entity trong file session (do `iter_dialogs` của `new`/`channels` ghi). Nếu thiếu, gateway báo `NoPermission` "not accessible": chạy `tgmirror channels` để làm mới.
-- Reconcile trên đích thật (đọc đuôi đích bằng `iter_messages(dst, min_id=...)`), thứ tự và id tin của đích sau forward.
 - Spike 7 (poll, quiz, ... khi forward) vẫn mở: phase 2 chuyển mọi tin, không tiền kiểm theo loại.
 
 Lưu ý cho phase 2 (đã áp dụng): schema đã có `jobs.src_kind`, `msg_map.src_topic_id`, `topic_map` (xem `04-state-checkpoint.md`) để phase 8 không cần migration. Đường code phase 1–7 vẫn viết với `kind` trong đầu, dù chỉ kiểm thử với broadcast.
@@ -67,7 +65,7 @@ Lưu ý cho phase 2 (đã áp dụng): schema đã có `jobs.src_kind`, `msg_map
 ## Việc cần xác minh sớm (spike, phase 0–1)
 
 1. ~~Phiên bản Telethon cài đặt có tham số `drop_author` của `forward_messages` không?~~ **Xong 2026-09-19:** có. Telethon 1.45.0 `forward_messages(..., drop_author=, drop_media_captions=, as_album=)`. `pyproject.toml` đặt `telethon>=1.45` nên không cần fallback `ForwardMessagesRequest`.
-2. Forward một danh sách id có giữ nguyên album khi `drop_author=True` không (thử với album nhiều cỡ)? *(phase 2 giả định là có, chưa thử thật)*
+2. ~~Forward một danh sách id có giữ nguyên album khi `drop_author=True` không?~~ **Xong 2026-09-20:** có, người dùng đã thử trên tài khoản thật (chưa đo riêng từng cỡ album).
 3. `iter_messages(..., reverse=True, search=..., filter=...)` kết hợp `min_id` cho kết quả đúng thứ tự tăng dần? *(phase 2 chỉ dùng `min_id` + `reverse=True`, đọc mã Telethon thì `offset_id = min_id + 1`; chưa kết hợp `search`/`filter`, việc của phase 3)*
 4. Hành vi thực tế của quyền để xác định `can_post` và `is_admin` (broadcast, supergroup, group). **Phase 1** suy từ entity (`creator`, `admin_rights`, `banned_rights`, `default_banned_rights`, có xét `until_date`) thay vì `get_permissions`, vì gọi `get_permissions` cho từng dialog là một request mỗi kênh; đã khớp trên account thật với kênh broadcast, còn cần đối chiếu supergroup/group/forum trước khi tick.
 5. Cách phát hiện `noforwards` đáng tin cậy (`Channel.noforwards`, và `Message.noforwards`). Phase 1 đọc `Channel.noforwards`/`Chat.noforwards` trong `channel_info`; `Message.noforwards` chưa dùng.
