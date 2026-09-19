@@ -1,0 +1,22 @@
+# Telegram sessions and secrets = full account access. Never commit.
+*.session
+*.session-journal
+.env
+config.toml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+
+# Local data
+*.db
+*.db-wal
+*.db-shm
+tmp/

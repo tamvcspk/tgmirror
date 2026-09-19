@@ -1,0 +1,48 @@
+[project]
+name = "tgmirror"
+version = "0.1.0"
+description = "Clone a Telegram channel you joined into another channel (MTProto, Telethon)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "telethon>=1.45",
+    "cryptg>=0.4",
+    "typer>=0.12",
+    "questionary>=2.0",
+    "rich>=13.7",
+    "aiosqlite>=0.20",
+    "pydantic>=2.7",
+    "tenacity>=8.3",
+    "platformdirs>=4.2",
+]
+
+[project.scripts]
+tgmirror = "tgmirror.cli.app:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tgmirror"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["*.md"]  # docs and skills are hand-written; ruff would reformat their code blocks
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]

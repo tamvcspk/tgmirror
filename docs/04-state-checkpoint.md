@@ -1,0 +1,109 @@
+# 04 — State, checkpoint, delta
+
+Một file SQLite (`WAL` mode, `foreign_keys=ON`).
+
+## Schema
+
+```sql
+CREATE TABLE jobs (
+  id            INTEGER PRIMARY KEY,
+  name          TEXT NOT NULL,
+  account       TEXT NOT NULL,              -- tên session
+  src_id        INTEGER NOT NULL,           -- peer id nguồn
+  src_title     TEXT,
+  src_kind      TEXT NOT NULL,              -- broadcast|supergroup|forum|group
+  dst_id        INTEGER NOT NULL,
+  dst_title     TEXT,
+  mode          TEXT NOT NULL,              -- auto|copy|reupload
+  filters_json  TEXT NOT NULL,
+  options_json  TEXT NOT NULL,              -- caption, batch_size, ...
+  status        TEXT NOT NULL,              -- created|running|paused|stopped|waiting_flood|done|failed
+  control       TEXT NOT NULL DEFAULT 'none', -- none|pause|stop  (do CLI đặt, runner đọc)
+  cursor_src_id INTEGER NOT NULL DEFAULT 0, -- id nguồn lớn nhất đã xử lý xong (done/failed/filter-skip)
+  resume_at     TEXT,                       -- khi waiting_flood
+  fail_reason   TEXT,
+  stats_json    TEXT NOT NULL DEFAULT '{}', -- done, failed, skipped_filter, bytes, ...
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE msg_map (
+  job_id       INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  src_msg_id   INTEGER NOT NULL,
+  dst_msg_id   INTEGER,                     -- NULL nếu pending/failed
+  grouped_id   INTEGER,
+  src_topic_id INTEGER,                     -- NULL nếu nguồn không phải forum
+  status       TEXT NOT NULL,               -- pending|done|failed|skipped
+  reason       TEXT,
+  batch_id     INTEGER,
+  ts           TEXT NOT NULL,
+  PRIMARY KEY (job_id, src_msg_id)
+);
+CREATE INDEX msg_map_status ON msg_map(job_id, status);
+
+CREATE TABLE topic_map (                    -- chỉ job forum
+  job_id       INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  src_topic_id INTEGER NOT NULL,            -- id tin gốc của topic (General = 1)
+  dst_topic_id INTEGER NOT NULL,
+  title        TEXT,
+  PRIMARY KEY (job_id, src_topic_id)
+);
+
+CREATE TABLE flood_log (
+  id        INTEGER PRIMARY KEY,
+  job_id    INTEGER,
+  ts        TEXT NOT NULL,
+  kind      TEXT NOT NULL,                  -- flood_wait|slow_mode|peer_flood
+  seconds   INTEGER,
+  method    TEXT,
+  delay_ms  INTEGER,                        -- delay của limiter tại thời điểm đó
+  batch_size INTEGER
+);
+
+CREATE TABLE limiter_state (               -- persist AIMD giữa các lần chạy
+  account   TEXT PRIMARY KEY,
+  delay_ms  INTEGER NOT NULL,
+  day       TEXT NOT NULL,                  -- YYYY-MM-DD (local)
+  sent_today INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+```
+
+Tin bị **filter loại** không được ghi vào `msg_map` (hàng triệu hàng vô ích); chỉ tăng bộ đếm `skipped_filter` và đẩy `cursor_src_id` tiến lên.
+
+Tin **không hỗ trợ** (game, invoice, quiz chưa trả lời, poll khi thiếu `--reset-polls`; xem `01-kien-truc.md`) khác filter: người dùng muốn clone nhưng không thể, nên có ghi `msg_map` với `status='skipped'` + `reason='unsupported:<loại>'` và tăng `skipped_unsupported`. `retry` chỉ thử lại `failed`, không thử `skipped`.
+
+`topic_map` được ghi cùng transaction với việc tạo topic đích (tạo topic xong phải lưu ngay, kẻo resume tạo trùng).
+
+## Quy tắc transaction
+
+1. **Trước** khi gọi Telegram cho một batch: `INSERT msg_map(... status='pending', batch_id)` (write-ahead), commit.
+2. **Sau** khi Telegram trả kết quả: trong **một transaction** — cập nhật các hàng thành `done` (kèm `dst_msg_id`) hoặc `failed` (kèm `reason`), cập nhật `cursor_src_id`, `stats_json`, `updated_at`, `limiter_state`.
+3. `cursor_src_id` chỉ tiến, và chỉ tiến tới id lớn nhất của batch đã kết thúc hoàn toàn (không còn `pending`).
+
+## Resume
+
+Khi `tgmirror run` khởi động lại job:
+
+1. Nếu có hàng `pending` (lần trước chết giữa lời gọi) → **reconcile**:
+   - Đọc đuôi kênh đích: các tin có id > `max(dst_msg_id)` của các hàng `done`.
+   - Nếu số tin và loại media khớp với batch `pending` → coi là đã gửi, gán `dst_msg_id`, đánh `done`.
+   - Nếu không có tin mới ở đích → xóa `pending`, gửi lại batch.
+   - Nếu mơ hồ → cảnh báo người dùng, mặc định gửi lại (ưu tiên "không sót" hơn "không trùng"), ghi log.
+2. Lặp lại `iter_messages(src, min_id=cursor_src_id, reverse=True)`.
+3. Bỏ qua bất kỳ `src_msg_id` nào đã `done` trong `msg_map` (an toàn khi `--refilter`).
+
+Ngữ nghĩa: **at-least-once có reconcile**; trùng lặp chỉ có thể xảy ra ở cửa sổ crash rất hẹp và được phát hiện ở bước 1.
+
+## Delta (`tgmirror sync`)
+
+`iter_messages(src, min_id=cursor_src_id, reverse=True)` cùng filter đã lưu. Nếu không có tin mới → thoát nhanh, mã 0. Job `done` chuyển lại `running` rồi `done`.
+
+Phase sau (không thuộc v1): đồng bộ edit (so `edit_date` với `ts`) và delete (kiểm tra sự tồn tại ID định kỳ).
+
+## Điều khiển
+
+- CLI khác process ghi `jobs.control='pause'|'stop'`; runner poll giữa các batch (rẻ, chỉ một `SELECT`).
+- Khi runner nhận Ctrl+C: đặt cờ nội bộ, hoàn tất batch hiện tại, commit, thoát.
+- Một job chỉ có một runner: dùng `BEGIN IMMEDIATE` + cột `status='running'` cùng heartbeat `updated_at`; runner mới chỉ chiếm được nếu heartbeat cũ hơn 2 phút hoặc người dùng dùng `--force-takeover`.
+- Một session Telethon chỉ nên được dùng bởi một process cùng lúc (SQLite session sẽ khóa), do đó một account chạy một job tại một thời điểm.

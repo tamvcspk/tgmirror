@@ -1,0 +1,32 @@
+"""Guards for the hard rules that a stray import or call would silently break."""
+
+import re
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parents[2] / "src" / "tgmirror"
+TELETHON_MODULE = SRC / "core" / "telethon_gateway.py"
+
+
+def _sources() -> list[Path]:
+    return sorted(SRC.rglob("*.py"))
+
+
+def test_only_the_gateway_module_imports_telethon() -> None:
+    """Hard rule 8: engine, CLI and the rest never see Telethon types."""
+    pattern = re.compile(r"^\s*(?:import|from)\s+telethon\b", re.MULTILINE)
+
+    offenders = [
+        p.relative_to(SRC).as_posix()
+        for p in _sources()
+        if p != TELETHON_MODULE and pattern.search(p.read_text(encoding="utf-8"))
+    ]
+
+    assert offenders == []
+
+
+def test_the_client_is_only_built_with_flood_sleep_disabled() -> None:
+    """Hard rule 2 / D6: one place builds ``TelegramClient`` and it passes threshold 0."""
+    text = TELETHON_MODULE.read_text(encoding="utf-8")
+
+    assert text.count("TelegramClient(") == 1
+    assert "flood_sleep_threshold=0" in text
