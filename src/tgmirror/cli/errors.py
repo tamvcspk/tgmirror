@@ -16,11 +16,14 @@ from tgmirror.core.errors import (
     ConfigError,
     FloodWait,
     ForwardsRestricted,
+    JobBusy,
     MissingCredentials,
     NoPermission,
     NotLoggedIn,
     PeerFlood,
+    SchemaTooNew,
     SessionBusy,
+    StoreError,
     TgMirrorError,
     TooManyChannels,
     Transient,
@@ -36,6 +39,14 @@ from tgmirror.engine.endpoints import (
     NewChannelUnsupported,
     SameChannel,
     SourceRestricted,
+)
+from tgmirror.engine.jobs import (
+    AmbiguousJob,
+    JobError,
+    JobExists,
+    JobNotFound,
+    JobWaiting,
+    ModeUnsupported,
 )
 from tgmirror.ui.messages import t
 from tgmirror.ui.tables import channel_label
@@ -73,7 +84,9 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.source_restricted", title=exc.src.title)
         case DestinationNotWritable():
             return t("err.dest_not_writable", title=exc.dst.title)
-        case ForwardsRestricted() | NoPermission():
+        case ForwardsRestricted():
+            return t("err.forwards_restricted")
+        case NoPermission():
             return t("err.no_permission", detail=str(exc))
         case TooManyChannels():
             return t("err.too_many_channels")
@@ -99,17 +112,38 @@ def describe(exc: TgMirrorError) -> str:
             return t(f"err.{exc.reason}")
         case NewChannelUnsupported():
             return t("err.new_unsupported", kind=t(f"kind.{exc.kind}"))
+        case JobNotFound():
+            return t("err.job_not_found", ref=exc.ref)
+        case AmbiguousJob():
+            return t(
+                "err.job_ambiguous",
+                ref=exc.ref,
+                matches=", ".join(f"{j.id} ({j.name})" for j in exc.matches),
+            )
+        case JobExists():
+            return t("err.job_exists", id=exc.job.id)
+        case ModeUnsupported():
+            return t("err.mode_unsupported", mode=exc.mode)
+        case JobWaiting():
+            until = exc.until.astimezone().strftime("%Y-%m-%d %H:%M")
+            return t(f"err.job_waiting_{exc.reason}", until=until)
+        case JobBusy():
+            return t("err.job_busy", id=exc.job_id)
+        case SchemaTooNew():
+            return t("err.schema_too_new")
+        case StoreError():
+            return t("err.store", detail=str(exc))
     return t("err.generic", detail=str(exc))
 
 
 def exit_code(exc: TgMirrorError) -> int:
-    if isinstance(exc, FloodWait | PeerFlood):
+    if isinstance(exc, FloodWait | PeerFlood | JobWaiting):
         return 3
     if isinstance(
         exc, NoPermission | ForwardsRestricted | SourceRestricted | DestinationNotWritable
     ):
         return 4
-    if isinstance(exc, UsageError | ConfigError | BadApiCredentials | EndpointError):
+    if isinstance(exc, UsageError | ConfigError | BadApiCredentials | EndpointError | JobError):
         return 2
     return 1
 

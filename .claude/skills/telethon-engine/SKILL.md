@@ -58,11 +58,12 @@ Avatar copy (optional): download source photo, `client.upload_file(...)`, then `
 ## Reading the source (ascending order)
 
 ```python
-async for m in client.iter_messages(src, min_id=cursor, reverse=True,
-                                    filter=server.filter, search=server.search,
-                                    wait_time=cfg.read_wait):
+async for m in client.iter_messages(peer, min_id=cursor, reverse=True,
+                                    wait_time=READ_WAIT):   # phase 2: no filter/search yet
     ...
 ```
+
+Implemented in `TelethonGateway.iter_messages`: it resolves the peer with `get_input_entity` (a chat missing from the session cache becomes `NoPermission`, so `tgmirror channels` refreshes it), converts with `src_message`/`media_kind`, and raises `NotImplementedError` for any non-empty `ServerFilter` until phase 3 (never silently ignore a filter). Telethon's `MessageEmpty` is also a `custom.Message`: exclude it by name.
 
 - `reverse=True` yields oldest → newest (D4). Confirm it composes correctly with `search`/`filter`/`min_id` in a spike; add a regression test using FakeGateway semantics.
 - Set `wait_time` explicitly; read calls are rate-limited too.
@@ -77,7 +78,8 @@ sent = await client.forward_messages(dst, ids, from_peer=src, drop_author=True)
 ```
 
 - `ids` = all message ids of the batch, ascending, **whole albums only**.
-- The result is a list aligned with `ids`. Treat a `None` entry as "unknown" → mark `pending`, reconcile (`docs/04-state-checkpoint.md`), do not assume success.
+- The result is a list aligned with `ids`. After a call that returned normally, a `None` entry means Telegram created nothing for that id (deleted at the source) → `failed('not_copied')`. `MessageIdInvalidError` (every id gone) maps to `PerMessage` and the runner retries unit by unit. Only a cut-off call (`Transient`) leaves the outcome unknown → reconcile (`docs/04-state-checkpoint.md`). Read from the Telethon 1.45 source, still unverified on a real account (`docs/06-lo-trinh.md`).
+- `last_message_id(chat)` (`get_messages(limit=1)`) is how a job records where the destination stood at creation.
 - `drop_author` (and `drop_media_captions`) exist in `forward_messages` since the Telethon version we require (`>=1.45`, checked in the spike); no raw `ForwardMessagesRequest` needed for broadcast/supergroup targets.
 - Forum targets: `forward_messages` has no topic parameter, so the gateway calls `ForwardMessagesRequest(..., top_msg_id=<dst topic>)` itself (still inside the gateway + limiter). One call = one destination topic; the batcher cuts a batch when the topic changes. Topic mapping rules: `docs/01-kien-truc.md`. Unverified until the phase 8 spike.
 - Batch size defaults to 20, hard max 100.

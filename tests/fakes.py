@@ -21,6 +21,7 @@ from tgmirror.core.errors import (
     InvalidPhone,
     NoPermission,
     PasswordRequired,
+    PerMessage,
 )
 from tgmirror.core.gateway import (
     NO_FILTER,
@@ -50,6 +51,7 @@ class FakeGateway:
         self.messages: dict[int, list[SrcMessage]] = defaultdict(list)  # ascending by id
         self.calls: list[Call] = []
         self._failures: dict[str, deque[GatewayError]] = defaultdict(deque)
+        self._poisoned: dict[tuple[int, int], str] = {}
         self._next_channel_id = -1001000000001
         self._next_msg_id: dict[int, int] = defaultdict(lambda: 1)
         self._next_group_id = 10_000
@@ -121,6 +123,10 @@ class FakeGateway:
         """Make the next ``times`` calls of ``method`` raise ``error`` before any side effect."""
         self._failures[method].extend([error] * times)
 
+    def poison(self, channel: int, msg_id: int, reason: str = "MESSAGE_ID_INVALID") -> None:
+        """A ``copy_messages`` whose ids include this one raises ``PerMessage`` (no side effect)."""
+        self._poisoned[(channel, msg_id)] = reason
+
     def calls_to(self, method: str) -> list[Call]:
         return [c for c in self.calls if c.method == method]
 
@@ -156,6 +162,11 @@ class FakeGateway:
                 continue
             yield msg
 
+    async def last_message_id(self, chat: int) -> int:
+        self._enter("last_message_id", chat)
+        self._channel(chat)
+        return self.messages[chat][-1].id if self.messages[chat] else 0
+
     async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]:
         self._enter("copy_messages", src, dst, list(ids))
         if not ids or len(ids) > MAX_FORWARD_IDS:
@@ -165,6 +176,9 @@ class FakeGateway:
             raise ForwardsRestricted(f"channel {src} restricts saving content")
         if not target.can_post:
             raise NoPermission(f"cannot post to channel {dst}")
+        for msg_id in ids:
+            if (reason := self._poisoned.get((src, msg_id))) is not None:
+                raise PerMessage(reason)
 
         by_id = {m.id: m for m in self.messages[src]}
         new_groups: dict[int, int] = {}  # source grouped_id -> destination grouped_id
@@ -172,7 +186,7 @@ class FakeGateway:
         for msg_id in ids:
             msg = by_id.get(msg_id)
             if msg is None or msg.is_service:
-                results.append(None)  # deleted or not forwardable: outcome unknown to the caller
+                results.append(None)  # deleted or not forwardable: Telegram makes no message for it
                 continue
             gid = msg.grouped_id
             if gid is not None:

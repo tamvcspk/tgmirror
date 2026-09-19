@@ -10,9 +10,9 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 | `tgmirror login` | Nhập `api_id`/`api_hash` (lưu config), đăng nhập (phone, code, 2FA), tạo session. Cần terminal (mã gửi qua Telegram); `--phone` điền sẵn số. Nếu đã đăng nhập thì chỉ báo lại, không cần terminal |
 | `tgmirror logout` / `tgmirror whoami` | Xóa session / xem account hiện tại |
 | `tgmirror channels` | Liệt kê kênh/group/forum đã join (cột: loại, tên + @username, id, số thành viên, noforwards, quyền post). `--search TEXT` lọc theo tên/username, `--writable` chỉ giữ chỗ user là admin và đăng được, `--json` |
-| `tgmirror new` | Wizard tạo job (xem dưới). Hỗ trợ đủ flag để chạy không tương tác. **Phase 1**: chỉ bước 1–2 (chọn nguồn, chọn/tạo đích), chưa lưu job |
-| `tgmirror run <job>` | Chạy hoặc tiếp tục job (foreground, có progress) |
-| `tgmirror pause <job>` / `tgmirror stop <job>` | Đặt cờ `control` trong DB; runner đang chạy sẽ dừng sau batch hiện tại |
+| `tgmirror new` | Wizard tạo job (xem dưới). Hỗ trợ đủ flag để chạy không tương tác. **Phase 2**: bước 1–2 (chọn nguồn, chọn/tạo đích) rồi lưu job và hỏi có chạy ngay không; chưa có filter/tùy chọn (phase 3+). Cờ: `--name`, `--mode auto\|copy` (`reupload` từ phase 6, hiện báo mã 2), `--batch-size 1..100` (mặc định `[limits] batch_size`), `--run/--no-run` (mặc định: hỏi trên terminal, không chạy nếu không có terminal hoặc có `--yes`) |
+| `tgmirror run <job>` | Chạy hoặc tiếp tục job (foreground). `<job>` là id hoặc tên chính xác. `--force-takeover`: chạy dù job có vẻ đang do process khác giữ (chỉ khi chắc nó đã chết). Từ chối job `waiting_flood` trước `resume_at` và job `failed(peer_flood)` trong 24 giờ (mã 3). Job `done` chạy lại sẽ nhặt tin mới |
+| `tgmirror pause <job>` / `tgmirror stop <job>` | Đặt cờ `control` trong DB; runner đang chạy sẽ dừng sau batch hiện tại (`paused`/`stopped`). Job không chạy thì báo "không đang chạy", mã 1. Tiếp tục bằng `tgmirror run` |
 | `tgmirror sync <job>` | Delta clone: chỉ lấy tin mới hơn `cursor` |
 | `tgmirror sync --all` | Sync mọi job `done`/`paused`, chạy tay (không có chế độ chạy nền) |
 | `tgmirror status [job]` | Tiến độ, tốc độ, ETA, số lỗi, lần flood gần nhất |
@@ -24,7 +24,7 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 
 Tùy chọn chung: `--version`, `--debug` (hiện traceback thay vì một câu lỗi).
 
-Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai, `3` job dừng vì flood/peer_flood, `4` thiếu quyền, `130` Ctrl+C.
+Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai, `3` job dừng vì flood/peer_flood (hoặc `run` bị từ chối vì phải chờ), `4` thiếu quyền (kể cả nguồn cấm forward), `130` Ctrl+C (đã lưu, job `stopped`).
 
 ## Wizard `tgmirror new`
 
@@ -50,7 +50,7 @@ tgmirror new --src -1001234567890 --dst -1009876543210 --filter-file filters.yam
 
 Wizard chỉ thu thập giá trị rồi gọi cùng một hàm `create_job(spec)` như flag. Không được có logic chỉ tồn tại ở một nhánh.
 
-Phase 1 (chưa có `create_job`): cả hai nhánh đi qua `engine/endpoints.py` (`find_channel` → `plan_endpoints` → `materialize`). Quy tắc kiểm tra:
+Từ phase 2 cả hai nhánh đi qua `engine/endpoints.py` (`find_channel` → `plan_endpoints` → `materialize`) rồi `engine/jobs.py` (`create_job`, kiểm `--mode`, mỗi cặp nguồn/đích chỉ một job: cặp đã có job thì mã 2 kèm id job) và `run`. Quy tắc kiểm tra:
 
 - `--src`/`--dst` nhận `@username`, id (`-100...` hoặc số trần) hoặc **tên chính xác** (không phân biệt hoa thường, phải duy nhất; không đoán theo một phần tên); một từ không khớp tên nào thì thử làm username không có `@`. Chỉ khớp trong các chat đã join. **PowerShell**: phải viết `"@ten_kenh"` trong dấu nháy, vì `@ten_kenh` trần bị shell hiểu là splatting và biến mất (khi đó `--src` nuốt cờ kế tiếp và lệnh báo "unexpected extra argument").
 - Nguồn bật `noforwards` và user không phải admin → từ chối (D3), thoát mã 4; là admin → cảnh báo (tắt tạm hoặc `--mode reupload` từ phase 6).
@@ -76,7 +76,9 @@ tgmirror new --src ... --dst ... --mode reupload \
 
 ## Điều khiển khi đang chạy
 
-Foreground TUI (Rich Live):
+**Phase 2** chỉ có dòng chữ thường (không ANSI, dùng được khi chuyển hướng): `Job 3: 4,180 messages copied, 3 failed (source up to id …)` tối đa một dòng mỗi 5 giây, cộng các thông báo (reconcile, flood) và một dòng kết quả. Ctrl+C: lần một hoàn tất batch hiện tại, lưu, thoát mã 130; lần hai thoát ngay. `pause`/`stop` từ terminal khác dùng được. Bản TUI dưới đây (phím `p`/`q`, thanh tiến độ, ETA) là phase 7.
+
+Foreground TUI (Rich Live, phase 7):
 
 ```
 tgmirror ▸ job 7  "Kenh A → Kenh A (copy)"        mode=copy   delay=2.4s

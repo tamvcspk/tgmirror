@@ -13,7 +13,8 @@ Source doc: `docs/02-cli-ux.md` (command table, wizard flow, exit codes, config)
 - `cli/runtime.py`: `Runtime` = paths, `connect(config)` (async context manager giving `Connection(auth, gateway)`), prompter, `interactive` (TTY), env. Commands use only this, so tests inject fakes with `CliRunner.invoke(app, args, obj=runtime)` (`make_runtime` fixture in `tests/conftest.py`). `authorized(rt)` is the connect-and-require-login helper.
 - `cli/errors.py`: `run(rt, coro)` runs a command's coroutine (`asyncio.run`) and turns `TgMirrorError`s into one sentence + exit code (`describe`, `exit_code`); `UsageProblem(key, **params)` is a usage error (exit 2) that already names its message key. Add a new error type there together with its message.
 - `cli/wizard.py`: questionary prompts only. **Wizard functions collect values and return a spec; they contain no business logic and never talk to Telegram directly** (they receive already-fetched data, e.g. the channel list).
-- `ui/`: `messages.py` (all user strings), `prompts.py` (async `Prompter` protocol + questionary implementation; async because prompts happen between Telegram calls inside a running loop; `ScriptedPrompter` in `tests/fakes.py`), `tables.py` (Rich table / `--json`), later `progress.py`.
+- `ui/`: `messages.py` (all user strings), `prompts.py` (async `Prompter` protocol + questionary implementation; async because prompts happen between Telegram calls inside a running loop; `ScriptedPrompter` in `tests/fakes.py`), `tables.py` (Rich table / `--json`), `progress.py` (`LineReporter`: plain lines, no ANSI, throttled; the Rich live view is phase 7).
+- `cli/interrupt.py`: `stop_on_interrupt` (first Ctrl+C asks the runner to finish the batch and save, exit 130; the second quits at once). `cli/runtime.py` also has `opened_store(rt)` (SQLite state, migrated on first use). `cli/commands/run.py::execute` is shared by `run` and `new --run`; `pause`/`stop` need no Telegram connection.
 - Business logic lives in `engine/` and `store/`. A command is: parse args → build a spec → call one function → render the result.
 
 ## The parity rule
@@ -24,7 +25,7 @@ Every wizard outcome must be expressible with flags/YAML, and both paths call th
 2. Add the wizard step that fills the same field.
 3. Add a test that creates a job via flags and via a scripted wizard (`questionary` can be fed with `pytest` monkeypatch / prompt-toolkit input pipes) and asserts equal specs.
 
-`--yes` skips confirmations only; it never skips safety prompts that have their own explicit flag (e.g. the reupload-on-protected-channel confirmation, see `telethon-engine`). Same for unsupported message types under `--mode reupload`: `--ignore-unsupported` (game/invoice/unanswered quiz; `--placeholder` implies it and also posts a stub text) and `--reset-polls` must be given explicitly; without them the wizard asks and non-interactive runs exit `2` (`docs/02-cli-ux.md`, "Tin đặc thù").
+The "run it now?" question is `--run/--no-run` (unset: ask on a terminal; never runs when `--yes` is given or there is no terminal). `--yes` skips confirmations only; it never skips safety prompts that have their own explicit flag (e.g. the reupload-on-protected-channel confirmation, see `telethon-engine`). Same for unsupported message types under `--mode reupload`: `--ignore-unsupported` (game/invoice/unanswered quiz; `--placeholder` implies it and also posts a stub text) and `--reset-polls` must be given explicitly; without them the wizard asks and non-interactive runs exit `2` (`docs/02-cli-ux.md`, "Tin đặc thù").
 
 ## Adding a command — checklist
 

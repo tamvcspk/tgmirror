@@ -25,6 +25,10 @@ class MediaKind(StrEnum):
     STICKER = "sticker"
     VIDEO_NOTE = "video_note"
     POLL = "poll"
+    GEO = "geo"  # location and venue
+    CONTACT = "contact"
+    GAME = "game"
+    INVOICE = "invoice"
     WEBPAGE = "webpage"
     TEXT = "text"  # text only, no media
 
@@ -132,10 +136,22 @@ class TelegramGateway(Protocol):
         """Messages with ``id > min_id``, ascending (decision D4), narrowed by ``filters``."""
         ...
 
+    async def last_message_id(self, chat: int) -> int:
+        """Id of the newest message in ``chat`` (0 when it has none). One cheap read.
+
+        A job records it for the destination at creation, so a later reconcile only reads what
+        was posted after that point (docs/04-state-checkpoint.md, "Resume").
+        """
+        ...
+
     async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]:
         """Strategy A: server-side copy without author. Result is aligned with ``ids``.
 
-        ``None`` means the outcome for that id is unknown; the caller must reconcile it.
+        A call that returns normally is authoritative: ``None`` means Telegram created no message
+        for that id (deleted at the source, not forwardable). Raises ``PerMessage`` when Telegram
+        rejects the request because of the ids themselves (nothing was created), so the caller can
+        retry the units one by one. If the call is cut off (``Transient``) the outcome is unknown
+        and only reconcile can tell (docs/04-state-checkpoint.md).
         """
         ...
 

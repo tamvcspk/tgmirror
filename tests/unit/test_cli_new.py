@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -204,7 +205,7 @@ def test_no_joined_chats(make_runtime: MakeRuntime) -> None:
 
 
 def test_wizard_creates_the_same_channel_as_the_flags(
-    make_runtime: MakeRuntime, gateway: FakeGateway
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
 ) -> None:
     """Parity rule: an interactive session and the flags end in the same create_channel call."""
     gateway.add_channel("Source")
@@ -221,7 +222,14 @@ def test_wizard_creates_the_same_channel_as_the_flags(
         select=["Source", "Create a new channel"], text=["Copy", "about"], confirm=[True]
     )
     wizard = runner.invoke(
-        app, ["new"], obj=make_runtime(gateway=wizard_gateway, prompter=prompter, interactive=True)
+        app,
+        ["new"],
+        obj=make_runtime(
+            gateway=wizard_gateway,
+            prompter=prompter,
+            interactive=True,
+            root=tmp_path / "wizard",  # its own database: the flags run already saved this pair
+        ),
     )
 
     assert flags.exit_code == wizard.exit_code == 0, wizard.output

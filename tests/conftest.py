@@ -34,6 +34,7 @@ def make_runtime(tmp_path: Path) -> Callable[..., Runtime]:
         prompter: ScriptedPrompter | None = None,
         interactive: bool = False,
         env: Mapping[str, str] | None = None,
+        root: Path | None = None,  # own config/data dirs (a second runtime in one test)
     ) -> Runtime:
         gw = gateway if gateway is not None else FakeGateway()
         au = auth if auth is not None else FakeAuth(logged_in=ACCOUNT)
@@ -43,7 +44,7 @@ def make_runtime(tmp_path: Path) -> Callable[..., Runtime]:
             yield Connection(au, gw)
 
         return Runtime(
-            paths=Paths.under(tmp_path),
+            paths=Paths.under(root or tmp_path),
             connect=connect,
             prompter=prompter if prompter is not None else ScriptedPrompter(),
             interactive=interactive,

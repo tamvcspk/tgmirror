@@ -2,7 +2,7 @@
 
 CLI tool that clones a Telegram channel, group or forum you have joined into another one (existing or newly created; forum topics are mapped topic to topic), using your own Telegram API credentials (MTProto, via [Telethon](https://github.com/LonamiWebs/Telethon)).
 
-> Status: **phase 1 (login, channels, create a destination) done and checked against a real account**. `login`, `logout`, `whoami`, `channels` and `new` (pick a source, pick or create a destination; it does not save a job yet) exist; copying starts in phase 2. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
+> Status: **phase 2 (copy, saved jobs, pause/resume) done; tested with fakes and run by hand on a real account with a channel that allows forwarding (a "Restrict saving content" source is not tried yet)**. `login`, `logout`, `whoami`, `channels`, `new` (saves a job), `run`, `pause` and `stop` exist. Filters, flood auto-wait, delta `sync`, reupload and the TUI come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
 
 ## Goals
 
@@ -14,23 +14,23 @@ CLI tool that clones a Telegram channel, group or forum you have joined into ano
 
 ## Usage
 
-Available now (phase 1):
+Available now (phase 2):
 
 ```bash
 tgmirror login                # api_id / api_hash (from my.telegram.org/apps) + account login
 tgmirror whoami | logout
 tgmirror channels [--search TEXT] [--writable] [--json]
-tgmirror new                  # wizard: pick source, pick or create destination (no job saved yet)
-tgmirror new --src "@my_channel" --dst-new "My channel (copy)" --yes   # keep the quotes in PowerShell
+tgmirror new                  # wizard: pick source, pick or create destination, save the job, maybe run it
+tgmirror new --src "@my_channel" --dst-new "My channel (copy)" --yes --run   # keep the quotes in PowerShell
+tgmirror run <job>            # start / resume (id or exact name); Ctrl+C saves and exits
+tgmirror pause|stop <job>     # from another terminal: stop after the current batch
 ```
 
 Planned (later phases):
 
 ```bash
 tgmirror new                  # full wizard: source -> destination -> filters
-tgmirror run <job>            # start / resume
-tgmirror pause|stop <job>
-tgmirror sync <job>           # delta clone
+tgmirror sync <job>           # delta clone (today `run` on a finished job already picks up new messages)
 tgmirror status | jobs
 ```
 

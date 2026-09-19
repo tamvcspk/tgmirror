@@ -10,6 +10,8 @@
 4. Dừng khi có dấu hiệu nặng (`PeerFlood`), không cố.
 5. Một account, một job, tuần tự.
 
+> **Trạng thái (phase 2)**: `core/limiter.py` mới là bản tạm thời, chỉ giãn cách batch: `min_delay` ± `jitter` giữa hai lời gọi copy và nghỉ dài mỗi `long_pause_every` tin (lời gọi đầu của một lần chạy đi ngay). Chưa có AIMD, `daily_cap`, `limiter_state`, chờ FloodWait tự động (`max_auto_wait`), giảm `batch_size` khi flood liên tiếp: FloodWait làm job dừng ở `waiting_flood` với `resume_at`, `flood_log` có ghi (method, seconds, delay, batch_size), `run` từ chối trước `resume_at`. PeerFlood: dừng, `run` từ chối 24 giờ. Đó là phase 4; các mục dưới là thiết kế đích.
+
 ## Limiter (`core/limiter.py`)
 
 Mọi lời gọi gateway đi qua `await limiter.acquire(cost, kind)`.

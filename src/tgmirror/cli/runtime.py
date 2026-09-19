@@ -17,6 +17,7 @@ from tgmirror.core.errors import NotLoggedIn
 from tgmirror.core.gateway import TelegramGateway
 from tgmirror.core.paths import Paths
 from tgmirror.core.telethon_gateway import telethon_session
+from tgmirror.store.db import Store
 from tgmirror.ui.prompts import Prompter, QuestionaryPrompter
 
 
@@ -49,6 +50,14 @@ async def authorized(rt: Runtime) -> AsyncIterator[Connection]:
         if await conn.auth.account() is None:
             raise NotLoggedIn("no valid session")
         yield conn
+
+
+@asynccontextmanager
+async def opened_store(rt: Runtime) -> AsyncIterator[Store]:
+    """The SQLite state (created and migrated on first use), closed on exit."""
+    rt.paths.ensure()
+    async with await Store.open(rt.paths.db_path) as store:
+        yield store
 
 
 def default_runtime() -> Runtime:

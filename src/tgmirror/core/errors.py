@@ -65,6 +65,22 @@ class PerMessage(GatewayError):
         self.reason = reason
 
 
+class StoreError(TgMirrorError):
+    """The SQLite state is unusable or was asked to do something inconsistent."""
+
+
+class SchemaTooNew(StoreError):
+    """The database was written by a newer tgmirror than this one."""
+
+
+class JobBusy(StoreError):
+    """Another runner holds the job (fresh heartbeat). ``--force-takeover`` overrides it."""
+
+    def __init__(self, job_id: int) -> None:
+        super().__init__(f"job {job_id} is being run by another process")
+        self.job_id = job_id
+
+
 class UsageError(TgMirrorError):
     """The command was invoked wrongly (missing flag, no terminal for a prompt). Exit code 2."""
 

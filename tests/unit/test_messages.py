@@ -44,6 +44,7 @@ def test_every_key_used_in_the_source_exists() -> None:
         used |= set(re.findall(r"""\bt\(\s*["']([a-z_]+\.[a-z_]+|yes|no|admin)["']""", text))
         used |= set(re.findall(r"""\bnotify\(\s*["']([a-z_.]+)["']""", text))
         used |= set(re.findall(r"""UsageProblem\(\s*["']([a-z_.]+)["']""", text))
+        used |= {f"run.{c}" for c in re.findall(r"""\.notice\(\s*["']([a-z_]+)["']""", text)}
         used |= {
             f"warn.{w}" for w in re.findall(r"""warnings\.append\(\s*["']([a-z_]+)["']""", text)
         }

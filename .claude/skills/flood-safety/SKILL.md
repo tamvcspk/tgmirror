@@ -16,7 +16,7 @@ Source docs: `docs/05-chong-flood.md` (numbers, rationale) and `docs/01-kien-tru
 5. Users may slow the tool down but never below `min_delay`, and never disable jitter or the daily cap without an explicit, documented flag that prints a warning.
 6. Sleeping is interruptible: pause/stop/Ctrl+C must work during a flood wait (use `asyncio.wait` on a stop event, not a bare `sleep`).
 
-Until `core/limiter.py` exists (phase 4) the only Telegram calls are the one-shot ones of phase 1 (list dialogs, get entity, create channel, login): they map FloodWait/PeerFlood to errors and stop with exit code 3, with no retry. Do not add bulk or looping write calls before the limiter is wired in (`docs/06-lo-trinh.md`, "Phase 1 — ghi chú").
+**Phase 2 state:** `core/limiter.py` is an interim `Limiter.acquire(cost)` that only spaces batches (`min_delay` ± jitter, a long pause every `long_pause_every` messages); the runner's sleep is interruptible. There is no AIMD, daily cap, `limiter_state` or auto-wait yet: a FloodWait stops the job (`waiting_flood`, `resume_at`, a `flood_log` row, exit code 3; `run` refuses before `resume_at`) and a PeerFlood fails it (`run` refuses for 24 h). The one-shot phase 1 calls (list dialogs, get entity, create channel, login) map FloodWait/PeerFlood to an error and exit code 3 without retry. Phase 4 replaces the body of `Limiter` and the flood branch of the runner; keep the `acquire` interface and the invariants above (`docs/06-lo-trinh.md`, "Phase 2 — ghi chú").
 
 ## Limiter behaviour (spec)
 

@@ -9,12 +9,12 @@ Python >= 3.11, `uv`, Telethon + `cryptg`, Typer (CLI), questionary (prompts), R
 ## Layout (`src/tgmirror/`; packages are added phase by phase, see `docs/06-lo-trinh.md`)
 
 ```
-core/     gateway (Telegram wrapper), auth (login flow), telethon_gateway (only Telethon importer), limiter, errors, config, paths
-engine/   endpoints (source/destination rules), planner, batcher, strategies (copy / reupload), runner
+core/     gateway (Telegram wrapper), auth (login flow), telethon_gateway (only Telethon importer), limiter (interim until phase 4), errors, config, paths
+engine/   endpoints (source/destination rules), jobs (create/resolve/vet), planner, batcher, strategies (copy / reupload), reconcile, runner
 filters/  model, parser (YAML + flags), server pushdown, client matcher
-store/    schema.sql, db, repos (jobs, msg_map, flood_log)
-cli/      app, wizard, runtime (injectable Runtime), errors (exit codes), commands/
-ui/       messages (all user strings), prompts, tables, progress
+store/    schema.sql, db (`Store`: the only place with SQL), jobs, msgmap, floodlog
+cli/      app, wizard, runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), commands/
+ui/       messages (all user strings), prompts, tables, progress (plain-line reporter; Rich TUI is phase 7)
 ```
 
 ## Hard rules

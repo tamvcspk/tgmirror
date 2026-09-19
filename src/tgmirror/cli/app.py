@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 
 from tgmirror import __version__
-from tgmirror.cli.commands import auth, channels, new
+from tgmirror.cli.commands import auth, channels, control, new, run
 from tgmirror.cli.runtime import Runtime, default_runtime
 
 app = typer.Typer(
@@ -64,3 +64,6 @@ app.command("logout")(auth.logout)
 app.command("whoami")(auth.whoami)
 app.command("channels")(channels.channels)
 app.command("new")(new.new)
+app.command("run")(run.run_job)
+app.command("pause")(control.pause)
+app.command("stop")(control.stop)

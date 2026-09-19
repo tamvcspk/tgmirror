@@ -2,9 +2,8 @@
 
 This is the only module (with its tests) that imports Telethon. Telethon exceptions are mapped to
 ``core.errors`` at this boundary, so nothing above it ever sees an ``RPCError``
-(docs/01-kien-truc.md, "Xử lý lỗi"). Phase 1 covers login, listing and creating channels;
-reading and copying messages arrive with phase 2, and the limiter is wired in at phase 4
-(docs/06-lo-trinh.md).
+(docs/01-kien-truc.md, "Xử lý lỗi"). Phase 1 covers login, listing and creating channels; phase 2
+adds reading and copying messages. The limiter is wired in at phase 4 (docs/06-lo-trinh.md).
 """
 
 import sqlite3
@@ -14,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from telethon import TelegramClient, errors, types, utils
+from telethon.tl import custom
 from telethon.tl.functions.channels import CreateChannelRequest
 
 from tgmirror.core.auth import AccountInfo
@@ -33,6 +33,7 @@ from tgmirror.core.errors import (
     NotLoggedIn,
     PasswordRequired,
     PeerFlood,
+    PerMessage,
     SessionBusy,
     TooManyChannels,
     Transient,
@@ -41,11 +42,14 @@ from tgmirror.core.gateway import (
     NO_FILTER,
     ChannelInfo,
     ChatKind,
+    MediaKind,
     ServerFilter,
     SrcMessage,
     Unit,
 )
 from tgmirror.core.paths import Paths
+
+READ_WAIT = 1.0  # seconds between history pages: reads are rate-limited too (docs/05)
 
 # ---- error mapping --------------------------------------------------------------------------
 
@@ -99,6 +103,8 @@ def map_exception(exc: BaseException) -> GatewayError | None:
             return ForwardsRestricted("CHAT_FORWARDS_RESTRICTED")
         case errors.FileReferenceExpiredError():
             return FileRefExpired("FILE_REFERENCE_EXPIRED")
+        case errors.MessageIdInvalidError():  # every id of a forward is gone; the request failed
+            return PerMessage("MESSAGE_ID_INVALID")
         case errors.ChannelsTooMuchError() | errors.UserChannelsTooMuchError():
             return TooManyChannels(_rpc_name(exc))
         case ConnectionError() | TimeoutError() | errors.TimedOutError() | errors.ServerError():
@@ -187,6 +193,65 @@ def channel_info(entity: object) -> ChannelInfo | None:
     return None
 
 
+# ---- messages -> SrcMessage -----------------------------------------------------------------
+
+
+def media_kind(message: custom.Message) -> MediaKind:
+    """The ``media`` filter value of a message (docs/03-filters.md)."""
+    media = message.media
+    if media is None:
+        return MediaKind.TEXT
+    if isinstance(media, types.MessageMediaPhoto):
+        return MediaKind.PHOTO
+    if isinstance(media, types.MessageMediaDocument):
+        # order matters: a GIF is also a video, and a video note is a round video
+        for kind, is_kind in (
+            (MediaKind.STICKER, message.sticker),
+            (MediaKind.GIF, message.gif),
+            (MediaKind.VIDEO_NOTE, message.video_note),
+            (MediaKind.VIDEO, message.video),
+            (MediaKind.VOICE, message.voice),
+            (MediaKind.AUDIO, message.audio),
+        ):
+            if is_kind:
+                return kind
+        return MediaKind.DOCUMENT
+    if isinstance(media, types.MessageMediaPoll):
+        return MediaKind.POLL
+    if isinstance(media, types.MessageMediaWebPage):
+        return MediaKind.WEBPAGE
+    if isinstance(
+        media, types.MessageMediaGeo | types.MessageMediaGeoLive | types.MessageMediaVenue
+    ):
+        return MediaKind.GEO
+    if isinstance(media, types.MessageMediaContact):
+        return MediaKind.CONTACT
+    if isinstance(media, types.MessageMediaGame):
+        return MediaKind.GAME
+    if isinstance(media, types.MessageMediaInvoice):
+        return MediaKind.INVOICE
+    return MediaKind.DOCUMENT  # dice, stories, giveaways...: attachments we have no filter name for
+
+
+def src_message(message: object) -> SrcMessage | None:
+    """Reduce a Telethon message to ``SrcMessage``; ``None`` for anything that is not a message.
+
+    Only what phase 2 needs (id, date, text, media kind, album, service flag). The filter fields
+    (hashtags, size, duration, mime, views) are filled in phase 3 together with their tests.
+    """
+    # Telethon's patched MessageEmpty is a custom.Message too, so it has to be excluded by name
+    if not isinstance(message, custom.Message) or isinstance(message, types.MessageEmpty):
+        return None
+    return SrcMessage(
+        id=message.id,
+        date=message.date,
+        text=message.message or "",
+        media=media_kind(message),
+        grouped_id=message.grouped_id,
+        is_service=message.action is not None,
+    )
+
+
 # ---- client, auth, gateway ------------------------------------------------------------------
 
 
@@ -236,7 +301,7 @@ class TelethonAuth:
 
 
 class TelethonGateway:
-    """``TelegramGateway`` on a connected Telethon client (phase 1: channels only)."""
+    """``TelegramGateway`` on a connected Telethon client (reupload arrives in phase 6)."""
 
     def __init__(self, client: TelegramClient) -> None:
         self._client = client
@@ -269,13 +334,44 @@ class TelethonGateway:
             raise GatewayError("Telegram returned an unexpected result for the new channel")
         return info
 
+    async def last_message_id(self, chat: int) -> int:
+        peer = await self._peer(chat)
+        with mapped_errors():
+            latest = await self._client.get_messages(peer, limit=1)
+        return latest[0].id if latest else 0
+
     def iter_messages(
         self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER
     ) -> AsyncIterator[SrcMessage]:
-        raise NotImplementedError("reading messages arrives in phase 2")
+        if filters != NO_FILTER:
+            raise NotImplementedError("server-side filters arrive in phase 3")
+        return self._iter_messages(src, min_id)
+
+    async def _iter_messages(self, src: int, min_id: int) -> AsyncIterator[SrcMessage]:
+        peer = await self._peer(src)
+        with mapped_errors():
+            # reverse=True: oldest first (D4); Telethon starts after min_id (spike 3, docs/06)
+            async for message in self._client.iter_messages(
+                peer, min_id=min_id, reverse=True, wait_time=READ_WAIT
+            ):
+                if (reduced := src_message(message)) is not None:
+                    yield reduced
 
     async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]:
-        raise NotImplementedError("copying messages arrives in phase 2")
+        from_peer, to_peer = await self._peer(src), await self._peer(dst)
+        with mapped_errors():
+            sent = await self._client.forward_messages(
+                to_peer, ids, from_peer=from_peer, drop_author=True
+            )
+        return [None if m is None else m.id for m in sent]
+
+    async def _peer(self, ref: int) -> object:
+        """The input entity for ``ref``; chats we never saw in a dialog list are not accessible."""
+        with mapped_errors():
+            try:
+                return await self._client.get_input_entity(ref)
+            except ValueError:  # not in the session cache
+                raise NoPermission(f"channel {ref} is not accessible") from None
 
     async def reupload(self, src: int, dst: int, unit: Unit, tmp: Path) -> list[int]:
         raise NotImplementedError("reupload arrives in phase 6")

@@ -52,11 +52,42 @@ VI: dict[str, str] = {
     "new.src": "Nguồn: {channel}",
     "new.dst": "Đích:  {channel}",
     "new.dst_created": "Đích:  {channel} (vừa tạo)",
-    "new.not_saved": "Chưa lưu job: lưu job và chạy clone có từ phase 2.",
+    "new.saved": "Đã lưu job {id} «{name}».",
+    "new.run_hint": "Chạy job: tgmirror run {id}",
+    "new.confirm_run": "Chạy ngay?",
     "kind.broadcast": "kênh",
     "kind.supergroup": "supergroup",
     "kind.forum": "forum",
     "kind.group": "nhóm",
+    # run / pause / stop
+    "run.start": "Chạy job {id} «{name}» (tiếp từ tin nguồn {cursor}).",
+    "run.progress": "Job {id}: {done} tin đã sao chép, {failed} lỗi (tin nguồn tới id {cursor}).",
+    "run.stopping": "Đang dừng sau batch hiện tại (Ctrl+C lần nữa để thoát ngay).",
+    "run.result": "Job {id}: {status}. {done} tin đã sao chép, {failed} lỗi.",
+    "run.reconciled": (
+        "Lần chạy trước bị ngắt giữa chừng: {count} tin đã có ở đích, ghi nhận và không gửi lại."
+    ),
+    "run.reconcile_resend": (
+        "Lần chạy trước bị ngắt giữa chừng: {count} tin chưa được gửi, sẽ gửi lại."
+    ),
+    "run.reconcile_ambiguous": (
+        "Lần chạy trước bị ngắt giữa chừng và không xác định được {count} tin đã gửi chưa; "
+        "gửi lại nên đích có thể bị trùng vài tin."
+    ),
+    "run.flood_stopped": (
+        "Telegram yêu cầu chờ {seconds}s. Job đã lưu ở trạng thái chờ đến {resume_at}; "
+        "chạy lại `tgmirror run` sau đó."
+    ),
+    "status.created": "mới tạo",
+    "status.running": "đang chạy",
+    "status.paused": "tạm dừng",
+    "status.stopped": "đã dừng",
+    "status.waiting_flood": "chờ flood",
+    "status.done": "xong",
+    "status.failed": "lỗi",
+    "control.pause_requested": "Đã yêu cầu tạm dừng job {id}; nó dừng sau batch hiện tại.",
+    "control.stop_requested": "Đã yêu cầu dừng job {id}; nó dừng sau batch hiện tại.",
+    "control.not_running": "Job {id} không đang chạy (trạng thái: {status}).",
     # warnings
     "warn.noforwards_admin": (
         "Nguồn bật «Restrict saving content». Bạn là admin nên có thể tắt tùy chọn này tạm thời, "
@@ -106,6 +137,29 @@ VI: dict[str, str] = {
         "Chưa tạo được đích mới cho nguồn loại {kind} (có từ phase 8). "
         "Chọn một đích có sẵn cùng loại."
     ),
+    "err.job_not_found": "Không có job «{ref}». Dùng id hoặc tên chính xác.",
+    "err.job_ambiguous": "«{ref}» khớp nhiều job: {matches}. Dùng id.",
+    "err.job_exists": (
+        "Job {id} đã sao chép nguồn này vào đích này. Chạy tiếp bằng `tgmirror run {id}`."
+    ),
+    "err.mode_unsupported": (
+        "Chế độ «{mode}» chưa dùng được (reupload có từ phase 6). Dùng auto hoặc copy."
+    ),
+    "err.job_busy": (
+        "Job {id} đang được một tiến trình khác chạy. Nếu chắc chắn nó đã chết, "
+        "chạy lại với --force-takeover."
+    ),
+    "err.job_waiting_flood": "Telegram đã yêu cầu chờ; job chưa được chạy lại trước {until}.",
+    "err.job_waiting_peer_flood": (
+        "Telegram đánh dấu tài khoản là spam (PEER_FLOOD) ở lần chạy trước. "
+        "Nghỉ đến {until} rồi hãy chạy lại."
+    ),
+    "err.forwards_restricted": (
+        "Nguồn bật «Restrict saving content» nên Telegram từ chối forward. Nếu bạn là admin, "
+        "tắt tùy chọn này ở nguồn; chế độ reupload có từ phase 6."
+    ),
+    "err.store": "Lỗi cơ sở dữ liệu: {detail}",
+    "err.schema_too_new": "Cơ sở dữ liệu do bản tgmirror mới hơn tạo ra. Hãy nâng cấp tgmirror.",
 }
 
 EN: dict[str, str] = {
@@ -148,11 +202,42 @@ EN: dict[str, str] = {
     "new.src": "Source:      {channel}",
     "new.dst": "Destination: {channel}",
     "new.dst_created": "Destination: {channel} (just created)",
-    "new.not_saved": "The job is not saved: saving jobs and running the clone arrive in phase 2.",
+    "new.saved": "Saved job {id} '{name}'.",
+    "new.run_hint": "Run it with: tgmirror run {id}",
+    "new.confirm_run": "Run it now?",
     "kind.broadcast": "channel",
     "kind.supergroup": "supergroup",
     "kind.forum": "forum",
     "kind.group": "group",
+    "run.start": "Running job {id} '{name}' (continuing after source message {cursor}).",
+    "run.progress": "Job {id}: {done} messages copied, {failed} failed (source up to id {cursor}).",
+    "run.stopping": "Stopping after the current batch (press Ctrl+C again to quit at once).",
+    "run.result": "Job {id}: {status}. {done} messages copied, {failed} failed.",
+    "run.reconciled": (
+        "The previous run was interrupted: {count} messages are already in the destination, "
+        "recorded without sending them again."
+    ),
+    "run.reconcile_resend": (
+        "The previous run was interrupted: {count} messages were never sent and will be sent."
+    ),
+    "run.reconcile_ambiguous": (
+        "The previous run was interrupted and it is unclear whether {count} messages were sent; "
+        "they are sent again, so the destination may get a few duplicates."
+    ),
+    "run.flood_stopped": (
+        "Telegram asks to wait {seconds}s. The job is saved as waiting until {resume_at}; "
+        "run `tgmirror run` again after that."
+    ),
+    "status.created": "created",
+    "status.running": "running",
+    "status.paused": "paused",
+    "status.stopped": "stopped",
+    "status.waiting_flood": "waiting (flood)",
+    "status.done": "done",
+    "status.failed": "failed",
+    "control.pause_requested": "Asked job {id} to pause; it stops after the current batch.",
+    "control.stop_requested": "Asked job {id} to stop; it stops after the current batch.",
+    "control.not_running": "Job {id} is not running (status: {status}).",
     "warn.noforwards_admin": (
         "The source has 'Restrict saving content' on. You are an admin, so you can turn it off "
         "temporarily, or use --mode reupload with confirmation (available from phase 6)."
@@ -200,6 +285,32 @@ EN: dict[str, str] = {
         "Creating a new destination for a {kind} source arrives in phase 8. "
         "Pick an existing destination of the same kind."
     ),
+    "err.job_not_found": "No job '{ref}'. Use its id or its exact name.",
+    "err.job_ambiguous": "'{ref}' matches several jobs: {matches}. Use the id.",
+    "err.job_exists": (
+        "Job {id} already copies this source into this destination. "
+        "Continue it with `tgmirror run {id}`."
+    ),
+    "err.mode_unsupported": (
+        "Mode '{mode}' is not available yet (reupload arrives in phase 6). Use auto or copy."
+    ),
+    "err.job_busy": (
+        "Job {id} is being run by another process. If you are sure it is dead, "
+        "run again with --force-takeover."
+    ),
+    "err.job_waiting_flood": (
+        "Telegram asked us to wait; the job must not run again before {until}."
+    ),
+    "err.job_waiting_peer_flood": (
+        "Telegram flagged the account as spam (PEER_FLOOD) on the last run. "
+        "Rest until {until} before running again."
+    ),
+    "err.forwards_restricted": (
+        "The source has 'Restrict saving content' on, so Telegram refuses to forward. If you are "
+        "an admin, turn that option off at the source; reupload mode arrives in phase 6."
+    ),
+    "err.store": "Database error: {detail}",
+    "err.schema_too_new": "The database was made by a newer tgmirror. Please upgrade tgmirror.",
 }
 
 
