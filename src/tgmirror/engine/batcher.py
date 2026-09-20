@@ -1,8 +1,8 @@
 """Group units into batches: the messages sent in one ``copy_messages`` call.
 
-A batch holds units of one strategy. A unit that is re-uploaded (strategy B) is a batch of its own:
-it is one download and one upload, and a crash while it is sent must leave nothing but that unit to
-reconcile.
+A batch holds units of one strategy. A unit that is re-uploaded or sent by reference (strategy B)
+is a batch of its own: it is one call to Telegram, and a crash while it is sent must leave nothing
+but that unit to reconcile.
 
 A batch also carries the messages the filter dropped just before it (``skipped``), so the runner
 can count them and move the cursor past them in the same commit as the batch itself.
@@ -30,6 +30,7 @@ class Batch:
     # dropped because they were already ``done``.
     upto: int = 0
     strategy: Strategy = Strategy.COPY
+    already: int = 0  # messages passed because the pair already has them (resume, changed filter)
 
     @property
     def ids(self) -> list[int]:
@@ -89,7 +90,7 @@ async def batches(
         strategy = wanted
         current.append(item)
         count += len(item.messages)
-        if strategy is Strategy.REUPLOAD:  # nothing can join it
+        if strategy is not Strategy.COPY:  # nothing can join it
             yield emit()
             current, count, skipped, upto = [], 0, 0, 0
             strategy = Strategy.COPY

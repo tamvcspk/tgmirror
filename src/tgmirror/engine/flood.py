@@ -7,7 +7,8 @@
   call** (the batch is already ``pending``, so nothing is rebuilt and the cursor does not move).
 - ``reader`` wraps the gateway's reads the same way: ``iter_messages`` paces every read request
   and, after a FloodWait, carries on from the last message it handed out; ``get_messages`` (a
-  retry reading failed messages by id) is one paced request, repeated after a FloodWait.
+  retry reading failed messages by id) is one paced request, repeated after a FloodWait; ``count``
+  (the total progress is measured against) is the same but not paced: it opens the run.
 - A wait longer than ``max_auto_wait`` (unless ``wait``) or too many floods in a row on one call
   are not slept through: the FloodWait propagates and the runner parks the run as
   ``waiting_flood``. PeerFlood is logged and propagates at once; it is never retried.
@@ -27,6 +28,7 @@ from tgmirror.core.errors import FloodWait, PeerFlood
 from tgmirror.core.gateway import (
     NO_FILTER,
     MessageReader,
+    OnTransfer,
     Prepared,
     ServerFilter,
     SrcMessage,
@@ -172,6 +174,22 @@ class _GuardedReader:
                 await self._guard.peer_flood("iter_messages")
                 raise
 
+    async def count(self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER) -> int:
+        """The analysis at the start of a run: one request (a few when a date has to become an id)
+        that is *not* paced. Like the setup reads before the run, it is a single call the person
+        started; the read bucket begins with the first page of messages. A FloodWait is still
+        logged and sat out (or parks the run)."""
+        floods = 0
+        while True:
+            try:
+                return await self._inner.count(src, min_id=min_id, filters=filters)
+            except FloodWait as exc:
+                floods += 1
+                await self._guard.flooded("count", exc, give_up=floods >= MAX_FLOODS_PER_CALL)
+            except PeerFlood:
+                await self._guard.peer_flood("count")
+                raise
+
     async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
         floods = 0
         while True:
@@ -187,14 +205,30 @@ class _GuardedReader:
                 await self._guard.peer_flood("get_messages")
                 raise
 
-    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+    async def fetch(self, src: int, unit: Unit) -> Prepared:
+        """One paced read request (the messages again, for sending by reference)."""
+        floods = 0
+        while True:
+            await self._guard.pace_read(1)
+            try:
+                return await self._inner.fetch(src, unit)
+            except FloodWait as exc:
+                floods += 1
+                await self._guard.flooded("fetch", exc, give_up=floods >= MAX_FLOODS_PER_CALL)
+            except PeerFlood:
+                await self._guard.peer_flood("fetch")
+                raise
+
+    async def prepare(
+        self, src: int, unit: Unit, tmp: Path, on_transfer: OnTransfer | None = None
+    ) -> Prepared:
         """One paced read request (strategy B: the messages again, then their downloads). After a
         FloodWait the call is repeated; the gateway keeps what it already downloaded."""
         floods = 0
         while True:
             await self._guard.pace_read(1)
             try:
-                return await self._inner.prepare(src, unit, tmp)
+                return await self._inner.prepare(src, unit, tmp, on_transfer)
             except FloodWait as exc:
                 floods += 1
                 await self._guard.flooded("prepare", exc, give_up=floods >= MAX_FLOODS_PER_CALL)

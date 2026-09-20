@@ -160,7 +160,7 @@ VI: dict[str, str] = {
     "err.opt_caption_text_missing": '--caption append cần thêm --caption-text "<nội dung>".',
     "err.opt_caption_text_unused": "--caption-text chỉ dùng cùng --caption append.",
     "err.opt_caption_needs_reupload": (
-        "Sửa caption phải tải xuống rồi tải lên lại, forward không làm được: dùng --mode auto "
+        "Sửa caption phải gửi lại tin, forward không làm được: dùng --mode auto "
         "(chỉ tin có caption đi đường đó) hoặc --mode reupload, không dùng --mode copy."
     ),
     "err.opt_reupload_flags_need_reupload": (
@@ -243,8 +243,8 @@ VI: dict[str, str] = {
     ),
     "options.pick_mode": "Cách sao chép?",
     "options.mode_auto": (
-        "Tự động: forward phía server (nhanh, không tốn băng thông); chỉ tin cần đổi caption "
-        "mới tải lên lại"
+        "Tự động: forward phía server (nhanh, không tốn băng thông); tin cần đổi caption được "
+        "gửi lại bằng mã file, không tải gì (nguồn cấm lưu thì tải xuống rồi tải lên)"
     ),
     "options.mode_copy": "Chỉ forward phía server (copy): không đổi được caption",
     "options.mode_reupload": (
@@ -325,6 +325,22 @@ VI: dict[str, str] = {
     ),
     "run.progress_retry": "Lần chạy {id}: {done} tin đã sao chép lại, {failed} vẫn lỗi.",
     "run.retry_hint": "Thử lại các tin lỗi: tgmirror retry {id}",
+    "run.analyzed": (
+        "Ước tính: tối đa {total} tin cần xem xét (số đếm của Telegram, chưa trừ filter)."
+    ),
+    "run.cap_days": (
+        "Cap {cap} tin/ngày: với {total} tin, cần nghỉ thêm khoảng {days} ngày trước khi xong "
+        "(tăng [limits] daily_cap nếu muốn nhanh hơn, xem docs/05-chong-flood.md)."
+    ),
+    "run.progress_total": (
+        "Lần chạy {id}: {handled}/{total} tin (~{percent}%): {done} đã sao chép, "
+        "{skipped} bị filter loại, {failed} lỗi."
+    ),
+    "run.reference_fallback": (
+        "Tin {id}: Telegram không cho gửi lại bằng mã file, tải xuống rồi tải lên lại."
+    ),
+    "run.transfer_download": "Tải xuống tin {id}: {percent}% ({done} / {total}{speed}).",
+    "run.transfer_upload": "Tải lên tin {id}: {percent}% ({done} / {total}{speed}).",
     "run.retry_continue_hint": "Chạy tiếp việc thử lại: tgmirror retry {of}",
     "retry.gone": "{count} tin đã bị xóa ở nguồn nên không thể sao chép; bỏ qua.",
     "retry.still_failing": (
@@ -343,6 +359,10 @@ VI: dict[str, str] = {
         "Tiến độ:     {percent}% ({handled} / {total} tin lỗi đã thử lại)"
     ),
     "status.line_progress_unknown": "Tiến độ:     tin nguồn tới id {cursor} (chưa biết tổng)",
+    "status.line_progress_items": ("Tiến độ:     ~{percent}% ({handled} / tối đa {total} tin)"),
+    "status.line_cap": (
+        "Cap ngày:    còn tối đa {left} tin, cap {cap}/ngày: cần nghỉ thêm khoảng {days} ngày"
+    ),
     "status.line_speed": "Tốc độ:      {speed} tin/giây (trung bình từ lúc bắt đầu){eta}",
     "status.line_speed_unknown": "Tốc độ:      chưa đủ dữ liệu",
     "status.eta": ", còn khoảng {eta}",
@@ -503,7 +523,7 @@ EN: dict[str, str] = {
     "err.opt_caption_text_missing": '--caption append needs --caption-text "<text>".',
     "err.opt_caption_text_unused": "--caption-text only goes with --caption append.",
     "err.opt_caption_needs_reupload": (
-        "Changing captions means downloading and sending again, which a forward cannot do: use "
+        "Changing captions means sending the messages again, which a forward cannot do: use "
         "--mode auto (only messages with a caption take that road) or --mode reupload, not copy."
     ),
     "err.opt_reupload_flags_need_reupload": (
@@ -586,8 +606,8 @@ EN: dict[str, str] = {
     "options.customise_reupload": ("Customise captions and what cannot be copied? (default: no)"),
     "options.pick_mode": "How to copy?",
     "options.mode_auto": (
-        "Automatic: server-side forward (fast, no bandwidth); only messages whose caption "
-        "changes are re-uploaded"
+        "Automatic: server-side forward (fast, no bandwidth); messages whose caption changes are "
+        "sent again by file id, nothing downloaded (a source that restricts saving: re-uploaded)"
     ),
     "options.mode_copy": "Server-side forward only (copy): captions cannot change",
     "options.mode_reupload": (
@@ -673,6 +693,22 @@ EN: dict[str, str] = {
     "run.retry_start": ("Run {id}: retrying {count} failed messages of run {of} ({src} → {dst})."),
     "run.progress_retry": "Run {id}: {done} messages copied again, {failed} still failing.",
     "run.retry_hint": "Retry the failed messages with: tgmirror retry {id}",
+    "run.analyzed": (
+        "Estimate: up to {total} messages to look at (Telegram's count, the filter not subtracted)."
+    ),
+    "run.cap_days": (
+        "Cap of {cap} messages/day: with {total} messages the run has to rest about {days} more "
+        "day(s) before it is done (raise [limits] daily_cap for more, see docs/05-chong-flood.md)."
+    ),
+    "run.progress_total": (
+        "Run {id}: {handled}/{total} messages (~{percent}%): {done} copied, "
+        "{skipped} left out by the filter, {failed} failed."
+    ),
+    "run.reference_fallback": (
+        "Message {id}: Telegram would not send it again by file id, downloading and uploading it."
+    ),
+    "run.transfer_download": "Downloading message {id}: {percent}% ({done} / {total}{speed}).",
+    "run.transfer_upload": "Uploading message {id}: {percent}% ({done} / {total}{speed}).",
     "run.retry_continue_hint": "Carry on retrying with: tgmirror retry {of}",
     "retry.gone": "{count} messages no longer exist at the source and cannot be copied; left out.",
     "retry.still_failing": (
@@ -690,6 +726,12 @@ EN: dict[str, str] = {
         "Progress:    {percent}% ({handled} / {total} failed messages retried)"
     ),
     "status.line_progress_unknown": "Progress:    source up to id {cursor} (total not known)",
+    "status.line_progress_items": (
+        "Progress:    ~{percent}% ({handled} / at most {total} messages)"
+    ),
+    "status.line_cap": (
+        "Daily cap:   up to {left} messages left, cap {cap}/day: about {days} more day(s) of rest"
+    ),
     "status.line_speed": "Speed:       {speed} messages/s (average since it began){eta}",
     "status.line_speed_unknown": "Speed:       not enough data yet",
     "status.eta": ", about {eta} left",

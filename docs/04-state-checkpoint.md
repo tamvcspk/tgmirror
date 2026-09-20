@@ -43,7 +43,7 @@ CREATE TABLE runs (                         -- nhật ký: một dòng cho mỗi
   cursor_to    INTEGER NOT NULL DEFAULT 0,  -- lần này đi tới đâu
   resume_at    TEXT,                        -- khi waiting_flood
   fail_reason  TEXT,                        -- lỗi, hoặc daily_cap / interrupted / taken_over
-  stats_json   TEXT NOT NULL DEFAULT '{}',  -- done, failed, skipped_filter, ... của RIÊNG lần này
+  stats_json   TEXT NOT NULL DEFAULT '{}',  -- done, failed, skipped_filter, already_done, ... của RIÊNG lần này
   started_at   TEXT NOT NULL,
   ended_at     TEXT,
   updated_at   TEXT NOT NULL                -- đồng thời là heartbeat khi đang chạy
@@ -169,6 +169,10 @@ Từ chối (`RunBusy`) khi cặp đang có run `running`/`paused` với heartbe
 Crash-safety: kill trước copy → reconcile lần sau thấy đích chưa có tin → hủy `pending` → hàng quay về `failed` (xem "Hủy `pending`") và `retry n` gửi lại; kill sau copy → reconcile tìm thấy bản sao ở đích, ghi `done`. Bị FloodWait quá dài/`PeerFlood`/stop: batch bị hủy, hàng vẫn `failed` của lần `n`.
 
 Bộ đếm là của lần retry (`done`: gửi lại được, `failed`: vẫn lỗi, `gone`: đã xóa ở nguồn). Tiến độ của `status` cho retry là `(done + failed + gone) / (đó + số hàng `failed` còn lại của lần `n`)`: hàng đã xử lý chuyển `run_id` sang lần retry nên tự rời khỏi danh sách của `n`.
+
+## Tổng và tiến độ của lần chạy
+
+`options_json` của lần chạy thêm khóa `src_protected` (nguồn cấm lưu nội dung theo lần đọc lại của `begin_run`; khi đúng, không gửi bằng mã file, D3) và khóa `total_items` (số tin lần chạy phải xem xét, cận trên, `0` = chưa biết; do `Runner._analyze` ghi bằng `Store.set_total` sau reconcile) và `stats_json` thêm `already_done` (tin vượt qua vì `msg_map` đã có, khi đọc lại từ đầu sau khi đổi filter). Cả hai là của riêng lần chạy: `for_pair` bỏ `total_items`, con trỏ và `msg_map` không đổi, nên **không cần migration**. `Run.handled` là tổng các bộ đếm mà tiến độ dựa vào (xem `01-kien-truc.md`, "Analyze và tiến độ"). Tiến độ truyền file (byte của file đang tải) không lưu: chỉ có trong tiến trình đang chạy.
 
 ## Điều khiển
 

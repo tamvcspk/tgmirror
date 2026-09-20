@@ -234,7 +234,7 @@ def test_status_of_the_latest_run_when_nothing_is_running(
     out = result.output
     assert "No run is running; this is the latest one." in out
     assert "Run 1: Source → Copy" in out and "Status:      done" in out
-    assert "Progress:    ~100% (source up to id 5 / 5)" in out
+    assert "Progress:    ~100% (5 / at most 5 messages)" in out
     assert "5 copied, 0 failed, 0 left out by the filter" in out
     assert "5/5000 messages sent today" in out
     assert "not limited once in the last 24 hours" in out

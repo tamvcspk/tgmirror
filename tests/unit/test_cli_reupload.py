@@ -77,7 +77,7 @@ def test_a_reupload_leaves_no_files_in_the_scratch_folder(
     assert not [p for p in rt.paths.tmp_dir.rglob("*") if p.is_file()]
 
 
-def test_captions_are_rewritten_in_auto_mode_and_only_captioned_media_is_uploaded(
+def test_captions_are_rewritten_in_auto_mode_and_only_captioned_media_is_sent_by_file_id(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     src, dst = source_with_messages(gateway, 1)
@@ -88,7 +88,8 @@ def test_captions_are_rewritten_in_auto_mode_and_only_captioned_media_is_uploade
 
     assert result.exit_code == 0, result.output
     assert texts(gateway, dst) == ["m1", "look\n\nvia X"]
-    assert [c.args[1] for c in gateway.calls_to("send_prepared")] == [[2]]
+    assert [c.args[1] for c in gateway.calls_to("send_by_reference")] == [[2]]
+    assert gateway.calls_to("prepare") == []  # nothing was downloaded
     (run,) = saved_runs(rt)
     assert (run.mode, run.options.caption, run.options.caption_text) == ("auto", "append", "via X")
 

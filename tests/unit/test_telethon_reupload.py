@@ -12,7 +12,7 @@ import pytest
 from telethon import errors, types
 from telethon.tl import custom
 
-from tgmirror.core.errors import PerMessage
+from tgmirror.core.errors import FileRefExpired, FloodWait, PerMessage
 from tgmirror.core.gateway import CaptionMode, CaptionPolicy, MediaKind, SrcMessage, Unit
 from tgmirror.core.telethon_gateway import (
     TelethonGateway,
@@ -90,9 +90,14 @@ class Stub:
     async def get_messages(self, peer: Any, ids: list[int]) -> list[Any]:
         return [self.by_id.get(i) for i in ids]
 
-    async def download_media(self, msg: Any, file: str, thumb: Any = None) -> str:
+    async def download_media(
+        self, msg: Any, file: str, thumb: Any = None, progress_callback: Any = None
+    ) -> str:
         self.downloads.append((msg.id, file, thumb))
         write(file)
+        if progress_callback is not None:  # what Telethon does: (received, total) per part
+            progress_callback(2, 4)
+            progress_callback(4, 4)
         return file
 
     async def send_file(self, peer: Any, file: Any, **kw: Any) -> Any:
@@ -481,3 +486,103 @@ async def test_send_text_posts_plain_text(tmp_path: Path) -> None:
     assert await gw.send_text(2, "[Game: Chess — không thể sao chép]") == 101
     _, text, kw = stub.sent[0]
     assert text.startswith("[Game") and kw["parse_mode"] is None and kw["link_preview"] is False
+
+
+# ---- sending by the files' ids ---------------------------------------------------------------
+
+
+async def test_fetch_reads_the_unit_again_and_downloads_nothing(tmp_path: Path) -> None:
+    clip = message(4, media=document(VIDEO))
+    gw, stub = gateway(clip)
+
+    prepared = await gw.fetch(1, unit_of(clip))
+
+    assert prepared.files == () and stub.downloads == []
+    assert prepared.unit.ids == [4]
+
+
+async def test_fetch_of_a_message_that_is_gone_fails_the_unit() -> None:
+    kept = message(4, media=photo(), grouped_id=9)
+    gone = message(5, media=photo(), grouped_id=9)
+    gw, _ = gateway(kept)  # the other member of the album was deleted since it was read
+
+    with pytest.raises(PerMessage, match="gone_from_source"):
+        await gw.fetch(1, unit_of(kept, gone))
+
+
+async def test_a_file_is_sent_again_by_its_media_object_with_the_caption_rewritten() -> None:
+    pic = message(3, text="look", media=photo())
+    gw, stub = gateway(pic)
+    prepared = await gw.fetch(1, unit_of(pic))
+
+    ids = await gw.send_by_reference(2, prepared, CaptionPolicy(CaptionMode.APPEND, "via X"))
+
+    assert ids == [101]
+    ((kind, what, kw),) = stub.sent
+    assert kind == "file" and what is pic.media  # Telegram gets the id of what it stores
+    assert kw == {"caption": "look\n\nvia X", "formatting_entities": None, "parse_mode": None}
+    assert stub.downloads == []  # nothing came down, and no upload argument goes with it
+
+
+async def test_the_caption_can_be_dropped_when_sending_by_id() -> None:
+    clip = message(4, text="caption", media=document(VIDEO))
+    gw, stub = gateway(clip)
+
+    await gw.send_by_reference(2, await gw.fetch(1, unit_of(clip)), CaptionPolicy(CaptionMode.NONE))
+
+    assert stub.sent[0][2]["caption"] == ""
+
+
+async def test_an_album_goes_by_the_list_of_its_media_in_one_call() -> None:
+    members = [
+        message(7, text="album", media=photo(), grouped_id=9),
+        message(8, media=photo(), grouped_id=9),
+    ]
+    gw, stub = gateway(*members)
+    prepared = await gw.fetch(1, unit_of(*members))
+
+    ids = await gw.send_by_reference(2, prepared, CaptionPolicy(CaptionMode.APPEND, "via X"))
+
+    assert ids == [101, 102]  # aligned with the members, in order
+    ((_, files, kw),) = stub.sent
+    assert files == [members[0].media, members[1].media]
+    assert kw["caption"] == ["album\n\nvia X", ""] and kw["formatting_entities"] == [[], []]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        errors.FileReferenceExpiredError(None),
+        errors.FileReferenceInvalidError(None),
+        errors.FileIdInvalidError(None),
+        errors.MediaEmptyError(None),
+        errors.MediaInvalidError(None),
+        errors.GroupedMediaInvalidError(None),
+    ],
+)
+async def test_media_telegram_will_not_reuse_is_reported_as_such(error: Exception) -> None:
+    pic = message(3, media=photo())
+    gw, stub = gateway(pic)
+    prepared = await gw.fetch(1, unit_of(pic))
+
+    async def refuse(peer: Any, file: Any, **kw: Any) -> Any:
+        raise error
+
+    stub.send_file = refuse  # type: ignore[method-assign]
+
+    with pytest.raises(FileRefExpired):
+        await gw.send_by_reference(2, prepared, KEEP)
+
+
+async def test_a_flood_wait_while_sending_by_id_is_still_a_flood_wait() -> None:
+    pic = message(3, media=photo())
+    gw, stub = gateway(pic)
+    prepared = await gw.fetch(1, unit_of(pic))
+
+    async def flood(peer: Any, file: Any, **kw: Any) -> Any:
+        raise errors.FloodWaitError(None, capture=30)
+
+    stub.send_file = flood  # type: ignore[method-assign]
+
+    with pytest.raises(FloodWait):
+        await gw.send_by_reference(2, prepared, KEEP)

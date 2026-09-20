@@ -20,17 +20,22 @@ import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
+from tgmirror.core.errors import FileRefExpired
 from tgmirror.core.gateway import (
     CaptionMode,
     CaptionPolicy,
     MediaKind,
+    MessageReader,
+    OnTransfer,
     Prepared,
     TelegramGateway,
     Unit,
 )
 from tgmirror.engine.batcher import Batch
 from tgmirror.engine.runs import RunError
+from tgmirror.engine.strategy import FILELESS
 from tgmirror.store.msgmap import MessageResult
 from tgmirror.store.runs import RunOptions
 
@@ -133,6 +138,7 @@ async def send_unit(
     prepared: Prepared | None,
     action: Action,
     options: Options,
+    on_transfer: OnTransfer | None = None,
 ) -> list[MessageResult]:
     """Post the unit (or its placeholder) and say what became of each message.
 
@@ -141,19 +147,71 @@ async def send_unit(
     if action.kind is ActionKind.PLACEHOLDER:
         return left_out(unit, action, await gateway.send_text(dst, action.text))
     assert action.kind is ActionKind.SEND and prepared is not None
-    sent = await gateway.send_prepared(dst, prepared, options.caption)
+    sent = await gateway.send_prepared(dst, prepared, options.caption, on_transfer)
+    return results_of(unit, sent)
+
+
+async def send_unit_by_reference(
+    gateway: TelegramGateway,
+    reader: MessageReader,
+    unit: Unit,
+    prepared: Prepared,
+    options: Options,
+    *,
+    src: int,
+    dst: int,
+    tmp: Path,
+    on_transfer: OnTransfer | None = None,
+    on_fallback: Callable[[], None] = lambda: None,
+) -> list[MessageResult]:
+    """Send ``unit`` by the ids of its files: nothing is downloaded or uploaded.
+
+    A reference that went stale is refreshed once (the unit is read again through ``reader``). If
+    Telegram still will not send the media this way, the unit goes the long way, exactly as
+    ``--mode reupload`` would send it, and ``on_fallback`` is told. Telegram created nothing
+    before this returns, whichever way it went, so the caller's batch stays ``pending`` meanwhile
+    and the write-ahead rule holds.
+    """
+    for attempt in range(2):
+        try:
+            return results_of(unit, await gateway.send_by_reference(dst, prepared, options.caption))
+        except FileRefExpired:
+            if attempt == 0:
+                prepared = await reader.fetch(src, unit)
+    on_fallback()
+    full = await reader.prepare(src, unit, tmp, on_transfer)
+    try:
+        return await send_unit(gateway, dst, unit, full, SEND, options, on_transfer)
+    finally:
+        for path in full.files:
+            path.unlink(missing_ok=True)
+
+
+def results_of(unit: Unit, sent: list[int]) -> list[MessageResult]:
+    """What became of each message of ``unit``, given the ids of the new messages."""
     if len(sent) != len(unit.messages):
-        raise ValueError(f"send_prepared gave {len(sent)} ids for {len(unit.messages)} messages")
+        raise ValueError(f"the send gave {len(sent)} ids for {len(unit.messages)} messages")
     return [MessageResult(m.id, new) for m, new in zip(unit.messages, sent, strict=True)]
 
 
 # ---- downloading ahead --------------------------------------------------------------------------
 
 
+UNKNOWN_SIZE = 1 << 20  # what a file whose size Telegram did not tell is reserved for (1 MiB)
+
+
+def reserve_size(unit: Unit) -> int:
+    """Bytes to hold in the ``Window`` for downloading ``unit``: the sizes Telegram gave, and a
+    small stand-in for a file that came without one, so no download is ever booked at nothing."""
+    return sum((m.size or UNKNOWN_SIZE) if m.media not in FILELESS else 0 for m in unit.messages)
+
+
 class Window:
     """How much strategy B may have on disk at once: ``units`` units and ``max_bytes`` bytes.
 
-    A unit is reserved before it is downloaded and released once it has been sent (or given up).
+    This is the ceiling on how far downloading can run ahead of uploading (the download is the
+    faster half): a download does not start until its unit has been reserved here, and it is
+    released only once the unit has been sent (or given up), so nothing ever piles up.
     A unit that alone is bigger than the budget is still let through when nothing else is on disk,
     so a big video is never stuck forever.
     """
@@ -176,6 +234,12 @@ class Window:
             self._used_units -= 1
             self._used_bytes -= size
             self._cond.notify_all()
+
+    async def grow(self, extra: int) -> None:
+        """A unit turned out bigger than it was reserved for: what is on disk cannot be refused, so
+        the excess is booked at once and the next ``reserve`` waits for room as usual."""
+        async with self._cond:
+            self._used_bytes += extra
 
     def _fits(self, size: int) -> bool:
         if self._used_units == 0:

@@ -120,8 +120,9 @@ async def begin_run(
     """
     request = request or RunRequest()
     check_options(request)
+    protected = False
     if may_reupload(request.mode, request.caption):
-        await check_source(gateway, src, request)
+        protected = await check_source(gateway, src, request)
     previous = await store.latest_run(src.id, dst.id)
     if previous is not None:
         check_runnable(previous, clock())
@@ -146,6 +147,7 @@ async def begin_run(
             placeholder=request.placeholder,
             protected_ack=request.protected_ack,
             src_last_id=head,
+            src_protected=protected,
             retry_of=request.retry_of,
         ),
         filters_json=request.filters_json,
@@ -153,7 +155,7 @@ async def begin_run(
     return await store.start_run(spec, force=request.force, fresh=request.fresh)
 
 
-async def check_source(gateway: TelegramGateway, src: ChannelInfo, request: RunRequest) -> None:
+async def check_source(gateway: TelegramGateway, src: ChannelInfo, request: RunRequest) -> bool:
     """Decision D3 for a run that can download content: read the source again (one setup request)
     because it may have turned on "Restrict saving content" since the pair was chosen, and ``run``
     and ``retry`` never go through ``plan_endpoints``.
@@ -162,10 +164,15 @@ async def check_source(gateway: TelegramGateway, src: ChannelInfo, request: RunR
     run's options and carried on by ``run``/``retry``) is what lets a run go on. Without it a
     protected source is refused: ``SourceRestricted`` when this account does not administer it,
     ``NeedsAcknowledgement`` when it does (the prompt of ``clone`` is enough for those).
+
+    Returns whether the source restricts saving content (a run the user vouched for goes on,
+    but the long way: files are downloaded and uploaded, never sent by their id).
     """
     current = await gateway.get_channel(src.id)
-    if not current.noforwards or request.protected_ack:
-        return
+    if not current.noforwards:
+        return False
+    if request.protected_ack:
+        return True
     if not current.is_admin:
         raise SourceRestricted(current)
     raise NeedsAcknowledgement(current.title)

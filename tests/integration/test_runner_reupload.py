@@ -18,7 +18,7 @@ import pytest
 
 from tests.integration.test_runner import LIMITS, Crash, Rig
 from tgmirror.core.config import Limits
-from tgmirror.core.errors import FloodWait, PerMessage
+from tgmirror.core.errors import FileRefExpired, FloodWait, PerMessage
 from tgmirror.core.gateway import CaptionMode, CaptionPolicy, MediaKind
 from tgmirror.engine.endpoints import SourceRestricted
 from tgmirror.engine.reupload import UnsupportedMedia
@@ -82,6 +82,10 @@ def rows(rig: Rig) -> list[tuple[int, str, int | None, str | None]]:
 
 def sent_units(rig: Rig) -> list[list[int]]:
     return [list(c.args[1]) for c in rig.gw.calls_to("send_prepared")]  # type: ignore[call-overload]
+
+
+def by_reference(rig: Rig) -> list[list[int]]:
+    return [list(c.args[1]) for c in rig.gw.calls_to("send_by_reference")]  # type: ignore[call-overload]
 
 
 # ---- decision D3 at the start of every run ----------------------------------------------------
@@ -163,11 +167,13 @@ async def test_the_files_are_kept_until_the_unit_is_sent_and_gone_afterwards(rig
     seen: list[int] = []
     original = rig.gw.send_prepared
 
-    async def watching(dst: int, prepared: Any, caption: CaptionPolicy) -> list[int]:
+    async def watching(
+        dst: int, prepared: Any, caption: CaptionPolicy, on_transfer: Any = None
+    ) -> list[int]:
         seen.append(
             len(leftovers(rig))
         )  # the fake also refuses to send a unit whose files are gone
-        return await original(dst, prepared, caption)
+        return await original(dst, prepared, caption, on_transfer)
 
     rig.gw.send_prepared = watching  # type: ignore[method-assign]
 
@@ -202,6 +208,142 @@ async def test_the_run_can_be_continued_delta_style_and_only_new_messages_are_se
     assert rig.dst_texts == ["m1", "m2", "m3", "m4"]
 
 
+# ---- sending by the files' ids ---------------------------------------------------------------
+
+
+def captioned_media(rig: Rig) -> None:
+    rig.gw.add_message(rig.src.id, "plain")  # 1: forwarded
+    rig.gw.add_message(rig.src.id, "look", media=MediaKind.VIDEO, size=5_000_000_000)  # 2
+    rig.gw.add_album(rig.src.id, [MediaKind.VIDEO] * 3, caption="album")  # 3 4 5
+
+
+async def test_a_captioned_file_goes_by_its_id_without_touching_the_disk(rig: Rig) -> None:
+    captioned_media(rig)
+    store = await rig.store()
+
+    final = await runner(rig, store).run(
+        await begin(rig, store, mode="auto", caption="append", caption_text="via X")
+    )
+
+    assert (final.status, final.done, final.failed) == (RunStatus.DONE, 5, 0)
+    assert by_reference(rig) == [[2], [3, 4, 5]] and rig.copy_calls() == [[1]]
+    assert rig.gw.calls_to("prepare") == [] and sent_units(rig) == []
+    assert leftovers(rig) == [] and not rig.tmp.exists()  # type: ignore[attr-defined]
+    assert rig.dst_texts == ["plain", "look\n\nvia X", "album\n\nvia X", "", ""]
+    albums = [m.grouped_id for m in rig.gw.messages[rig.dst.id][2:]]
+    assert len(set(albums)) == 1 and albums[0] is not None  # one album at the destination
+    assert not rig.recorder.transfers  # nothing to report: nothing was transferred
+
+
+async def test_a_source_that_restricts_saving_content_never_sends_by_id(rig: Rig) -> None:
+    """Decision D3: even a run the user vouched for downloads and uploads, it does not reuse ids."""
+    rig.gw.add_message(rig.src.id, "look", media=MediaKind.VIDEO)  # 1
+    rig.gw.add_album(rig.src.id, [MediaKind.VIDEO] * 3, caption="album")  # 2 3 4
+    protect(rig)
+    store = await rig.store()
+
+    run = await begin(rig, store, mode="auto", caption="none", protected_ack=True)
+    await runner(rig, store).run(run)
+
+    assert run.options.src_protected
+    assert by_reference(rig) == [] and rig.gw.calls_to("prepare") != []
+    assert sent_units(rig) == [[1], [2, 3, 4]] and rig.copy_calls() == []
+
+
+async def test_a_run_that_can_not_download_does_not_read_the_source_or_mark_it_protected(
+    rig: Rig,
+) -> None:
+    rig.fill(2)
+    store = await rig.store()
+
+    run = (await begin_run(store, rig.gw, rig.src, rig.dst, RunRequest())).run
+
+    assert not run.options.src_protected and rig.gw.calls_to("get_channel") == []
+
+
+async def test_reupload_mode_still_downloads_even_where_ids_could_be_reused(rig: Rig) -> None:
+    rig.gw.add_message(rig.src.id, "look", media=MediaKind.PHOTO)
+    store = await rig.store()
+
+    await runner(rig, store).run(await begin(rig, store))  # mode reupload: what the user asked
+
+    assert by_reference(rig) == [] and sent_units(rig) == [[1]]
+
+
+async def test_a_stale_reference_is_refreshed_once_and_the_unit_goes_on_by_id(rig: Rig) -> None:
+    rig.gw.add_message(rig.src.id, "look", media=MediaKind.PHOTO)
+    rig.gw.fail_next("send_by_reference", FileRefExpired("FILE_REFERENCE_EXPIRED"))
+    store = await rig.store()
+
+    final = await runner(rig, store).run(await begin(rig, store, mode="auto", caption="none"))
+
+    assert final.done == 1 and rig.dst_texts == [""]
+    assert len(rig.gw.calls_to("send_by_reference")) == 2
+    assert len(rig.gw.calls_to("fetch")) == 2  # once before, once to refresh the reference
+    assert rig.gw.calls_to("prepare") == [] and "reference_fallback" not in rig.recorder.codes
+
+
+async def test_media_telegram_will_not_reuse_goes_the_long_way(rig: Rig) -> None:
+    rig.gw.add_message(rig.src.id, "look", media=MediaKind.PHOTO)
+    rig.gw.add_message(rig.src.id, "next", media=MediaKind.PHOTO)
+    rig.gw.fail_next("send_by_reference", FileRefExpired("MEDIA_EMPTY"), times=2)  # first unit
+    store = await rig.store()
+
+    final = await runner(rig, store).run(await begin(rig, store, mode="auto", caption="none"))
+
+    assert (final.done, final.failed) == (2, 0) and rig.dst_texts == ["", ""]
+    assert sent_units(rig) == [[1]]  # downloaded and uploaded, as reupload mode would
+    assert by_reference(rig) == [[1], [1], [2]]  # the next unit is tried by id again
+    assert "reference_fallback" in rig.recorder.codes and leftovers(rig) == []
+
+
+async def test_a_unit_gone_from_the_source_fails_alone_when_it_is_read_again(rig: Rig) -> None:
+    for name in ("a", "b", "c"):
+        rig.gw.add_message(rig.src.id, name, media=MediaKind.PHOTO)
+    rig.gw.fail_next("fetch", PerMessage("gone_from_source"))  # the first unit
+    store = await rig.store()
+
+    final = await runner(rig, store).run(await begin(rig, store, mode="auto", caption="none"))
+
+    assert (final.done, final.failed) == (2, 1)
+    assert [(r[0], r[1], r[3]) for r in rows(rig)] == [
+        (1, "failed", "gone_from_source"),
+        (2, "done", None),
+        (3, "done", None),
+    ]
+
+
+async def test_killed_after_sending_by_id_the_next_run_finds_it_and_sends_nothing_twice(
+    rig: Rig,
+) -> None:
+    rig.gw.add_message(rig.src.id, "a", media=MediaKind.PHOTO)
+    rig.gw.add_message(rig.src.id, "b", media=MediaKind.PHOTO)
+    store = await rig.store()
+    original = rig.gw.send_by_reference
+    calls = 0
+
+    async def dies_after_the_second_one(dst: int, prepared: Any, caption: Any) -> list[int]:
+        nonlocal calls
+        calls += 1
+        ids = await original(dst, prepared, caption)
+        if calls == 2:
+            raise Crash  # Telegram made the message, tgmirror never heard
+        return ids
+
+    rig.gw.send_by_reference = dies_after_the_second_one  # type: ignore[method-assign]
+    with pytest.raises(Crash):
+        await runner(rig, store).run(await begin(rig, store, mode="auto", caption="none"))
+    rig.gw.send_by_reference = original  # type: ignore[method-assign]
+
+    resumed = await runner(rig, store).run(
+        await begin(rig, store, mode="auto", caption="none", force=True)
+    )
+
+    assert rig.dst_texts == ["", ""]  # not three
+    assert resumed.status is RunStatus.DONE and "reconciled" in rig.recorder.codes
+    assert [r[1] for r in rows(rig)] == ["done", "done"]
+
+
 # ---- downloading ahead ----------------------------------------------------------------------
 
 
@@ -209,14 +351,16 @@ def watch_order(rig: Rig) -> list[tuple[str, int]]:
     order: list[tuple[str, int]] = []
     prepare, send = rig.gw.prepare, rig.gw.send_prepared
 
-    async def prepare_(src: int, unit: Any, tmp: Path) -> Any:
+    async def prepare_(src: int, unit: Any, tmp: Path, on_transfer: Any = None) -> Any:
         order.append(("prepare", unit.ids[0]))
-        return await prepare(src, unit, tmp)
+        return await prepare(src, unit, tmp, on_transfer)
 
-    async def send_(dst: int, prepared: Any, caption: CaptionPolicy) -> list[int]:
+    async def send_(
+        dst: int, prepared: Any, caption: CaptionPolicy, on_transfer: Any = None
+    ) -> list[int]:
         order.append(("send", prepared.unit.ids[0]))
         await asyncio.sleep(0.05)  # an upload takes time: the pipeline has a chance to look ahead
-        ids = await send(dst, prepared, caption)
+        ids = await send(dst, prepared, caption, on_transfer)
         order.append(("sent", prepared.unit.ids[0]))
         return ids
 
@@ -275,12 +419,61 @@ async def test_the_disk_budget_stops_the_lookahead(rig: Rig) -> None:
     assert [kind for kind, _ in order if kind != "send"] == ["prepare", "sent"] * 3
 
 
+async def test_a_file_without_a_size_still_counts_against_the_budget(rig: Rig) -> None:
+    for i in range(3):
+        rig.gw.add_message(rig.src.id, f"clip{i}", media=MediaKind.VIDEO)  # Telegram gave no size
+    order = watch_order(rig)
+    store = await rig.store()
+    limits = LIMITS.model_copy(update={"prefetch": 3, "tmp_budget_mb": 1})
+
+    await runner(rig, store, limits=limits).run(await begin(rig, store))
+
+    # each is reserved as 1 MiB, the whole budget: never two on disk at once
+    assert [kind for kind, _ in order if kind != "send"] == ["prepare", "sent"] * 3
+
+
+async def test_a_file_bigger_than_telegram_said_holds_the_next_download_back(rig: Rig) -> None:
+    for i in range(3):
+        rig.gw.add_message(rig.src.id, f"clip{i}", media=MediaKind.VIDEO, size=10)  # a small lie
+    original = rig.gw.prepare
+
+    async def fat(src: int, unit: Any, tmp: Path, on_transfer: Any = None) -> Any:
+        prepared = await original(src, unit, tmp, on_transfer)
+        for path in prepared.files:
+            path.write_bytes(b"x" * 2_000_000)  # what is really on disk
+        return prepared
+
+    rig.gw.prepare = fat  # type: ignore[method-assign]
+    order = watch_order(rig)
+    store = await rig.store()
+    limits = LIMITS.model_copy(update={"prefetch": 3, "tmp_budget_mb": 1})
+
+    await runner(rig, store, limits=limits).run(await begin(rig, store))
+
+    assert [kind for kind, _ in order if kind != "send"] == ["prepare", "sent"] * 3
+
+
+async def test_the_transfers_are_reported_as_they_go(rig: Rig) -> None:
+    rig.gw.add_message(rig.src.id, "clip", media=MediaKind.VIDEO, size=1000)
+    store = await rig.store()
+
+    await runner(rig, store).run(await begin(rig, store))
+
+    seen = [(t.phase.value, t.msg_id, t.done, t.total) for t in rig.recorder.transfers]
+    assert seen == [
+        ("download", 1, 0, 1000),
+        ("download", 1, 1000, 1000),
+        ("upload", 1, 0, 1000),
+        ("upload", 1, 1000, 1000),
+    ]
+
+
 async def test_a_stop_is_noticed_while_the_next_unit_is_still_downloading(rig: Rig) -> None:
     rig.gw.add_message(rig.src.id, "clip", media=MediaKind.VIDEO, size=10)
     store = await rig.store()
     started = asyncio.Event()
 
-    async def never_finishes(src: int, unit: Any, tmp: Path) -> Any:
+    async def never_finishes(src: int, unit: Any, tmp: Path, on_transfer: Any = None) -> Any:
         started.set()
         await asyncio.Event().wait()
 
@@ -299,7 +492,9 @@ async def test_a_stop_is_noticed_while_the_next_unit_is_still_downloading(rig: R
 # ---- captions: the reason a run in auto mode uploads at all --------------------------------------
 
 
-async def test_in_auto_mode_only_captioned_media_is_uploaded_and_order_is_kept(rig: Rig) -> None:
+async def test_in_auto_mode_only_captioned_media_is_sent_again_and_order_is_kept(
+    rig: Rig,
+) -> None:
     gw = rig.gw
     gw.add_message(rig.src.id, "plain")  # 1
     gw.add_message(rig.src.id, "look", media=MediaKind.PHOTO)  # 2: a caption
@@ -314,10 +509,14 @@ async def test_in_auto_mode_only_captioned_media_is_uploaded_and_order_is_kept(r
     )
 
     assert final.stats == {"done": 7, "failed": 0}
-    assert sent_units(rig) == [[2], [5, 6]]  # the rest went the cheap way
+    assert by_reference(rig) == [[2], [5, 6]]  # the rest went the cheap way
     assert rig.copy_calls() == [[1], [3, 4], [7]]
     assert rig.dst_texts == ["plain", "look\n\nvia X", "plain too", "", "album\n\nvia X", "", "end"]
-    assert rig.gw.calls_to("send_prepared")[0].args[2] == CaptionPolicy(CaptionMode.APPEND, "via X")
+    assert rig.gw.calls_to("send_by_reference")[0].args[2] == CaptionPolicy(
+        CaptionMode.APPEND, "via X"
+    )
+    # the source lets content be saved: no file went down or up
+    assert rig.gw.calls_to("prepare") == [] and sent_units(rig) == []
 
 
 async def test_caption_none_removes_captions_only_from_media(rig: Rig) -> None:
@@ -510,10 +709,12 @@ async def test_killed_after_the_upload_the_next_run_finds_it_and_sends_nothing_t
     original = rig.gw.send_prepared
     calls = 0
 
-    async def dies_after_the_second_upload(dst: int, prepared: Any, caption: Any) -> list[int]:
+    async def dies_after_the_second_upload(
+        dst: int, prepared: Any, caption: Any, on_transfer: Any = None
+    ) -> list[int]:
         nonlocal calls
         calls += 1
-        ids = await original(dst, prepared, caption)
+        ids = await original(dst, prepared, caption, on_transfer)
         if calls == 2:
             raise Crash  # Telegram made the message, tgmirror never heard
         return ids
@@ -535,7 +736,9 @@ async def test_killed_before_the_upload_the_next_run_sends_the_unit_once(rig: Ri
     store = await rig.store()
     original = rig.gw.send_prepared
 
-    async def dies_first(dst: int, prepared: Any, caption: Any) -> list[int]:
+    async def dies_first(
+        dst: int, prepared: Any, caption: Any, on_transfer: Any = None
+    ) -> list[int]:
         raise Crash
 
     rig.gw.send_prepared = dies_first  # type: ignore[method-assign]
@@ -557,9 +760,9 @@ async def test_downloads_a_killed_run_left_behind_are_removed_by_the_next_one(ri
     there_when_fetching: list[bool] = []
     original = rig.gw.prepare
 
-    async def looking(src: int, unit: Any, tmp: Path) -> Any:
+    async def looking(src: int, unit: Any, tmp: Path, on_transfer: Any = None) -> Any:
         there_when_fetching.append(stale.exists())  # is it still on disk while the run works?
-        return await original(src, unit, tmp)
+        return await original(src, unit, tmp, on_transfer)
 
     rig.gw.prepare = looking  # type: ignore[method-assign]
 

@@ -39,6 +39,7 @@ from tgmirror.store.runs import (
     FloodEvent,
     Mirror,
     Run,
+    RunOptions,
     RunSpec,
     RunStatus,
     StartedRun,
@@ -339,6 +340,20 @@ class Store:
                 (control, run_id),
             )
             return cur.rowcount > 0
+
+    async def set_total(self, run_id: int, total: int) -> Run:
+        """Record how many messages the run has to look at (its analysis, see ``RunOptions``)."""
+        async with self._tx() as db:
+            cur = await db.execute("SELECT options_json FROM runs WHERE id = ?", (run_id,))
+            row = await cur.fetchone()
+            if row is None:
+                raise StoreError(f"run {run_id} does not exist")
+            options = replace(RunOptions.from_json(row[0]), total_items=total)
+            await db.execute(
+                "UPDATE runs SET options_json = ?, updated_at = ? WHERE id = ?",
+                (options.to_json(), self._ts(), run_id),
+            )
+        return await self._require(run_id)
 
     async def set_status(self, run_id: int, status: RunStatus) -> None:
         """``running`` <-> ``paused`` while the process lives; a finished run is left alone."""

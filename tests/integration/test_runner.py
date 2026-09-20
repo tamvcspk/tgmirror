@@ -29,6 +29,7 @@ from tgmirror.core.errors import (
 from tgmirror.core.gateway import ChannelInfo, MediaKind, Unit
 from tgmirror.engine.runner import RunControl, Runner, RunnerTiming
 from tgmirror.engine.runs import RunRequest, RunWaiting, begin_run, check_runnable
+from tgmirror.engine.transfer import Transfer
 from tgmirror.store.db import Store, utc_now
 from tgmirror.store.msgmap import MessageResult
 from tgmirror.store.runs import Control, Run, RunStatus
@@ -44,6 +45,7 @@ class Recorder:
     def __init__(self) -> None:
         self.notices: list[tuple[str, dict[str, object]]] = []
         self.runs: list[Run] = []
+        self.transfers: list[Transfer] = []
 
     def notice(self, code: str, **params: object) -> None:
         self.notices.append((code, params))
@@ -51,9 +53,13 @@ class Recorder:
     def progress(self, run: Run) -> None:
         self.runs.append(run)
 
+    def transfer(self, transfer: Transfer) -> None:
+        self.transfers.append(transfer)
+
     @property
     def codes(self) -> list[str]:
-        return [c for c, _ in self.notices]
+        """The notices about what happened, not the analysis every run opens with."""
+        return [c for c, _ in self.notices if c not in ("analyzed", "cap_days")]
 
 
 class Rig:

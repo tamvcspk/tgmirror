@@ -115,7 +115,7 @@ done 4,180 · failed 3 · skipped(filter) 27,911 · flood 2 (last 38s ago)
 `--caption keep` (mặc định) · `strip-links` (bỏ link `t.me/<nguồn>` và `@nguồn`; hyperlink trỏ về nguồn giữ chữ, mất link) · `append` (cộng `--caption-text "<text>"` sau caption, cách hai dòng trống) · `none`.
 
 - Chỉ đổi **caption của tin media** (ảnh, video, tài liệu, ... kể cả tin đầu của album). Văn bản của tin không có media (hay chỉ có link preview) là chính nội dung nên không bao giờ bị đổi. `append` chỉ cộng vào caption **đã có** (thành viên album không caption không thành có caption).
-- Chiến lược A (forward) không sửa được caption, nên `--mode copy` với `--caption` khác `keep` là lỗi mã 2. Với `--mode auto`, chỉ những unit có tin media kèm caption đi đường tải xuống rồi tải lên lại (chậm hơn nhiều), phần còn lại vẫn forward; thứ tự giữ nguyên. Với `--mode reupload`, mọi unit đều tải lên lại.
+- Chiến lược A (forward) không sửa được caption, nên `--mode copy` với `--caption` khác `keep` là lỗi mã 2. Với `--mode auto`, chỉ những unit có tin media kèm caption không đi forward: nếu nguồn cho lưu nội dung thì chúng được **gửi bằng mã file** (không tải gì, nhanh gần bằng forward), còn nguồn `noforwards` hay unit không phải file thì tải xuống rồi tải lên lại (chậm hơn nhiều); phần còn lại vẫn forward; thứ tự giữ nguyên. Nếu Telegram không cho gửi lại một file bằng mã, unit đó tự lùi về tải xuống rồi tải lên (một dòng thông báo). Với `--mode reupload`, mọi unit đều tải lên lại.
 - `--caption append` cần `--caption-text` (và ngược lại). Caption dài quá giới hạn của Telegram sau khi cộng: tin đó `failed` với lý do của Telegram, `retry` xử lý sau.
 - Offset của entity theo UTF-16 như Telegram; định dạng (đậm, nghiêng, ...) được giữ và dịch chuyển khi xóa link.
 
@@ -164,21 +164,27 @@ Một tin `failed` (Telegram từ chối, hoặc không tạo tin nào cho nó) 
 ```
 Lần chạy 7: Kenh A → Kenh A (copy)
 Trạng thái:  đang chạy
-Tiến độ:     ~43% (tin nguồn tới id 4210 / 9800)
+Tiến độ:     ~43% (32100 / tối đa 74500 tin)
 Tốc độ:      2.1 tin/giây (trung bình từ lúc bắt đầu), còn khoảng 44 phút
 Kết quả:     4180 đã sao chép, 3 lỗi, 27911 bị filter loại
+Cap ngày:    còn tối đa 42400 tin, cap 5000/ngày: cần nghỉ thêm khoảng 8 ngày
 Giới hạn:    nghỉ 2.4s giữa các lần gửi; hôm nay đã gửi 1200/5000 tin
 Telegram:    2 lần bị giới hạn trong 24 giờ qua; gần nhất 38 giây trước (flood_wait, 30s)
 ```
 
-Mọi số là **ước lượng**: `status` chỉ đọc DB (clone đang chạy giữ session Telegram nên terminal thứ hai không kết nối được), vì vậy tổng là id tin mới nhất của nguồn lúc lần chạy bắt đầu (`RunOptions.src_last_id`, một request đọc ở bước chuẩn bị).
+Mọi số là **ước lượng**: `status` chỉ đọc DB (clone đang chạy giữ session Telegram nên terminal thứ hai không kết nối được), vì vậy tổng được ghi một lần lúc lần chạy bắt đầu: số tin Telegram đếm được cho khoảng và filter của lần chạy (`RunOptions.total_items`, một request `count`, xem `01-kien-truc.md`, "Analyze và tiến độ"), cùng id tin mới nhất của nguồn (`src_last_id`) làm phương án dự phòng.
 
-- **Tiến độ** của lần chạy thường tính theo *id* nguồn, từ chỗ lần chạy bắt đầu tới id đó (id có khoảng trống do tin bị xóa/service, filter lại nhảy nhanh qua quãng không khớp nên chỉ là tỉ lệ thô, không phải số tin). Lần chạy cũ từ trước khi có tổng thì không có phần trăm. Tiến độ của `retry` chính xác: số tin lỗi đã xử lý trên số còn chờ.
+- **Tiến độ** của lần chạy thường là số tin đã xử lý (sao chép, lỗi, bị filter loại, bị bỏ vì không hỗ trợ, hoặc đã có sẵn ở đích) trên `total_items`. Đó là **cận trên** (tin service được đếm, filter phía client không được trừ trước) nên lần chạy bỏ qua nhiều tin chỉ tới 100% khi xong; chữ "tối đa" nói điều đó. Lần chạy từ trước khi có `total_items` (hoặc phép đếm lỗi) tính theo *id* nguồn như trước (id có khoảng trống, filter nhảy nhanh qua quãng không khớp nên chỉ là tỉ lệ thô). Tiến độ của `retry` chính xác: số tin lỗi đã xử lý trên số còn chờ.
+- **Cap ngày**: khi số tin còn lại vượt phần `daily_cap` còn cho phép hôm nay, `status` (và một dòng đầu lần chạy) nói cần nghỉ thêm bao nhiêu ngày. Chỉ hiện cho lần chạy đang sống hoặc đang `waiting_flood`.
 - **Tốc độ** là trung bình từ lúc bắt đầu (gồm cả lúc tạm dừng và chờ flood): tin đã sao chép hoặc lỗi mỗi giây; chưa hiện trong 5 giây đầu. **ETA** ngoại suy từ đó và chỉ hiện khi lần chạy thật sự đang `running`.
 - Lần chạy ghi `running`/`paused` nhưng heartbeat cũ hơn 2 phút được báo là **không có tiến trình nào giữ** (tín hiệu cuối lúc ...); lần chạy kế tiếp của cặp ghi nó `failed('interrupted')` (`04-state-checkpoint.md`).
 - `waiting_flood`: hiện thời điểm được chạy lại. Lần chạy đã kết thúc mà còn tin lỗi: gợi ý `tgmirror retry`.
 - Số lần Telegram giới hạn trong 24 giờ là của cả account (`flood_log`); dòng "Giới hạn" đọc `limiter_state` (delay hiện tại; số tin gửi hôm nay, về 0 khi sang ngày mới theo giờ máy).
-- `--json`: `run`, `status`, `live`, `abandoned`, `progress`, `speed_per_second`, `eta_seconds`, `copied`, `failed`, `failed_now`, `gone_from_source`, `limiter`, `floods_24h`, `last_flood`, ... (khóa cho máy đọc, không dịch).
+- `--json`: `run`, `status`, `live`, `abandoned`, `progress`, `speed_per_second`, `eta_seconds`, `copied`, `failed`, `failed_now`, `gone_from_source`, `total_items`, `handled`, `left`, `cap_rest_days`, `limiter`, `floods_24h`, `last_flood`, ... (khóa cho máy đọc, không dịch).
+
+### Trong lúc chạy (`clone`/`run`)
+
+Đầu lần chạy có một dòng "Ước tính: tối đa N tin cần xem xét" (và một dòng về cap ngày nếu tốn hơn một ngày). Dòng tiến độ theo batch là `Lần chạy 7: 1200/9800 tin (~12%): 1150 đã sao chép, 50 bị filter loại, 0 lỗi.` (không có tổng thì dạng cũ). Với file ≥ 8 MB (chiến lược B) có thêm dòng riêng: `Tải xuống tin 42: 45% (12.3 MB / 27.4 MB, 3.2 MB/s).` và `Tải lên tin 42: ...`, in lúc bắt đầu, mỗi 5 giây và khi xong. Giao diện Rich (phase 7) dùng cùng dữ liệu (`Reporter.progress`, `Reporter.transfer`) cho thanh tiến độ và hai dòng tải xuống / tải lên.
 
 ## Làm lại từ đầu (`--fresh`)
 

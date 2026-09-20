@@ -46,7 +46,13 @@ from tgmirror.core.errors import (
     TgMirrorError,
     Transient,
 )
-from tgmirror.core.gateway import CaptionMode, MessageReader, SrcMessage, TelegramGateway, Unit
+from tgmirror.core.gateway import (
+    CaptionMode,
+    MessageReader,
+    SrcMessage,
+    TelegramGateway,
+    Unit,
+)
 from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
@@ -62,10 +68,13 @@ from tgmirror.engine.reupload import (
     Window,
     left_out,
     plan_unit,
+    reserve_size,
     send_unit,
+    send_unit_by_reference,
 )
 from tgmirror.engine.runs import DAILY_CAP
 from tgmirror.engine.strategy import Strategy, router
+from tgmirror.engine.transfer import Transfer, TransferTracker
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 from tgmirror.filters.pushdown import plan_read
@@ -78,13 +87,17 @@ class Reporter(Protocol):
     """Where the runner tells the outside world what it is doing (the CLI prints it)."""
 
     def notice(self, code: str, **params: object) -> None:
-        """Something worth a line: ``reconciled``, ``reconcile_resend``, ``reconcile_ambiguous``,
-        ``flood_waiting``, ``flood_stopped``, ``throttled``, ``paused``, ``resumed``. Codes map to
-        ``run.<code>`` in ``ui/messages.py``."""
+        """Something worth a line: ``analyzed``, ``cap_days``, ``reconciled``, ``reconcile_resend``,
+        ``reconcile_ambiguous``, ``flood_waiting``, ``flood_stopped``, ``throttled``, ``paused``,
+        ``resumed``. Codes map to ``run.<code>`` in ``ui/messages.py``."""
         ...
 
     def progress(self, run: Run) -> None:
         """A batch was committed; ``run`` carries the new cursor and counters."""
+        ...
+
+    def transfer(self, transfer: Transfer) -> None:
+        """A file being downloaded or uploaded got further (called often: throttle when showing)."""
         ...
 
 
@@ -93,6 +106,9 @@ class NullReporter:
         pass
 
     def progress(self, run: Run) -> None:
+        pass
+
+    def transfer(self, transfer: Transfer) -> None:
         pass
 
 
@@ -166,6 +182,7 @@ class Runner:
         self._wait = wait  # sit out FloodWaits of any length instead of parking the run
         self._tmp_dir = tmp_dir or Path(tempfile.gettempdir()) / "tgmirror"  # strategy B downloads
         self._pipeline: Pipeline | None = None
+        self._tracker = TransferTracker(self._reporter.transfer)
         self._limiter: Limiter | None = None
         self._guard: FloodGuard | None = None
         self._reader: MessageReader | None = None
@@ -201,6 +218,7 @@ class Runner:
         await self._clear_tmp()  # what a killed run left behind
         try:
             await self._reconcile(run)
+            run = await self._analyze(run)
             status = await self._loop(run)
             await self._store.finish(run.id, status)
         except Interrupted:  # a stop arrived while the runner slept
@@ -231,6 +249,44 @@ class Runner:
         assert final is not None
         return final
 
+    # ---- analysis -------------------------------------------------------------------------
+
+    async def _analyze(self, run: Run) -> Run:
+        """Count what the run has to look at, so progress can say "x of y" (docs/01, "Analyze").
+
+        One paced read request, and only the *number*: sizes are learnt file by file as the run
+        gets to them. It is an upper bound (see ``RunOptions.total_items``), capped by the id span
+        recorded when the run began. A retry knows its total exactly and needs no analysis. Analysis
+        is a courtesy: a Telegram error that is not a rate limit leaves the total unknown and the
+        run carries on (``status`` then falls back to the source id).
+        """
+        assert self._reader is not None
+        if run.options.retry_of is not None:
+            return run
+        spec = FilterSpec.from_json(run.filters_json)
+        plan = plan_read(spec, run.cursor_from, pushdown=run.options.pushdown)
+        try:
+            total = await self._reader.count(run.src_id, min_id=plan.min_id, filters=plan.server)
+        except (FloodWait, PeerFlood):
+            raise
+        except GatewayError:
+            return run
+        head = run.options.src_last_id
+        if head > 0:
+            total = min(total, max(head - plan.min_id, 0))
+        run = await self._store.set_total(run.id, total)
+        self._reporter.notice("analyzed", total=total)
+        if (days := self._cap_days(total)) > 0:
+            self._reporter.notice("cap_days", total=total, cap=self._limits.daily_cap, days=days)
+        return run
+
+    def _cap_days(self, total: int) -> int:
+        """Whole days the run would have to rest for the daily cap if it had to send ``total``."""
+        assert self._limiter is not None
+        cap = self._limits.daily_cap
+        left = max(cap - self._limiter.state.sent_today, 0)
+        return max(-(-(total - left) // cap), 0)  # ceil((total - left) / cap), never negative
+
     # ---- the loop -------------------------------------------------------------------------
 
     async def _loop(self, run: Run) -> RunStatus:
@@ -257,7 +313,7 @@ class Runner:
                 batches(
                     units,
                     lambda: limiter.batch_size(run.options.batch_size),
-                    route=router(run.mode, caption),
+                    route=router(run.mode, caption, by_reference=not run.options.src_protected),
                 )
             ) as stream,
             aclosing(self._ready(run, stream)) as ready_stream,
@@ -302,19 +358,33 @@ class Runner:
 
     async def _make(self, run: Run, batch: Batch, options: Options, window: Window) -> Ready:
         """Settle what can be settled before the send: what is already ``done``, what to do with
-        the unit, and (for a unit that will be uploaded) its download."""
+        the unit, and (for a unit that will be uploaded) its download, or (for one sent by
+        reference) the messages read again for fresh file references."""
         assert self._reader is not None
         todo = await self._without_done(run.id, batch)
-        if not todo.units or todo.strategy is not Strategy.REUPLOAD:
+        if not todo.units or todo.strategy is Strategy.COPY:
             return Ready(todo)
         unit = todo.units[0]
         action = plan_unit(unit, options)  # raises UnsupportedMedia
         if action.kind is not ActionKind.SEND:
             return Ready(todo, action)
-        size = sum(m.size or 0 for m in unit.messages)
+        if todo.strategy is Strategy.REFERENCE:  # nothing to download: nothing on disk
+            try:
+                return Ready(todo, action, await self._reader.fetch(run.src_id, unit))
+            except PerMessage as exc:  # gone since it was read: the unit fails
+                return Ready(todo, action, rejected=exc.reason)
+        size = reserve_size(unit)
         await window.reserve(size)
         try:
-            prepared = await self._reader.prepare(run.src_id, unit, self._run_tmp(run))
+            prepared = await self._reader.prepare(
+                run.src_id, unit, self._run_tmp(run), self._tracker.update
+            )
+            # what is really on disk, against what was reserved: a size Telegram got wrong (or a
+            # cover picture) must not let downloads run past the budget unnoticed
+            actual = await asyncio.to_thread(_bytes_on_disk, prepared.files)
+            if actual > size:
+                await window.grow(actual - size)
+                size = actual
         except PerMessage as exc:  # gone since it was read, or nothing to send: the unit fails
             await window.release(size)
             return Ready(todo, action, rejected=exc.reason)
@@ -347,9 +417,8 @@ class Runner:
     async def _settle(self, run: Run, batch: Batch, results: list[MessageResult]) -> None:
         """Record what happened to a batch that needed no call to Telegram."""
         batch_id = await self._store.begin_batch(run.id, batch.units)
-        extra = {"skipped_filter": batch.skipped} if batch.skipped else None
         updated = await self._store.commit_batch(
-            run.id, batch_id, results, batch.last_id, extra_stats=extra
+            run.id, batch_id, results, batch.last_id, extra_stats=_extra_stats(batch)
         )
         self._reporter.progress(updated)
 
@@ -378,12 +447,13 @@ class Runner:
         if not done:
             return batch
         todo = tuple(u for u in batch.units if not any(i in done for i in u.ids))
-        return replace(batch, units=todo, upto=batch.last_id)
+        passed = sum(len(u.messages) for u in batch.units if u not in todo)
+        return replace(batch, units=todo, upto=batch.last_id, already=batch.already + passed)
 
     async def _advance(self, run: Run, batch: Batch) -> None:
-        stats = {"skipped_filter": batch.skipped} if batch.skipped else None
+        stats = _extra_stats(batch)
         updated = await self._store.advance_cursor(run.id, batch.last_id, extra_stats=stats)
-        if batch.skipped:  # a long stretch without matches still shows a sign of life
+        if stats:  # a long stretch without matches still shows a sign of life
             self._reporter.progress(updated)
 
     async def _send(self, run: Run, batch: Batch, ready: Ready | None = None) -> None:
@@ -392,14 +462,45 @@ class Runner:
         try:
             # A FloodWait is sat out inside ``write`` and the same call repeated: the batch stays
             # ``pending`` meanwhile and nothing is rebuilt.
-            if ready is not None and ready.action is not None:  # strategy B: one unit
+            if (
+                ready is not None
+                and ready.action is not None
+                and ready.prepared is not None
+                and batch.strategy is Strategy.REFERENCE
+            ):  # strategy B, by the files' ids: one unit
+                options = Options.of(run.options)
+                results = await self._guard.write(
+                    "send_by_reference",
+                    batch.size,
+                    lambda: send_unit_by_reference(
+                        self._gateway,
+                        self._reader,
+                        batch.units[0],
+                        ready.prepared,
+                        options,
+                        src=run.src_id,
+                        dst=run.dst_id,
+                        tmp=self._run_tmp(run),
+                        on_transfer=self._tracker.update,
+                        on_fallback=lambda: self._reporter.notice(
+                            "reference_fallback", id=batch.units[0].ids[0]
+                        ),
+                    ),
+                )
+            elif ready is not None and ready.action is not None:  # strategy B: one unit
                 action, options = ready.action, Options.of(run.options)
                 method = "send_text" if action.kind is ActionKind.PLACEHOLDER else "send_prepared"
                 results = await self._guard.write(
                     method,
                     batch.size,
                     lambda: send_unit(
-                        self._gateway, run.dst_id, batch.units[0], ready.prepared, action, options
+                        self._gateway,
+                        run.dst_id,
+                        batch.units[0],
+                        ready.prepared,
+                        action,
+                        options,
+                        self._tracker.update,
                     ),
                 )
             else:
@@ -422,13 +523,12 @@ class Runner:
             # Rejected, or stopped while waiting out a flood: nothing was created either way.
             await self._store.discard_batch(run.id, batch_id)
             raise
-        extra = {"skipped_filter": batch.skipped} if batch.skipped else None
         updated = await self._store.commit_batch(
             run.id,
             batch_id,
             results,
             batch.last_id,
-            extra_stats=extra,
+            extra_stats=_extra_stats(batch),
             limiter=self._limiter.state,
         )
         self._reporter.progress(updated)
@@ -568,3 +668,18 @@ class Runner:
 def _remove_runs(root: Path) -> None:
     for entry in root.glob("run-*"):
         shutil.rmtree(entry, ignore_errors=True)
+
+
+def _extra_stats(batch: Batch) -> dict[str, int] | None:
+    """What a batch adds to the run's counters besides its own messages: the ones that needed no
+    work (dropped by the filter, or already in the destination)."""
+    extra = {}
+    if batch.skipped:
+        extra["skipped_filter"] = batch.skipped
+    if batch.already:
+        extra["already_done"] = batch.already
+    return extra or None
+
+
+def _bytes_on_disk(files: tuple[Path, ...]) -> int:
+    return sum(f.stat().st_size for f in files if f.exists())

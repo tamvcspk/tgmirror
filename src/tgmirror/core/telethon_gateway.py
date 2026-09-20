@@ -7,19 +7,22 @@ adds reading and copying messages. The limiter is wired in at phase 4 (docs/06-l
 """
 
 import asyncio
+import contextlib
 import copy
 import os
 import re
 import sqlite3
-from collections.abc import AsyncIterator, Collection, Iterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from telethon import TelegramClient, errors, types, utils
 from telethon.tl import custom
 from telethon.tl.functions.channels import CreateChannelRequest
+from telethon.tl.functions.messages import SearchRequest
 
 from tgmirror.core.auth import AccountInfo
 from tgmirror.core.config import Config
@@ -51,9 +54,11 @@ from tgmirror.core.gateway import (
     ChannelInfo,
     ChatKind,
     MediaKind,
+    OnTransfer,
     Prepared,
     ServerFilter,
     SrcMessage,
+    TransferPhase,
     Unit,
 )
 from tgmirror.core.paths import Paths
@@ -430,6 +435,66 @@ def _has_file(message: custom.Message) -> bool:
     return isinstance(message.media, types.MessageMediaPhoto | types.MessageMediaDocument)
 
 
+@contextmanager
+def _media_reusable() -> Iterator[None]:
+    """Telegram would not send this media again by its id: the caller sends it the long way."""
+    try:
+        yield
+    except (
+        errors.FileReferenceEmptyError,
+        errors.FileReferenceInvalidError,
+        errors.FileIdInvalidError,
+        errors.MediaEmptyError,
+        errors.MediaInvalidError,
+        errors.GroupedMediaInvalidError,
+    ) as exc:
+        raise FileRefExpired(_rpc_name(exc)) from exc
+
+
+def _reporting(
+    on_transfer: OnTransfer | None, phase: TransferPhase, msg_id: int, share: int | None = None
+) -> Callable[[float, float], None] | None:
+    """Telethon's ``progress_callback(done, total)`` as a call to ``on_transfer``.
+
+    For an album Telethon counts files, not bytes (``done`` is the number of files sent, with a
+    fraction for the one in flight); ``share`` is the album's size in bytes, and the callback then
+    scales that fraction to it. A callback that fails must never fail the transfer.
+    """
+    if on_transfer is None:
+        return None
+
+    def callback(done: float, total: float) -> None:
+        if not total:
+            return
+        if share is not None:
+            done, total = done / total * share, share
+        with contextlib.suppress(Exception):
+            on_transfer(phase, msg_id, int(done), int(total))
+
+    return callback
+
+
+def _total_of(result: Any) -> int:
+    """The total of a ``messages.search`` answer (a plain ``Messages`` has no ``count``)."""
+    total = getattr(result, "count", None)
+    return int(total) if total is not None else len(result.messages)
+
+
+async def _position(ask: Callable[[int], Awaitable[Any]], offset_id: int, total: int) -> int | None:
+    """How many matching messages have an id ``>= offset_id``, or ``None`` if Telegram did not say.
+
+    Nothing older than ``offset_id`` in the answer means every match is at or above it."""
+    result = await ask(offset_id)
+    if (position := getattr(result, "offset_id_offset", None)) is not None:
+        return int(position)
+    return None if result.messages else total
+
+
+def _album_share(items: Sequence[_Item]) -> int:
+    """Bytes of an album's files, as the messages say (``0``: nothing to scale a report to)."""
+    return sum(i.message.file.size or 0 for i in items if i.message.file is not None)
+
+
 def _make_room(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
@@ -527,22 +592,83 @@ class TelethonGateway:
             latest = await self._client.get_messages(peer, limit=1)
         return latest[0].id if latest else 0
 
+    async def _bounds(
+        self, peer: object, min_id: int, filters: ServerFilter, *, before: int, after: int
+    ) -> tuple[int, int | None] | None:
+        """The id range ``filters`` selects: messages with ``id > low`` and ``id <= high`` (``high``
+        ``None``: no upper bound), or ``None`` when nothing that new exists.
+
+        ``before``/``after`` widen the range where a date bound falls (reading keeps an album on the
+        boundary whole with ``ALBUM_MARGIN``; counting wants the range as it is).
+        """
+        low, high = min_id, filters.max_id
+        if filters.since is not None:
+            # one message at (or just after) the date
+            first = await self._first_id_after(peer, filters.since - timedelta(seconds=1))
+            if first is None:
+                return None
+            low = max(low, first - 1 - before)
+        if filters.until is not None and (past := await self._first_id_after(peer, filters.until)):
+            high = min(past + after, high) if high is not None else past + after
+        return low, high
+
+    async def count(self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER) -> int:
+        peer = await self._peer(src)
+        with mapped_errors():
+            bounds = await self._bounds(peer, min_id, filters, before=0, after=-1)
+            if bounds is None or (bounds[1] is not None and bounds[1] <= bounds[0]):
+                return 0
+            low, high = bounds
+            kind = (
+                types.InputMessagesFilterEmpty()
+                if filters.media is None
+                else _MEDIA_FILTERS[filters.media]()
+            )
+
+            async def ask(offset_id: int) -> Any:
+                # one message and the totals: ``limit=1`` is all that is needed. ``min_id`` and
+                # ``max_id`` are left out on purpose: Telegram ignores them when it counts (checked
+                # on a real channel by ``scripts/spike_count.py``, docs/06 spike 10).
+                return await self._client(
+                    SearchRequest(
+                        peer=peer,
+                        q=filters.search or "",
+                        filter=kind,
+                        min_date=None,
+                        max_date=None,
+                        offset_id=offset_id,
+                        add_offset=0,
+                        limit=1,
+                        max_id=0,
+                        min_id=0,
+                        hash=0,
+                    )
+                )
+
+            total = _total_of(await ask(0))
+            if low <= 0 and high is None:
+                return total
+            # What Telegram does say is where the first message older than ``offset_id`` stands in
+            # the whole list (``offset_id_offset``: how many matching messages have an id at or
+            # above ``offset_id``). Two such positions bound the range exactly.
+            from_low = await _position(ask, low + 1, total) if low > 0 else total
+            above_high = await _position(ask, high + 1, total) if high is not None else 0
+        if from_low is None or above_high is None:
+            return total  # Telegram did not say: the whole list is still an upper bound
+        return max(from_low - above_high, 0)
+
     async def iter_messages(
         self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER
     ) -> AsyncIterator[SrcMessage]:
         peer = await self._peer(src)
         with mapped_errors():
-            low, high = min_id, filters.max_id  # ``high`` is included
-            if filters.since is not None:
-                # one message at (or just after) the date; the margin keeps a boundary album whole
-                first = await self._first_id_after(peer, filters.since - timedelta(seconds=1))
-                if first is None:
-                    return  # nothing that new exists
-                low = max(low, first - 1 - ALBUM_MARGIN)
-            if filters.until is not None and (
-                past := await self._first_id_after(peer, filters.until)
-            ):
-                high = min(past + ALBUM_MARGIN, high) if high is not None else past + ALBUM_MARGIN
+            # the margin keeps an album that straddles a date boundary whole
+            bounds = await self._bounds(
+                peer, min_id, filters, before=ALBUM_MARGIN, after=ALBUM_MARGIN
+            )
+            if bounds is None:
+                return  # nothing that new exists
+            low, high = bounds  # ``high`` is included
             # reverse=True: oldest first (D4); Telethon starts after ``min_id`` and excludes
             # ``max_id`` itself (spike 3, docs/06). ``filter``/``search`` become a search request.
             options: dict[str, object] = {"min_id": low, "reverse": True, "wait_time": READ_WAIT}
@@ -587,7 +713,9 @@ class TelethonGateway:
 
     # ---- strategy B ------------------------------------------------------------------------
 
-    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+    async def _read_unit(self, src: int, unit: Unit) -> list[custom.Message]:
+        """The unit's messages read again (fresh file references); ``PerMessage`` if one is
+        gone."""
         peer = await self._peer(src)
         with mapped_errors():
             found = await self._client.get_messages(peer, ids=unit.ids)
@@ -598,18 +726,61 @@ class TelethonGateway:
         ]
         if len(messages) != len(unit.ids):  # deleted since it was read
             raise PerMessage("gone_from_source")
+        return messages
+
+    async def fetch(self, src: int, unit: Unit) -> Prepared:
+        messages = await self._read_unit(src, unit)
+        return Prepared(unit, (), _Fetched(tuple(_Item(m) for m in messages)))
+
+    async def send_by_reference(
+        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+    ) -> list[int]:
+        fetched = prepared.handle
+        assert isinstance(fetched, _Fetched)
+        peer = await self._peer(dst)
+        texts: list[str] = []
+        entity_lists: list[list[object]] = []
+        for item in fetched.items:
+            message = item.message
+            text, entities = rewrite_caption(
+                message.message or "", list(message.entities or []), caption, _source_names(message)
+            )
+            texts.append(text)
+            entity_lists.append(entities)
+        media = [item.message.media for item in fetched.items]
+        with mapped_errors(), _media_reusable():
+            if len(media) > 1:
+                sent = await self._client.send_file(
+                    peer, media, caption=texts, formatting_entities=entity_lists, parse_mode=None
+                )
+                return [int(m.id) for m in sent]
+            one = await self._client.send_file(
+                peer,
+                media[0],
+                caption=texts[0],
+                formatting_entities=entity_lists[0] or None,
+                parse_mode=None,
+            )
+            return [int(one.id)]
+
+    async def prepare(
+        self, src: int, unit: Unit, tmp: Path, on_transfer: OnTransfer | None = None
+    ) -> Prepared:
+        messages = await self._read_unit(src, unit)
         items: list[_Item] = []
         with mapped_errors():
             for message in messages:
                 path = thumb = None
                 if _has_file(message):
-                    path = await self._download(message, tmp)
+                    path = await self._download(message, tmp, on_transfer)
                     thumb = await self._thumbnail(message, tmp)
                 items.append(_Item(message, path, thumb))
         files = tuple(f for item in items for f in (item.path, item.thumb) if f is not None)
         return Prepared(unit, files, _Fetched(tuple(items)))
 
-    async def _download(self, message: custom.Message, tmp: Path) -> Path:
+    async def _download(
+        self, message: custom.Message, tmp: Path, on_transfer: OnTransfer | None = None
+    ) -> Path:
         """The media of ``message`` in ``tmp``. A finished file is kept, so the same call after a
         FloodWait does not download it again; an interrupted one is only ever a ``.part``."""
         final = tmp / f"{message.id}{message.file.ext or ''}"
@@ -617,7 +788,10 @@ class TelethonGateway:
             return final
         part = tmp / f"{message.id}.part"
         await asyncio.to_thread(_make_room, part)
-        got = await self._client.download_media(message, file=str(part))
+        progress = _reporting(on_transfer, TransferPhase.DOWNLOAD, message.id)
+        got = await self._client.download_media(
+            message, file=str(part), **({"progress_callback": progress} if progress else {})
+        )
         if got is None:
             raise PerMessage("download_failed")
         await asyncio.to_thread(_publish, got, final)
@@ -647,17 +821,27 @@ class TelethonGateway:
         return final
 
     async def send_prepared(
-        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+        self,
+        dst: int,
+        prepared: Prepared,
+        caption: CaptionPolicy,
+        on_transfer: OnTransfer | None = None,
     ) -> list[int]:
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
         peer = await self._peer(dst)
         with mapped_errors():
             if len(fetched.items) > 1:
-                return await self._send_album(peer, fetched.items, caption)
-            return [await self._send_one(peer, fetched.items[0], caption)]
+                return await self._send_album(peer, fetched.items, caption, on_transfer)
+            return [await self._send_one(peer, fetched.items[0], caption, on_transfer)]
 
-    async def _send_one(self, peer: object, item: _Item, caption: CaptionPolicy) -> int:
+    async def _send_one(
+        self,
+        peer: object,
+        item: _Item,
+        caption: CaptionPolicy,
+        on_transfer: OnTransfer | None = None,
+    ) -> int:
         message = item.message
         text, entities = message.message or "", list(message.entities or [])
         media = message.media
@@ -680,6 +864,8 @@ class TelethonGateway:
                 if kind is MediaKind.VIDEO:
                     # without it Telegram turns a video with no sound track into a GIF
                     extra["nosound_video"] = True
+            if progress := _reporting(on_transfer, TransferPhase.UPLOAD, message.id):
+                extra["progress_callback"] = progress
             sent = await self._client.send_file(
                 peer,
                 str(item.path),
@@ -706,7 +892,11 @@ class TelethonGateway:
         return int(sent.id)
 
     async def _send_album(
-        self, peer: object, items: Sequence[_Item], caption: CaptionPolicy
+        self,
+        peer: object,
+        items: Sequence[_Item],
+        caption: CaptionPolicy,
+        on_transfer: OnTransfer | None = None,
     ) -> list[int]:
         captions: list[str] = []
         entity_lists: list[list[object]] = []
@@ -729,6 +919,15 @@ class TelethonGateway:
             parse_mode=None,
             force_document=as_documents,
             supports_streaming=True,
+            **(
+                {"progress_callback": progress}
+                if (
+                    progress := _reporting(
+                        on_transfer, TransferPhase.UPLOAD, items[0].message.id, _album_share(items)
+                    )
+                )
+                else {}
+            ),
         )
         return [int(m.id) for m in sent]
 

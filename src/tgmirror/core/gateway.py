@@ -5,7 +5,7 @@ Telegram network call is implemented behind this protocol and goes through the l
 The types live here rather than in ``engine/`` because the protocol itself refers to them.
 """
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -164,6 +164,17 @@ class Prepared:
     handle: object = None
 
 
+class TransferPhase(StrEnum):
+    DOWNLOAD = "download"
+    UPLOAD = "upload"
+
+
+# What a transfer reports while it runs: ``(phase, message id, bytes done, bytes in all)``. It is
+# called from the event loop, often (once per part), so it must be cheap and never raise. An album
+# reports under the id of its first message, for all its files together.
+OnTransfer = Callable[[TransferPhase, int, int, int], None]
+
+
 class MessageReader(Protocol):
     """The read side of the gateway: all that the planner, preview and reconcile need.
 
@@ -176,6 +187,14 @@ class MessageReader(Protocol):
         """Messages with ``id > min_id``, ascending (decision D4), narrowed by ``filters``."""
         ...
 
+    async def count(self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER) -> int:
+        """How many messages ``iter_messages`` would (roughly) return, from one cheap request.
+
+        It is what progress is measured against, so an *upper bound* is the honest answer: service
+        messages are counted, and whatever the client-side filter drops later is not subtracted.
+        """
+        ...
+
     async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
         """The messages with these ids (one request: 1..``MAX_IDS_PER_CALL`` ids), ascending.
 
@@ -184,9 +203,18 @@ class MessageReader(Protocol):
         """
         ...
 
-    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+    async def fetch(self, src: int, unit: Unit) -> Prepared:
+        """Sending by reference, the read half: read the unit's messages again so their file
+        references are fresh. Nothing is downloaded (``Prepared.files`` is empty). Raises
+        ``PerMessage`` when a message is gone."""
+        ...
+
+    async def prepare(
+        self, src: int, unit: Unit, tmp: Path, on_transfer: OnTransfer | None = None
+    ) -> Prepared:
         """Strategy B, the read half: read the unit's messages again and download their media
-        into ``tmp`` (one request to find them, then the downloads).
+        into ``tmp`` (one request to find them, then the downloads), telling ``on_transfer`` how
+        far each download is.
 
         A file already downloaded there is reused, so repeating the call after a FloodWait does
         not fetch it twice. Raises ``PerMessage`` when a message is gone or has nothing to send.
@@ -212,6 +240,10 @@ class TelegramGateway(Protocol):
         """Messages with ``id > min_id``, ascending (decision D4), narrowed by ``filters``."""
         ...
 
+    async def count(self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER) -> int:
+        """As ``MessageReader.count``."""
+        ...
+
     async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
         """As ``MessageReader.get_messages``."""
         ...
@@ -235,16 +267,37 @@ class TelegramGateway(Protocol):
         """
         ...
 
-    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+    async def fetch(self, src: int, unit: Unit) -> Prepared:
+        """As ``MessageReader.fetch``."""
+        ...
+
+    async def prepare(
+        self, src: int, unit: Unit, tmp: Path, on_transfer: OnTransfer | None = None
+    ) -> Prepared:
         """As ``MessageReader.prepare``."""
         ...
 
-    async def send_prepared(
+    async def send_by_reference(
         self, dst: int, prepared: Prepared, caption: CaptionPolicy
+    ) -> list[int]:
+        """Sending by reference, the write half: post the unit as new messages by handing
+        Telegram the id of each file it already stores, so nothing is downloaded or uploaded
+        (an album stays one album). Returns the new ids aligned with ``prepared.unit``;
+        ``caption`` rewrites the captions. Raises ``FileRefExpired`` when the media cannot be
+        sent this way (the reference expired, or Telegram will not reuse it)."""
+        ...
+
+    async def send_prepared(
+        self,
+        dst: int,
+        prepared: Prepared,
+        caption: CaptionPolicy,
+        on_transfer: OnTransfer | None = None,
     ) -> list[int]:
         """Strategy B, the write half: send the unit as new messages (one album for an album, text
         for text, the poll/location/contact itself for those) and return their ids in the
-        destination, aligned with ``prepared.unit``. ``caption`` rewrites the captions of media."""
+        destination, aligned with ``prepared.unit``. ``caption`` rewrites the captions of media;
+        ``on_transfer`` hears how far the upload is."""
         ...
 
     async def send_text(self, dst: int, text: str) -> int:

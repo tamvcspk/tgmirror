@@ -62,7 +62,8 @@ class ForwardsRestricted(GatewayError):
 
 
 class FileRefExpired(GatewayError):
-    """FILE_REFERENCE_EXPIRED: refetch the message and retry once."""
+    """The media cannot be sent again by its id: its file reference expired (refetch the
+    message and retry once) or Telegram will not reuse it (send it the long way)."""
 
 
 class Transient(GatewayError):

@@ -9,7 +9,7 @@ import pytest
 from tests.fakes import FakeGateway
 from tgmirror.core.gateway import ChatKind, MediaKind, SrcMessage, Unit
 from tgmirror.core.limiter import LimiterState
-from tgmirror.engine.status import MIN_SAMPLE, build_report, estimate
+from tgmirror.engine.status import MIN_SAMPLE, build_report, cap_days, estimate
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store
 from tgmirror.store.msgmap import MessageResult
 from tgmirror.store.runs import Control, Run, RunOptions, RunSpec, RunStatus
@@ -43,6 +43,66 @@ def make_run(**changes: object) -> Run:
         updated_at=NOW,
     )
     return replace(base, **changes)  # type: ignore[arg-type]
+
+
+# ---- an ordinary run with a count: by the messages dealt with -----------------------------------
+
+
+def counted(**changes: object) -> Run:
+    """400 messages to look at (the source's newest id says 1000: the count is what is used)."""
+    return make_run(options=RunOptions(src_last_id=1000, total_items=400), **changes)
+
+
+def test_progress_is_what_was_dealt_with_against_the_count() -> None:
+    run = counted(stats={"done": 100, "failed": 20, "skipped_filter": 60, "already_done": 20})
+
+    est = estimate(run, NOW, live=True)
+
+    assert est.fraction == 0.5  # 200 of 400, whichever way each was settled
+    assert est.eta == timedelta(seconds=100)  # the other 200 at the pace of the first 200
+
+
+def test_what_the_filter_and_strategy_b_leave_out_counts_as_progress_too() -> None:
+    run = counted(stats={"done": 10, "skipped_unsupported": 30, "gone": 60})
+
+    assert run.handled == 100 and estimate(run, NOW, live=True).fraction == 0.25
+
+
+def test_a_count_that_turns_out_too_small_stops_at_100_percent() -> None:
+    est = estimate(counted(stats={"done": 450}), NOW, live=True)
+
+    assert est.fraction == 1.0 and est.eta is None
+
+
+def test_a_finished_run_is_100_percent_however_much_the_filter_dropped() -> None:
+    """The count is an upper bound: a client-side filter may drop what it never subtracted."""
+    est = estimate(counted(status=RunStatus.DONE, stats={"done": 40}), NOW, live=False)
+
+    assert est.fraction == 1.0
+
+
+def test_a_run_without_a_count_still_uses_the_source_id() -> None:
+    old = make_run(options=RunOptions(src_last_id=1000, total_items=0))
+
+    assert estimate(old, NOW, live=True).fraction == 0.25
+
+
+# ---- the daily cap -------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("left", "cap", "sent_today", "days"),
+    [
+        (100, 5000, 0, 0),  # fits in what is left of today
+        (5000, 5000, 0, 0),  # exactly today's allowance
+        (5001, 5000, 0, 1),  # one message over: tomorrow
+        (12000, 5000, 0, 2),  # 5000 today, then 5000 and 2000 on the next two days
+        (7000, 5000, 4000, 2),  # 1000 left today, then 5000 and 1000
+        (500, 5000, 6000, 1),  # today is used up (a first batch may have overshot)
+    ],
+)
+def test_days_of_rest_the_daily_cap_costs(left: int, cap: int, sent_today: int, days: int) -> None:
+    assert cap_days(left, cap, sent_today) == days
 
 
 # ---- an ordinary run: by source message id ---------------------------------------------------
@@ -187,6 +247,46 @@ async def test_the_report_of_a_live_run(clocked: tuple[Store, Clock]) -> None:
     assert (report.delay, report.sent_today, report.daily_cap) == (2.4, 120, 5000)
     assert report.floods_24h == 1 and report.last_flood is not None
     assert report.last_flood.kind == "flood_wait"
+
+
+async def test_the_report_tells_how_much_is_left_and_what_the_cap_costs(
+    clocked: tuple[Store, Clock],
+) -> None:
+    store, clock = clocked
+    run = (await store.start_run(pair_spec(total_items=12000))).run
+    batch = await store.begin_batch(run.id, [Unit((SrcMessage(1, NOW, media=MediaKind.TEXT),))])
+    current = await store.commit_batch(run.id, batch, [MessageResult(1, 11)], 1)
+    clock.now = NOW + timedelta(seconds=10)
+
+    report = await build_report(store, current, now=clock.now, daily_cap=5000)
+
+    assert report.left == 11999
+    assert report.cap_days == 2  # 5000 today, 5000 and 1999 on the next two days
+
+
+async def test_a_finished_run_has_nothing_left_to_cost_days(clocked: tuple[Store, Clock]) -> None:
+    store, clock = clocked
+    run = (await store.start_run(pair_spec(total_items=12000))).run
+    await store.finish(run.id, RunStatus.STOPPED)
+    finished = await store.get_run(run.id)
+    assert finished is not None
+
+    report = await build_report(store, finished, now=clock.now, daily_cap=5000)
+
+    assert report.cap_days == 0  # it is not going to run again by itself
+
+
+async def test_the_total_is_recorded_on_the_run_and_stays_off_the_pairs_memory(
+    clocked: tuple[Store, Clock],
+) -> None:
+    store, _ = clocked
+    run = (await store.start_run(pair_spec(src_last_id=9))).run
+
+    updated = await store.set_total(run.id, 250)
+
+    assert updated.options.total_items == 250 and updated.options.src_last_id == 9
+    mirror = await store.find_mirror(run.src_id, run.dst_id)
+    assert mirror is not None and mirror.options.total_items == 0  # it belongs to this run only
 
 
 async def test_a_run_nobody_holds_is_abandoned_not_live(clocked: tuple[Store, Clock]) -> None:

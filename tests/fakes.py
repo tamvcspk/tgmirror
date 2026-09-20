@@ -33,9 +33,11 @@ from tgmirror.core.gateway import (
     ChannelInfo,
     ChatKind,
     MediaKind,
+    OnTransfer,
     Prepared,
     ServerFilter,
     SrcMessage,
+    TransferPhase,
     Unit,
 )
 from tgmirror.ui.prompts import Choice
@@ -168,6 +170,15 @@ class FakeGateway:
         self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER
     ) -> AsyncIterator[SrcMessage]:
         self._enter("iter_messages", src, min_id, filters)
+        for msg in self._selected(src, min_id, filters):
+            yield msg
+
+    async def count(self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER) -> int:
+        """What ``iter_messages`` would return, counted (service messages too, like Telegram)."""
+        self._enter("count", src, min_id, filters)
+        return len(self._selected(src, min_id, filters))
+
+    def _selected(self, src: int, min_id: int, filters: ServerFilter) -> list[SrcMessage]:
         self._channel(src)
         history = list(self.messages[src])
         max_id = filters.max_id
@@ -176,13 +187,14 @@ class FakeGateway:
         if filters.since is not None:
             first = next((m.id for m in history if m.date >= filters.since), None)
             if first is None:
-                return
+                return []
             min_id = max(min_id, first - 1 - ALBUM_MARGIN)
         if filters.until is not None:
             past = next((m.id for m in history if m.date >= filters.until), None)
             if past is not None:
                 bound = past + ALBUM_MARGIN
                 max_id = bound if max_id is None else min(max_id, bound)
+        found: list[SrcMessage] = []
         for msg in history:
             if msg.id <= min_id:
                 continue
@@ -192,7 +204,8 @@ class FakeGateway:
                 continue
             if filters.search is not None and filters.search.lower() not in msg.text.lower():
                 continue
-            yield msg
+            found.append(msg)
+        return found
 
     async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
         self._enter("get_messages", src, list(ids))
@@ -240,10 +253,12 @@ class FakeGateway:
             results.append(new_id)
         return results
 
-    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+    async def prepare(
+        self, src: int, unit: Unit, tmp: Path, on_transfer: OnTransfer | None = None
+    ) -> Prepared:
         """Reads the unit again and "downloads" its media: one small file per message that has
         some, so a test can see that the engine keeps them until the unit is sent and then removes
-        them."""
+        them. It reports each file to ``on_transfer`` (started, then done)."""
         self._enter("prepare", src, unit.ids, tmp)
         self._channel(src)
         have = {m.id for m in self.messages[src]}
@@ -253,11 +268,20 @@ class FakeGateway:
         for msg in unit.messages:
             if msg.media in _NO_FILE:
                 continue
+            total = msg.size or 1
+            if on_transfer is not None:
+                on_transfer(TransferPhase.DOWNLOAD, msg.id, 0, total)
             files.append(await asyncio.to_thread(_download, tmp, msg.id))
+            if on_transfer is not None:
+                on_transfer(TransferPhase.DOWNLOAD, msg.id, total, total)
         return Prepared(unit, tuple(files))
 
     async def send_prepared(
-        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+        self,
+        dst: int,
+        prepared: Prepared,
+        caption: CaptionPolicy,
+        on_transfer: OnTransfer | None = None,
     ) -> list[int]:
         self._enter("send_prepared", dst, prepared.unit.ids, caption)
         target = self._channel(dst)
@@ -267,10 +291,42 @@ class FakeGateway:
         assert not missing, f"the engine removed downloads before the unit was sent: {missing}"
         gid = self._alloc_group() if prepared.unit.is_album else None
         new_ids: list[int] = []
+        if on_transfer is not None and prepared.files:
+            size = sum(m.size or 1 for m in prepared.unit.messages)
+            first = prepared.unit.messages[0].id
+            on_transfer(TransferPhase.UPLOAD, first, 0, size)
+            on_transfer(TransferPhase.UPLOAD, first, size, size)
         for msg in prepared.unit.messages:
             new_id = self._alloc_id(dst)
             text = _rewrite(msg, caption)
             self.messages[dst].append(replace(msg, id=new_id, grouped_id=gid, text=text))
+            new_ids.append(new_id)
+        return new_ids
+
+    async def fetch(self, src: int, unit: Unit) -> Prepared:
+        """Reads the unit again for sending by reference: nothing is downloaded."""
+        self._enter("fetch", src, unit.ids)
+        self._channel(src)
+        have = {m.id for m in self.messages[src]}
+        if any(i not in have for i in unit.ids):
+            raise PerMessage("gone_from_source")
+        return Prepared(unit)
+
+    async def send_by_reference(
+        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+    ) -> list[int]:
+        """Posts the unit by the ids of its files. ``noforwards`` is not checked on purpose: the
+        engine must never ask for this on a protected source, and a test can see that it did not."""
+        self._enter("send_by_reference", dst, prepared.unit.ids, caption)
+        if not self._channel(dst).can_post:
+            raise NoPermission(f"cannot post to channel {dst}")
+        gid = self._alloc_group() if prepared.unit.is_album else None
+        new_ids: list[int] = []
+        for msg in prepared.unit.messages:
+            new_id = self._alloc_id(dst)
+            self.messages[dst].append(
+                replace(msg, id=new_id, grouped_id=gid, text=_rewrite(msg, caption))
+            )
             new_ids.append(new_id)
         return new_ids
 

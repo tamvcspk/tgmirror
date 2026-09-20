@@ -40,7 +40,11 @@ Mọi lời gọi đọc/ghi của một lần `run` đi qua `await limiter.acqu
 | `daily_cap` | 5000 | tin/ngày/account |
 | `max_auto_wait` | 900 s | FloodWait dài hơn → lần chạy kết thúc `waiting_flood`, không ngủ tiếp (trừ khi `--wait`) |
 | `prefetch` | 1 | Số unit tải xuống trước trong lúc một unit đang tải lên (0 = không; tối đa 3). Tối đa `prefetch + 1` unit nằm trên đĩa. Thay cho `upload_concurrency` (chưa phát hành, bỏ hẳn: gửi vẫn một lúc một unit) |
-| `tmp_budget_mb` | 2048 | Dung lượng đĩa tối đa cho các file đã tải xuống chờ gửi; unit lớn hơn ngân sách vẫn đi khi đĩa trống |
+| `tmp_budget_mb` | 2048 | Dung lượng đĩa tối đa cho các file đã tải xuống chờ gửi; unit lớn hơn ngân sách vẫn đi khi đĩa trống. Là trần cứng cho việc tải nhanh hơn gửi: chỗ được giữ trước khi tải; file không có `size` giữ 1 MiB; byte thật trên đĩa được đối chiếu sau khi tải (`01-kien-truc.md`, "Analyze và tiến độ") |
+
+Gửi bằng mã file (`Strategy.REFERENCE`): `fetch` là một request đọc có pace (như `prepare`), `send_by_reference` là một lần ghi qua `guard.write` tính vào `daily_cap` và giãn cách như mọi lần ghi; một unit là một lần ghi, vì vậy nút cổ chai của loại này là pace và cap chứ không phải tốc độ truyền. Lần thử lại sau `FileRefExpired` cộng thêm một `fetch` (một request đọc).
+
+Request `count` mở đầu lần chạy (analyze) **không** qua bucket đọc: một lời gọi (vài request nếu có ngày) như các lần đọc chuẩn bị của `begin_run`; FloodWait của nó vẫn được ghi vào `flood_log` (`method='count'`) và xử lý như mọi FloodWait.
 
 ## Xử lý FloodWait
 

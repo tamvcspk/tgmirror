@@ -70,10 +70,17 @@ class RunOptions:
     # The user said they may copy a source that restricts saving content (decision D3); ``run`` and
     # ``retry`` carry it on, so they do not ask again.
     protected_ack: bool = False
-    # The two below belong to one run, never to the pair (see ``for_pair``).
+    # The four below belong to one run, never to the pair (see ``for_pair``).
     # Highest id of the source when the run began (0 = unknown): the total ``status`` measures
     # progress and ETA against. Messages posted meanwhile are not in it.
     src_last_id: int = 0
+    # How many messages the run has to look at, counted by Telegram when the run began (``0`` =
+    # not known): what progress is measured against. An upper bound: service messages count, and
+    # what a client-side filter drops is not subtracted; ``skipped_filter`` closes the gap.
+    total_items: int = 0
+    # The source restricts saving content, as ``begin_run`` read it when the run began (only read
+    # for a run that may download): nothing is then sent by file id, whatever the user said (D3).
+    src_protected: bool = False
     # Set on a ``tgmirror retry``: the run whose ``failed`` messages this run sends again.
     retry_of: int | None = None
 
@@ -178,6 +185,23 @@ class Run:
     def gone(self) -> int:
         """Failed messages a retry found deleted at the source (they cannot be copied any more)."""
         return self.stats.get("gone", 0)
+
+    @property
+    def already_done(self) -> int:
+        """Messages the run passed because the pair already had them (after a filter change)."""
+        return self.stats.get("already_done", 0)
+
+    @property
+    def handled(self) -> int:
+        """Every message this run has dealt with, whichever way: what progress counts."""
+        return (
+            self.done
+            + self.failed
+            + self.skipped_filter
+            + self.skipped_unsupported
+            + self.gone
+            + self.already_done
+        )
 
 
 @dataclass(frozen=True, slots=True)

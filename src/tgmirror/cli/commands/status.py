@@ -89,6 +89,15 @@ def _text(report: StatusReport) -> str:
                 total=handled + (report.retry_left or 0),
             )
         )
+    elif run_.options.total_items > 0:
+        lines.append(
+            t(
+                "status.line_progress_items",
+                percent=round(est.fraction * 100),
+                handled=run_.handled,
+                total=max(run_.options.total_items, run_.handled),
+            )
+        )
     else:
         lines.append(
             t(
@@ -107,6 +116,15 @@ def _text(report: StatusReport) -> str:
         t("history.line_counts", done=run_.done, failed=run_.failed, skipped=run_.skipped_filter)
     )
 
+    if report.cap_days > 0 and report.left:
+        lines.append(
+            t(
+                "status.line_cap",
+                left=report.left,
+                cap=report.daily_cap,
+                days=report.cap_days,
+            )
+        )
     if report.delay is not None:
         lines.append(
             t(
@@ -157,6 +175,10 @@ def _record(report: StatusReport) -> dict[str, object]:
         "source_from": run_.cursor_from,
         "source_to": run_.cursor_src_id,
         "source_last": run_.options.src_last_id or None,
+        "total_items": run_.options.total_items or None,
+        "handled": run_.handled,
+        "left": report.left,
+        "cap_rest_days": report.cap_days,
         "limiter": None
         if report.delay is None
         else {

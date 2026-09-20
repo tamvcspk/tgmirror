@@ -12,6 +12,7 @@ from tgmirror.core.gateway import CaptionMode, MediaKind, Prepared, SrcMessage, 
 from tgmirror.engine.batcher import Batch, batches
 from tgmirror.engine.planner import Skip
 from tgmirror.engine.reupload import (
+    UNKNOWN_SIZE,
     ActionKind,
     Options,
     Pipeline,
@@ -21,9 +22,10 @@ from tgmirror.engine.reupload import (
     left_out,
     placeholder_text,
     plan_unit,
+    reserve_size,
 )
 from tgmirror.engine.runs import InvalidOptions, ModeUnsupported, RunRequest, check_options
-from tgmirror.engine.strategy import Strategy, has_caption, router
+from tgmirror.engine.strategy import Strategy, has_caption, has_files, router
 from tgmirror.store.msgmap import MessageResult
 from tgmirror.store.runs import RunOptions
 
@@ -45,6 +47,60 @@ def album(first: int, count: int, caption: str = "") -> Unit:
             for i in range(count)
         )
     )
+
+
+def test_a_captioned_unit_of_files_goes_by_id_when_the_source_allows_saving_content() -> None:
+    route = router("auto", CaptionMode.NONE, by_reference=True)
+
+    assert route(unit(msg(1, "look", MediaKind.VIDEO))) is Strategy.REFERENCE
+    assert route(album(1, 3, "album")) is Strategy.REFERENCE
+    assert route(unit(msg(2, "words"))) is Strategy.COPY  # no caption, nothing to rewrite
+    assert route(unit(msg(3, "", MediaKind.PHOTO))) is Strategy.COPY
+
+
+def test_a_captioned_unit_that_is_not_a_file_is_still_downloaded_or_rebuilt() -> None:
+    route = router("auto", CaptionMode.NONE, by_reference=True)
+
+    assert route(unit(msg(1, "where", MediaKind.GEO))) is Strategy.REUPLOAD  # no file to reuse
+    assert route(unit(msg(2, "q?", MediaKind.POLL))) is Strategy.REUPLOAD
+
+
+def test_without_the_sources_leave_a_captioned_unit_is_downloaded() -> None:
+    assert router("auto", CaptionMode.NONE)(unit(msg(1, "look", MediaKind.VIDEO))) is (
+        Strategy.REUPLOAD
+    )
+
+
+def test_the_users_own_mode_is_never_second_guessed() -> None:
+    plain = unit(msg(1, "look", MediaKind.VIDEO))
+
+    assert router("reupload", CaptionMode.KEEP, by_reference=True)(plain) is Strategy.REUPLOAD
+    assert router("copy", CaptionMode.KEEP, by_reference=True)(plain) is Strategy.COPY
+    assert router("auto", CaptionMode.KEEP, by_reference=True)(plain) is Strategy.COPY
+
+
+def test_what_can_be_sent_by_id_is_a_unit_made_of_files_only() -> None:
+    assert has_files(unit(msg(1, "", MediaKind.DOCUMENT)))
+    assert has_files(album(1, 2))
+    assert not has_files(unit(msg(2, "words")))
+    assert not has_files(unit(msg(3, "", MediaKind.CONTACT)))
+
+
+async def test_a_unit_sent_by_id_is_a_batch_of_its_own_like_a_reupload() -> None:
+    route = router("auto", CaptionMode.NONE, by_reference=True)
+    units = stream(
+        unit(msg(1, "words")),
+        unit(msg(2, "a", MediaKind.PHOTO)),
+        unit(msg(3, "b", MediaKind.PHOTO)),
+    )
+
+    got = [b async for b in batches(units, 10, route=route)]
+
+    assert [(b.strategy, b.ids) for b in got] == [
+        (Strategy.COPY, [1]),
+        (Strategy.REFERENCE, [2]),
+        (Strategy.REFERENCE, [3]),
+    ]
 
 
 # ---- which strategy ---------------------------------------------------------------------------
@@ -291,6 +347,31 @@ async def test_a_unit_bigger_than_the_budget_still_goes_through_when_the_disk_is
 
     assert await settles(window.reserve(1000))
     assert not await settles(window.reserve(1))  # but nothing joins it
+
+
+async def test_a_unit_bigger_than_reserved_is_booked_and_holds_the_next_one_back() -> None:
+    window = Window(units=3, max_bytes=100)
+    await window.reserve(10)
+    await window.grow(200)  # it turned out to weigh 210: what is on disk cannot be refused
+
+    assert not await settles(window.reserve(10))
+    await window.release(210)
+    assert await settles(window.reserve(10))
+
+
+def test_a_download_is_reserved_for_what_telegram_said_and_a_stand_in_when_it_did_not() -> None:
+    sized = unit(msg(1, "", MediaKind.VIDEO, size=5_000_000))
+    unsized = unit(msg(2, "", MediaKind.PHOTO))
+    pair = unit(
+        msg(3, "", MediaKind.PHOTO, grouped_id=9, size=100),
+        msg(4, "", MediaKind.PHOTO, grouped_id=9),
+    )
+
+    assert reserve_size(sized) == 5_000_000
+    assert reserve_size(unsized) == UNKNOWN_SIZE  # never booked at nothing
+    assert reserve_size(pair) == 100 + UNKNOWN_SIZE
+    assert reserve_size(unit(msg(5, "words"))) == 0  # nothing to download
+    assert reserve_size(unit(msg(6, "?", MediaKind.POLL))) == 0
 
 
 # ---- the pipeline -----------------------------------------------------------------------------
