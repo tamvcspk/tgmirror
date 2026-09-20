@@ -91,3 +91,14 @@ def test_the_second_ctrl_c_quits_at_once() -> None:
         signal.raise_signal(signal.SIGINT)
 
     assert signal.getsignal(signal.SIGINT) is not None  # restored, not left as our handler
+
+
+def test_the_notices_of_a_flood_wait_and_of_throttling_are_worded() -> None:
+    lines: list[str] = []
+    reporter = LineReporter(lines.append)
+
+    reporter.notice("flood_waiting", seconds=42)
+    reporter.notice("throttled", batch_size=5, delay=16.0)
+
+    assert "42s" in lines[0] and "same batch" in lines[0]
+    assert "5 messages" in lines[1] and "16.0s" in lines[1]

@@ -4,6 +4,8 @@ The gateway maps Telethon exceptions to the ``GatewayError`` family at its bound
 never imports Telethon (see docs/01-kien-truc.md, "Xử lý lỗi").
 """
 
+from datetime import datetime
+
 
 class TgMirrorError(Exception):
     """Base class for every error tgmirror raises on purpose."""
@@ -22,15 +24,33 @@ class GatewayError(TgMirrorError):
 
 
 class FloodWait(GatewayError):
-    """FLOOD_WAIT_x: Telegram asks us to wait ``seconds`` before the next call."""
+    """FLOOD_WAIT_x (or SLOWMODE_WAIT_x): Telegram asks us to wait ``seconds`` before the next call.
 
-    def __init__(self, seconds: int) -> None:
-        super().__init__(f"FLOOD_WAIT {seconds}s")
+    Both are handled the same way; ``slow_mode`` only tells them apart in ``flood_log``.
+    """
+
+    def __init__(self, seconds: int, *, slow_mode: bool = False) -> None:
+        super().__init__(f"{'SLOWMODE_WAIT' if slow_mode else 'FLOOD_WAIT'} {seconds}s")
         self.seconds = seconds
+        self.slow_mode = slow_mode
 
 
 class PeerFlood(GatewayError):
     """PEER_FLOOD: the account is flagged for spam-like behaviour. Never retried."""
+
+
+class DailyCapReached(TgMirrorError):
+    """The account sent ``daily_cap`` messages today: not a failure, the job rests to ``resume_at``.
+
+    It is our own budget (docs/05-chong-flood.md), not something Telegram said, so it is not a
+    ``GatewayError``.
+    """
+
+    def __init__(self, resume_at: datetime, sent_today: int, cap: int) -> None:
+        super().__init__(f"daily cap of {cap} messages reached ({sent_today} sent today)")
+        self.resume_at = resume_at
+        self.sent_today = sent_today
+        self.cap = cap
 
 
 class NoPermission(GatewayError):

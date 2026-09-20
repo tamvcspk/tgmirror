@@ -2,13 +2,14 @@
 
 It reads the first ``sample`` messages of the range the filter selects (id and date bounds only:
 narrowing by content would make almost everything match) and judges them with the real matcher.
-Reads are throttled by the gateway like any other (docs/05-chong-flood.md).
+It is a one-shot, user-started read of ``sample`` messages, so it is not paced by the limiter
+(docs/05-chong-flood.md); Telethon spaces its pages.
 """
 
 from contextlib import aclosing
 from dataclasses import dataclass
 
-from tgmirror.core.gateway import TelegramGateway
+from tgmirror.core.gateway import MessageReader
 from tgmirror.engine import planner
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
@@ -32,7 +33,7 @@ def _shorten(text: str) -> str:
 
 
 async def sample(
-    gateway: TelegramGateway,
+    gateway: MessageReader,
     src: int,
     spec: FilterSpec,
     *,

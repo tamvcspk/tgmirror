@@ -76,7 +76,15 @@ VI: dict[str, str] = {
     ),
     "run.flood_stopped": (
         "Telegram yêu cầu chờ {seconds}s. Job đã lưu ở trạng thái chờ đến {resume_at}; "
-        "chạy lại `tgmirror run` sau đó."
+        "chạy lại `tgmirror run` sau đó (hoặc `tgmirror run --wait` để chờ luôn)."
+    ),
+    "run.flood_waiting": (
+        "Telegram yêu cầu chờ {seconds}s; đang chờ rồi gửi lại đúng batch đó "
+        "(Ctrl+C để dừng, tiến độ đã lưu)."
+    ),
+    "run.throttled": (
+        "Telegram giới hạn liên tiếp: tạm thời chỉ gửi {batch_size} tin mỗi lần và nghỉ "
+        "{delay}s giữa các lần, cho tới khi yên ổn trở lại."
     ),
     "status.created": "mới tạo",
     "status.running": "đang chạy",
@@ -150,6 +158,13 @@ VI: dict[str, str] = {
         "chạy lại với --force-takeover."
     ),
     "err.job_waiting_flood": "Telegram đã yêu cầu chờ; job chưa được chạy lại trước {until}.",
+    "err.job_waiting_daily_cap": (
+        "Hôm nay đã gửi đủ số tin cho phép (daily_cap); job chưa được chạy lại trước {until}."
+    ),
+    "err.daily_cap": (
+        "Hôm nay đã gửi {sent} tin, chạm giới hạn ngày ({cap}). Job đã lưu; chạy lại "
+        "`tgmirror run` sau {until}."
+    ),
     "err.job_waiting_peer_flood": (
         "Telegram đánh dấu tài khoản là spam (PEER_FLOOD) ở lần chạy trước. "
         "Nghỉ đến {until} rồi hãy chạy lại."
@@ -262,7 +277,15 @@ EN: dict[str, str] = {
     ),
     "run.flood_stopped": (
         "Telegram asks to wait {seconds}s. The job is saved as waiting until {resume_at}; "
-        "run `tgmirror run` again after that."
+        "run `tgmirror run` again after that (or `tgmirror run --wait` to wait it out)."
+    ),
+    "run.flood_waiting": (
+        "Telegram asks to wait {seconds}s; waiting, then sending that same batch again "
+        "(Ctrl+C to stop, progress is saved)."
+    ),
+    "run.throttled": (
+        "Telegram limited us repeatedly: for now batches are {batch_size} messages and the pause "
+        "between them is {delay}s, until things calm down."
     ),
     "status.created": "created",
     "status.running": "running",
@@ -336,6 +359,14 @@ EN: dict[str, str] = {
     ),
     "err.job_waiting_flood": (
         "Telegram asked us to wait; the job must not run again before {until}."
+    ),
+    "err.job_waiting_daily_cap": (
+        "The daily limit on messages sent (daily_cap) is used up; the job must not run again "
+        "before {until}."
+    ),
+    "err.daily_cap": (
+        "{sent} messages sent today, the daily cap ({cap}) is reached. The job is saved; run "
+        "`tgmirror run` again after {until}."
     ),
     "err.job_waiting_peer_flood": (
         "Telegram flagged the account as spam (PEER_FLOOD) on the last run. "

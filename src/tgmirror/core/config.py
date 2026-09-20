@@ -28,6 +28,7 @@ class Limits(BaseModel):
     batch_size: int = Field(20, ge=1, le=100)
     min_delay: float = Field(2.0, gt=0)
     max_delay: float = Field(60.0, gt=0)
+    read_delay: float = Field(0.5, gt=0)  # floor between read requests; grows with the write delay
     jitter: float = Field(0.3, ge=0, lt=1)
     long_pause_every: int = Field(200, ge=1)
     long_pause_range: tuple[float, float] = (30.0, 90.0)

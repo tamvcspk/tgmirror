@@ -46,6 +46,15 @@ def run_job(
             help="Run even if another process seems to hold the job (only if it is dead).",
         ),
     ] = False,
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait",
+            help="Sit out a FloodWait of any length instead of saving the job and exiting "
+            "(waits longer than [limits] max_auto_wait normally stop the job). "
+            "Does not apply to the daily cap.",
+        ),
+    ] = False,
     refilter: Annotated[
         bool,
         typer.Option(
@@ -74,6 +83,10 @@ def run_job(
     From another terminal, `tgmirror pause <job>` / `tgmirror stop <job>` do the same.
 
     Example: tgmirror run 3
+
+    A FloodWait up to [limits] max_auto_wait seconds is waited out and the same batch is sent
+    again. A longer one saves the job as waiting (exit code 3) unless --wait is given. The daily
+    cap ([limits] daily_cap) always saves the job until the next midnight.
 
     To change what a job copies: tgmirror run 3 --refilter --media video --since 2024-01-01.
     Messages that now match are appended at the end of the destination.
@@ -107,7 +120,9 @@ def run_job(
                 if filters is not None:
                     found = await store.replace_filters(found.id, filters.to_json())
                     typer.echo(t("run.refiltered", id=found.id))
-                await execute(rt, store, conn.gateway, found, force_takeover=force_takeover)
+                await execute(
+                    rt, store, conn.gateway, found, force_takeover=force_takeover, wait=wait
+                )
 
     run(rt, command())
 
@@ -119,11 +134,17 @@ async def execute(
     job: Job,
     *,
     force_takeover: bool = False,
+    wait: bool = False,
 ) -> None:
     """Run ``job`` until it rests; print progress and the result. Errors propagate to ``run``."""
     stop = StopSignal()
     runner = Runner(
-        store, gateway, rt.config().limits, reporter=LineReporter(typer.echo), stop=stop
+        store,
+        gateway,
+        rt.config().limits,
+        reporter=LineReporter(typer.echo),
+        stop=stop,
+        wait=wait,
     )
     typer.echo(t("run.start", id=job.id, name=job.name, cursor=job.cursor_src_id))
     with stop_on_interrupt(stop, lambda: typer.echo(t("run.stopping"), err=True)):

@@ -11,7 +11,7 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 | `tgmirror logout` / `tgmirror whoami` | Xóa session / xem account hiện tại |
 | `tgmirror channels` | Liệt kê kênh/group/forum đã join (cột: loại, tên + @username, id, số thành viên, noforwards, quyền post). `--search TEXT` lọc theo tên/username, `--writable` chỉ giữ chỗ user là admin và đăng được, `--json` |
 | `tgmirror new` | Wizard tạo job (xem dưới). Hỗ trợ đủ flag để chạy không tương tác. **Phase 3**: bước 1–3 (chọn nguồn, chọn/tạo đích, filter) và bước 5 (xem trước), rồi lưu job và hỏi có chạy ngay không; chưa có bước 4 (tùy chọn) và `--caption`. Cờ lọc (`--media`, `--hashtag`, `--contains`, `--regex`, `--exclude-regex`, `--exclude-media`, `--since`, `--until`, `--min-size`, `--max-size`, `--album`, `--filter-file`; ngữ nghĩa ở `03-filters.md`), `--pushdown/--no-pushdown`, `--preview/--no-preview`, và: `--name`, `--mode auto\|copy` (`reupload` từ phase 6, hiện báo mã 2), `--batch-size 1..100` (mặc định `[limits] batch_size`), `--run/--no-run` (mặc định: hỏi trên terminal, không chạy nếu không có terminal hoặc có `--yes`) |
-| `tgmirror run <job>` | Chạy hoặc tiếp tục job (foreground). `<job>` là id hoặc tên chính xác. `--force-takeover`: chạy dù job có vẻ đang do process khác giữ (chỉ khi chắc nó đã chết). Từ chối job `waiting_flood` trước `resume_at` và job `failed(peer_flood)` trong 24 giờ (mã 3). Job `done` chạy lại sẽ nhặt tin mới. `--refilter` cùng các cờ lọc (hoặc `--filter-file`): thay filter của job rồi quét lại từ đầu, bỏ qua tin đã sao chép; tin mới khớp được thêm vào cuối đích (xem `03-filters.md`) |
+| `tgmirror run <job>` | Chạy hoặc tiếp tục job (foreground). `<job>` là id hoặc tên chính xác. `--force-takeover`: chạy dù job có vẻ đang do process khác giữ (chỉ khi chắc nó đã chết). `--wait`: chờ hết mọi FloodWait thay vì lưu job rồi thoát khi chờ dài hơn `max_auto_wait` (không áp dụng cho `daily_cap`). FloodWait ngắn hơn `max_auto_wait` luôn được chờ rồi gửi lại đúng batch đó. Từ chối job `waiting_flood` trước `resume_at` (kể cả nghỉ vì `daily_cap`, có câu riêng) và job `failed(peer_flood)` trong 24 giờ (mã 3). Job `done` chạy lại sẽ nhặt tin mới. `--refilter` cùng các cờ lọc (hoặc `--filter-file`): thay filter của job rồi quét lại từ đầu, bỏ qua tin đã sao chép; tin mới khớp được thêm vào cuối đích (xem `03-filters.md`) |
 | `tgmirror pause <job>` / `tgmirror stop <job>` | Đặt cờ `control` trong DB; runner đang chạy sẽ dừng sau batch hiện tại (`paused`/`stopped`). Job không chạy thì báo "không đang chạy", mã 1. Tiếp tục bằng `tgmirror run` |
 | `tgmirror sync <job>` | Delta clone: chỉ lấy tin mới hơn `cursor` |
 | `tgmirror sync --all` | Sync mọi job `done`/`paused`, chạy tay (không có chế độ chạy nền) |
@@ -24,7 +24,7 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 
 Tùy chọn chung: `--version`, `--debug` (hiện traceback thay vì một câu lỗi).
 
-Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, file YAML, regex; kiểm tra trước khi hỏi hay ghi gì), `3` job dừng vì flood/peer_flood (hoặc `run` bị từ chối vì phải chờ), `4` thiếu quyền (kể cả nguồn cấm forward), `130` Ctrl+C (đã lưu, job `stopped`).
+Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, file YAML, regex; kiểm tra trước khi hỏi hay ghi gì), `3` job dừng vì flood/peer_flood/chạm `daily_cap` (hoặc `run` bị từ chối vì phải chờ), `4` thiếu quyền (kể cả nguồn cấm forward), `130` Ctrl+C (đã lưu, job `stopped`).
 
 ## Wizard `tgmirror new`
 
@@ -117,6 +117,7 @@ Chiến lược A (copy) chỉ hỗ trợ `keep` (và `none` qua `drop_media_cap
 batch_size = 20
 min_delay = 2.0
 max_delay = 60.0
+read_delay = 0.5
 jitter = 0.3
 long_pause_every = 200
 long_pause_range = [30, 90]

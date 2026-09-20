@@ -359,3 +359,11 @@ def test_make_client_never_sleeps_on_flood_wait(tmp_path: Path) -> None:
         assert client.flood_sleep_threshold == 0  # decision D6
     finally:
         client.session.close()
+
+
+def test_slow_mode_is_a_flood_wait_that_says_so() -> None:
+    mapped = map_exception(errors.SlowModeWaitError(None, capture=15))
+
+    assert isinstance(mapped, FloodWait) and (mapped.seconds, mapped.slow_mode) == (15, True)
+    plain = map_exception(errors.FloodWaitError(None, capture=15))
+    assert isinstance(plain, FloodWait) and plain.slow_mode is False

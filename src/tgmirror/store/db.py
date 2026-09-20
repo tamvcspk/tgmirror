@@ -1,4 +1,5 @@
-"""``Store``: the one SQLite file behind jobs, msg_map and flood_log (docs/04-state-checkpoint.md).
+"""``Store``: the one SQLite file behind jobs, msg_map, flood_log and limiter_state
+(docs/04-state-checkpoint.md).
 
 The engine and the CLI use the intent-level methods below (``begin_batch``, ``commit_batch``,
 ``finish``, ``set_control``, ...), never SQL. Each write method is one ``BEGIN IMMEDIATE``
@@ -23,7 +24,8 @@ import aiosqlite
 
 from tgmirror.core.errors import JobBusy, SchemaTooNew, StoreError
 from tgmirror.core.gateway import Unit
-from tgmirror.store import floodlog, msgmap
+from tgmirror.core.limiter import LimiterState
+from tgmirror.store import floodlog, limiterstate, msgmap
 from tgmirror.store.jobs import Control, Job, JobSpec, JobStatus, job_from_row
 from tgmirror.store.msgmap import MessageResult, PendingRow
 
@@ -274,8 +276,10 @@ class Store:
         cursor: int,
         *,
         extra_stats: Mapping[str, int] | None = None,
+        limiter: LimiterState | None = None,
     ) -> Job:
-        """One transaction: rows to ``done``/``failed``, cursor forward, stats, heartbeat."""
+        """One transaction: rows to ``done``/``failed``, cursor forward, stats, heartbeat, and the
+        limiter's state (``sent_today`` moves with the messages it counts)."""
         ts = self._ts()
         async with self._tx() as db:
             done, failed = await msgmap.finish_batch(db, job_id, batch_id, results, ts)
@@ -285,6 +289,8 @@ class Store:
             await self._bump(
                 db, job_id, {"done": done, "failed": failed, **(extra_stats or {})}, cursor, ts
             )
+            if limiter is not None:
+                await limiterstate.save(db, await self._account(db, job_id), limiter, ts)
         return await self._require(job_id)
 
     async def discard_batch(self, job_id: int, batch_id: int) -> None:
@@ -370,6 +376,22 @@ class Store:
                 delay_ms=delay_ms,
                 batch_size=batch_size,
             )
+
+    async def load_limiter_state(self, account: str) -> LimiterState | None:
+        async with self._lock:
+            return await limiterstate.load(self._conn, account)
+
+    async def save_limiter_state(self, account: str, state: LimiterState) -> None:
+        """Keep what the limiter learned (after a flood); a batch commit saves it with the batch."""
+        async with self._tx() as db:
+            await limiterstate.save(db, account, state, self._ts())
+
+    async def _account(self, db: aiosqlite.Connection, job_id: int) -> str:
+        cur = await db.execute("SELECT account FROM jobs WHERE id = ?", (job_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise StoreError(f"job {job_id} does not exist")
+        return str(row[0])
 
     async def _bump(
         self,

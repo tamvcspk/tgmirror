@@ -17,6 +17,7 @@ from tgmirror.store.jobs import Job, JobOptions, JobSpec, JobStatus
 
 SUPPORTED_MODES = ("auto", "copy")  # "reupload" arrives with strategy B (phase 6)
 PEER_FLOOD_COOLDOWN = timedelta(hours=24)  # docs/05-chong-flood.md: rest at least 24h
+DAILY_CAP = "daily_cap"  # ``fail_reason`` of a job parked in waiting_flood by the daily cap
 
 
 class JobError(TgMirrorError):
@@ -56,7 +57,7 @@ class JobWaiting(JobError):
     def __init__(self, until: datetime, reason: str) -> None:
         super().__init__(f"job must wait until {until.isoformat()} ({reason})")
         self.until = until
-        self.reason = reason  # "flood" | "peer_flood"
+        self.reason = reason  # "flood" | "daily_cap" | "peer_flood"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +110,8 @@ async def resolve_job(store: Store, ref: str) -> Job:
 def check_runnable(job: Job, now: datetime) -> None:
     """Refuse a run that Telegram already told us would be rejected. Raises ``JobWaiting``."""
     if job.status is JobStatus.WAITING_FLOOD and job.resume_at is not None and job.resume_at > now:
-        raise JobWaiting(job.resume_at, "flood")
+        reason = "daily_cap" if job.fail_reason == DAILY_CAP else "flood"
+        raise JobWaiting(job.resume_at, reason)
     if job.status is JobStatus.FAILED and job.fail_reason == "peer_flood":
         until = job.updated_at + PEER_FLOOD_COOLDOWN
         if until > now:

@@ -34,7 +34,7 @@ from tgmirror.store.db import Store
 from tgmirror.store.jobs import Control, Job, JobStatus
 from tgmirror.store.msgmap import MessageResult
 
-LIMITS = Limits(min_delay=2.0, jitter=0.0, long_pause_every=10_000)
+LIMITS = Limits(min_delay=2.0, jitter=0.0, long_pause_every=10_000, max_auto_wait=60.0)
 
 
 class Crash(BaseException):
@@ -84,6 +84,7 @@ class Rig:
         sleep: Callable[[float], Awaitable[None]] | None = None,
         timing: RunnerTiming | None = None,
         clock: Callable[[], datetime] | None = None,
+        wait: bool = False,
     ) -> Runner:
         extra: dict[str, Any] = {"clock": clock} if clock else {}
         return Runner(
@@ -95,6 +96,7 @@ class Rig:
             sleep=sleep or self.sleep,
             rng=random.Random(0),
             timing=timing or RunnerTiming(poll_interval=0.5, heartbeat_interval=3600),
+            wait=wait,
             **extra,
         )
 
@@ -513,7 +515,7 @@ async def test_flood_wait_is_logged_for_tuning(rig: Rig) -> None:
     rig.fill(3)
     store = await rig.store()
     job = await rig.job(store)
-    rig.gw.fail_next("copy_messages", FloodWait(45))
+    rig.gw.fail_next("copy_messages", FloodWait(120))
 
     with pytest.raises(FloodWait):
         await rig.runner(store).run(job.id)
@@ -525,14 +527,14 @@ async def test_flood_wait_is_logged_for_tuning(rig: Rig) -> None:
         ).fetchall()
     finally:
         con.close()
-    assert rows == [(job.id, "flood_wait", 45, "copy_messages", 3)]
+    assert rows == [(job.id, "flood_wait", 120, "copy_messages", 3)]
 
 
 async def test_a_flood_wait_while_reading_is_blamed_on_reading(rig: Rig) -> None:
     rig.fill(3)
     store = await rig.store()
     job = await rig.job(store)
-    rig.gw.fail_next("iter_messages", FloodWait(20))
+    rig.gw.fail_next("iter_messages", FloodWait(120))
 
     with pytest.raises(FloodWait):
         await rig.runner(store).run(job.id)

@@ -84,14 +84,15 @@ Tin **không hỗ trợ** (game, invoice, quiz chưa trả lời, poll khi thi�
 ## Quy tắc transaction
 
 1. **Trước** khi gọi Telegram cho một batch: `INSERT msg_map(... status='pending', batch_id)` (write-ahead), commit.
-2. **Sau** khi Telegram trả kết quả: trong **một transaction** — cập nhật các hàng thành `done` (kèm `dst_msg_id`) hoặc `failed` (kèm `reason`), cập nhật `cursor_src_id`, `stats_json`, `updated_at`, `limiter_state`.
+2. **Sau** khi Telegram trả kết quả: trong **một transaction** — cập nhật các hàng thành `done` (kèm `dst_msg_id`) hoặc `failed` (kèm `reason`), cập nhật `cursor_src_id`, `stats_json`, `updated_at`, `limiter_state` (`commit_batch(limiter=...)`: `sent_today` đi cùng các tin nó đếm; sau một flood `limiter_state` được lưu ngay bằng `save_limiter_state`; hàng theo `jobs.account`, dùng chung cho mọi job của account). Batch được reconcile xác nhận (`confirm_pending`) không cộng vào `sent_today`: đếm hụt tối đa một batch sau một lần crash, chấp nhận được vì cap là ngân sách mềm.
 3. `cursor_src_id` chỉ tiến (`MAX(cursor_src_id, ?)` trong SQL), và chỉ tiến tới id lớn nhất của batch đã kết thúc hoàn toàn (không còn `pending`; `commit_batch` từ chối nếu còn hàng `pending` nào khác).
 
 Kết quả của một lời gọi copy:
 
 - Lời gọi trả về bình thường: từng id có `dst_id` → `done`; id `None` (Telegram không tạo tin, thường vì đã xóa ở nguồn) → `failed` với `reason='not_copied'`.
 - `PerMessage` (Telegram từ chối chính các id, không tạo gì): xóa `pending` của batch, gửi lại **từng unit một** (mỗi unit là một batch nhỏ có write-ahead và commit riêng). Unit đơn lẻ vẫn bị từ chối → cả unit `failed` với lý do đó.
-- `FloodWait`, `PeerFlood`, `NoPermission`, `ForwardsRestricted`, lỗi RPC khác: Telegram đã từ chối nên không tạo gì → xóa `pending` của batch rồi dừng job (xem `01-kien-truc.md`).
+- `FloodWait` ngắn hơn `max_auto_wait`: chờ rồi gửi lại **đúng lời gọi đó**; `pending` giữ nguyên trong lúc chờ (Telegram từ chối nên chưa tạo gì; nếu process chết lúc đó thì reconcile lần sau thấy đích không có gì và gửi lại). `FloodWait` quá dài hoặc quá nhiều lần, `PeerFlood`, `NoPermission`, `ForwardsRestricted`, lỗi RPC khác, hoặc pause/stop/Ctrl+C trong lúc chờ: Telegram chưa tạo gì → xóa `pending` của batch rồi dừng job (xem `01-kien-truc.md`, `05-chong-flood.md`).
+- Daily cap (`DailyCapReached`) xảy ra **trước** write-ahead (ở `limiter.acquire`), nên không có gì để xóa: job `waiting_flood`, `fail_reason='daily_cap'`, `resume_at` = 00:00 ngày kế (giờ máy).
 - `Transient` (kết nối đứt sau khi gửi): kết quả **không rõ** → giữ nguyên `pending`, job `failed('transient')`; lần `run` sau reconcile.
 
 ## Resume
@@ -121,9 +122,9 @@ Phase sau (không thuộc v1): đồng bộ edit (so `edit_date` với `ts`) và
 
 ## Điều khiển
 
-- CLI khác process ghi `jobs.control='pause'|'stop'` (chỉ khi job đang `running`; job không chạy thì lệnh báo "không đang chạy", mã 1, và không ghi gì); runner poll giữa các batch (rẻ, chỉ một `SELECT`) và mỗi `poll_interval` (2 giây) trong lúc ngủ của limiter, nên dừng được trong lúc chờ. Dừng xong: `status` là `paused`/`stopped` và `control` về `none`.
+- CLI khác process ghi `jobs.control='pause'|'stop'` (chỉ khi job đang `running`; job không chạy thì lệnh báo "không đang chạy", mã 1, và không ghi gì); runner poll giữa các batch (rẻ, chỉ một `SELECT`) và mỗi `poll_interval` (2 giây) trong lúc ngủ (giãn cách của limiter và chờ FloodWait; ngủ ném `Interrupted` khi có yêu cầu), nên dừng được trong lúc chờ. Dừng xong: `status` là `paused`/`stopped` và `control` về `none`.
 - Khi runner nhận Ctrl+C: đặt cờ nội bộ, hoàn tất batch hiện tại, commit, thoát (`stopped`, mã 130). Ctrl+C lần hai thoát ngay; job còn `running` với `pending` dở dang, lần `run` sau (`--force-takeover` nếu chưa quá 2 phút) reconcile.
 - Một job chỉ có một runner: `claim` là một transaction `BEGIN IMMEDIATE` đặt `status='running'` và xóa `control`; runner ghi heartbeat `updated_at` mỗi 30 giây (task nền) và sau mỗi lần commit. Runner mới chỉ chiếm được nếu heartbeat cũ hơn 2 phút hoặc người dùng dùng `--force-takeover`.
-- `run` khởi động được từ `created`, `paused`, `stopped`, `done`, `failed`, `running` (khóa hết hạn). Từ chối: `waiting_flood` trước `resume_at`; `failed(peer_flood)` trong 24 giờ kể từ `updated_at`.
+- `run` khởi động được từ `created`, `paused`, `stopped`, `done`, `failed`, `running` (khóa hết hạn). Từ chối: `waiting_flood` trước `resume_at` (flood, hoặc `fail_reason='daily_cap'`); `failed(peer_flood)` trong 24 giờ kể từ `updated_at`. `claim` xóa `fail_reason` và `resume_at` khi job chạy lại.
 - Trong một process, runner và task heartbeat dùng chung một connection SQLite; `Store` khóa mọi phương thức bằng một `asyncio.Lock` để task này không chạy lệnh giữa transaction của task kia.
 - Một session Telethon chỉ nên được dùng bởi một process cùng lúc (SQLite session sẽ khóa), do đó một account chạy một job tại một thời điểm.

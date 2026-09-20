@@ -5,16 +5,20 @@ Sources stay below the default batch size, so the runs never sleep between batch
 """
 
 import asyncio
+import functools
 import signal
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+import tgmirror.cli.commands.run as run_command
 from tests.fakes import FakeAuth, FakeGateway, ScriptedPrompter
 from tgmirror.cli.app import app
 from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.core.errors import FloodWait
+from tgmirror.engine.runner import Runner
 from tgmirror.store.jobs import Control, Job, JobStatus
 
 runner = CliRunner()
@@ -302,12 +306,12 @@ def test_a_flood_wait_saves_the_job_and_exits_3_then_refuses_to_rerun_at_once(
 ) -> None:
     source_with_messages(gateway)
     rt = make_job(make_runtime, gateway)
-    gateway.fail_next("copy_messages", FloodWait(600))
+    gateway.fail_next("copy_messages", FloodWait(3600))
 
     first = runner.invoke(app, ["run", "1"], obj=rt)
     second = runner.invoke(app, ["run", "1"], obj=rt)
 
-    assert first.exit_code == 3 and "600s" in first.output
+    assert first.exit_code == 3 and "3600s" in first.output
     assert saved_jobs(rt)[0].status is JobStatus.WAITING_FLOOD
     assert second.exit_code == 3 and "must not run again before" in second.output
     assert len(gateway.calls_to("copy_messages")) == 1  # the second run never got to Telegram
@@ -396,3 +400,82 @@ def test_pause_and_stop_a_job_that_is_not_running_change_nothing(
 
 def test_pause_unknown_job_exits_2(make_runtime: MakeRuntime) -> None:
     assert runner.invoke(app, ["pause", "9"], obj=make_runtime()).exit_code == 2
+
+
+# ---- flood handling (phase 4) ---------------------------------------------------------------
+
+
+class Slept:
+    """Replaces the runner's sleep: nothing really waits, the total is recorded."""
+
+    def __init__(self) -> None:
+        self.total = 0.0
+
+    async def __call__(self, seconds: float) -> None:
+        self.total += seconds
+
+
+def instant_runner(monkeypatch: pytest.MonkeyPatch) -> Slept:
+    slept = Slept()
+    monkeypatch.setattr(run_command, "Runner", functools.partial(Runner, sleep=slept))
+    return slept
+
+
+def test_a_short_flood_wait_is_sat_out_and_the_job_finishes(
+    make_runtime: MakeRuntime, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, dst = source_with_messages(gateway)
+    rt = make_job(make_runtime, gateway)
+    slept = instant_runner(monkeypatch)
+    gateway.fail_next("copy_messages", FloodWait(30))
+
+    result = runner.invoke(app, ["run", "1"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Telegram asks to wait 30s" in result.output and "same batch" in result.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"] and slept.total >= 31
+    assert saved_jobs(rt)[0].status is JobStatus.DONE
+
+
+def test_wait_sits_out_a_flood_the_job_would_otherwise_stop_for(
+    make_runtime: MakeRuntime, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, dst = source_with_messages(gateway)
+    rt = make_job(make_runtime, gateway)
+    slept = instant_runner(monkeypatch)
+    gateway.fail_next("copy_messages", FloodWait(3600))
+
+    result = runner.invoke(app, ["run", "1", "--wait"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"] and slept.total >= 3601
+
+
+def test_the_daily_cap_saves_the_job_and_exits_3_until_the_next_day(
+    make_runtime: MakeRuntime, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, dst = source_with_messages(gateway, count=6)
+    rt = make_runtime(gateway=gateway)
+    rt.paths.ensure()
+    rt.paths.config_file.write_text(
+        "[limits]\nbatch_size = 2\ndaily_cap = 4\nmin_delay = 0.01\nlong_pause_range = [0, 0]\n",
+        encoding="utf-8",
+    )
+    made = runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+    assert made.exit_code == 0, made.output
+    instant_runner(monkeypatch)
+
+    first = runner.invoke(app, ["run", "1"], obj=rt)
+    second = runner.invoke(app, ["run", "1"], obj=rt)
+
+    assert first.exit_code == 3
+    assert "4 messages sent today" in first.output and "daily cap (4)" in first.output
+    (job,) = saved_jobs(rt)
+    assert (job.status, job.fail_reason, job.cursor_src_id) == (
+        JobStatus.WAITING_FLOOD,
+        "daily_cap",
+        4,
+    )
+    assert texts(gateway, dst) == ["m1", "m2", "m3", "m4"]
+    assert second.exit_code == 3 and "daily limit on messages sent" in second.output
+    assert len(gateway.calls_to("copy_messages")) == 2  # the second run never got to Telegram

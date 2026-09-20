@@ -105,7 +105,7 @@ Do not add code paths that download/re-send protected content from channels the 
 
 ## Error mapping
 
-Map Telethon exceptions to tgmirror errors at the gateway boundary (`core/errors.py`): `FloodWait(seconds)`, `PeerFlood`, `NoPermission`, `ForwardsRestricted`, `FileRefExpired`, `Transient`, `PerMessage(reason)`, plus the login errors and `TooManyChannels`/`SessionBusy`. The engine only sees these. Every gateway method wraps its Telethon calls in `mapped_errors()`; the table is `map_exception`. Add new mappings there with a test built from the real Telethon exception class. Gotcha: for Telethon's generated error classes `exc.message` is only the generic `BAD_REQUEST`; name them by class (`_rpc_name`). See `flood-safety` for how they are handled.
+Map Telethon exceptions to tgmirror errors at the gateway boundary (`core/errors.py`): `FloodWait(seconds, slow_mode=)` (SlowModeWait too), `PeerFlood`, `NoPermission`, `ForwardsRestricted`, `FileRefExpired`, `Transient`, `PerMessage(reason)`, plus the login errors and `TooManyChannels`/`SessionBusy`. The engine only sees these. Every gateway method wraps its Telethon calls in `mapped_errors()`; the table is `map_exception`. Add new mappings there with a test built from the real Telethon exception class. Gotcha: for Telethon's generated error classes `exc.message` is only the generic `BAD_REQUEST`; name them by class (`_rpc_name`). See `flood-safety` for how they are handled.
 
 ## Testing
 

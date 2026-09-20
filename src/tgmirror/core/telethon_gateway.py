@@ -79,8 +79,10 @@ def _rpc_name(exc: errors.RPCError) -> str:
 def map_exception(exc: BaseException) -> GatewayError | None:
     """Translate a Telethon/network exception; ``None`` if it is not one we know how to map."""
     match exc:
-        case errors.FloodWaitError() | errors.SlowModeWaitError():  # same handling (docs/05)
+        case errors.FloodWaitError():
             return FloodWait(int(exc.seconds))
+        case errors.SlowModeWaitError():  # handled like a FloodWait (docs/05), logged apart
+            return FloodWait(int(exc.seconds), slow_mode=True)
         case errors.PeerFloodError():
             return PeerFlood("PEER_FLOOD")
         case errors.PasswordHashInvalidError():

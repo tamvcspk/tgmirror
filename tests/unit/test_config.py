@@ -74,6 +74,7 @@ def test_broken_toml(paths: Paths) -> None:
         "min_delay = 10\nmax_delay = 5",
         "long_pause_range = [90, 30]",
         "jitter = 1.0",
+        "read_delay = 0",
         "unknown_key = 1",
     ],
 )

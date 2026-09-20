@@ -2,7 +2,7 @@
 
 CLI tool that clones a Telegram channel, group or forum you have joined into another one (existing or newly created; forum topics are mapped topic to topic), using your own Telegram API credentials (MTProto, via [Telethon](https://github.com/LonamiWebs/Telethon)).
 
-> Status: **phase 3 (filters) done on top of phase 2 (copy, saved jobs, pause/resume). Phase 2 was run by hand on a real account with a channel that allows forwarding (albums and kill-then-resume work; a "Restrict saving content" group you do not administer is refused as designed; an admin-owned restricted source is not tried yet). Filters, including the server-side narrowing, are tested against fakes only: compare a job made with `--no-pushdown` before trusting them on a real channel**. `login`, `logout`, `whoami`, `channels`, `new` (saves a job), `run` (also `--refilter`), `pause` and `stop` exist. Flood auto-wait, delta `sync`, reupload and the TUI come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
+> Status: **phase 4 (rate limiting) done on top of phase 3 (filters) and phase 2 (copy, saved jobs, pause/resume). Phase 2 was run by hand on a real account with a channel that allows forwarding (albums and kill-then-resume work; a "Restrict saving content" group you do not administer is refused as designed; an admin-owned restricted source is not tried yet). Filters, including the server-side narrowing, are tested against fakes only: compare a job made with `--no-pushdown` before trusting them on a real channel. The rate limiter (AIMD delay, FloodWait auto-wait, daily cap) is tested against fakes only: its numbers are conservative guesses, not measured Telegram limits, and no real FloodWait has been seen yet**. `login`, `logout`, `whoami`, `channels`, `new` (saves a job), `run` (also `--refilter`), `pause` and `stop` exist. Delta `sync`, reupload and the TUI come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
 
 ## Goals
 
@@ -26,6 +26,7 @@ tgmirror new --src "@my_channel" --dst-new "Videos" --media video --hashtag "#ne
 tgmirror new --src "@my_channel" --dst "Copy" --filter-file filters.yaml --preview   # YAML: include/exclude/date/id/album
 tgmirror run <job>            # start / resume (id or exact name); Ctrl+C saves and exits
 tgmirror run <job> --refilter --media photo   # change what a job copies, scan again (nothing is copied twice)
+tgmirror run <job> --wait     # sit out FloodWaits of any length (default: park the job after [limits] max_auto_wait)
 tgmirror pause|stop <job>     # from another terminal: stop after the current batch
 ```
 

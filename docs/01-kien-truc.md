@@ -22,7 +22,7 @@
 ```
 
 - **gateway**: `TelegramGateway` protocol + `TelethonGateway`. Mọi lời gọi mạng đi qua đây, và đi qua `Limiter`.
-- **engine**: không import Telethon. Làm việc với dataclass riêng (`SrcMessage`, `Unit`, `ChannelInfo`, `ServerFilter`, `MediaKind` định nghĩa trong `core/gateway.py` vì protocol dùng chúng; `Batch` nằm ở engine). `Unit` tự kiểm tra bất biến album (một `grouped_id`, id tăng dần).
+- **engine**: không import Telethon. Phần đọc của gateway có protocol hẹp `MessageReader` (`iter_messages`) để planner/preview/reconcile nhận cả gateway trần lẫn bản đã qua `FloodGuard`. Làm việc với dataclass riêng (`SrcMessage`, `Unit`, `ChannelInfo`, `ServerFilter`, `MediaKind` định nghĩa trong `core/gateway.py` vì protocol dùng chúng; `Batch` nằm ở engine). `Unit` tự kiểm tra bất biến album (một `grouped_id`, id tăng dần).
 - **store**: chỉ engine và CLI đọc/ghi, qua `Store` (`store/db.py`) với các phương thức theo ý định (`begin_batch`, `commit_batch`, `claim`, `finish`, `set_control`, ...); SQL không rò ra ngoài `store/` (có test).
 - **filters**: thuần logic, không I/O: `model` (pydantic, chuẩn hóa), `parser` (YAML + cờ), `matcher` (đánh giá một Unit), `pushdown` (`plan_read`: chuyển phần an toàn của filter thành `ReadPlan`/`ServerFilter`). Engine dùng chúng; `engine/preview.py` lấy mẫu để xem trước.
 
@@ -115,7 +115,7 @@ Chốt 2026-09-19. Chiến lược A (forward phía server) để Telegram giữ
 
 ## Vòng lặp runner
 
-Bản dưới là thiết kế đầy đủ (phase 4). **Phase 2** là bản rút gọn trong `engine/runner.py`: `claim` job → reconcile → vòng `planner` → `batcher` → (bỏ unit đã `done`) → `limiter.acquire` → kiểm `pause`/`stop` → write-ahead → `copy_batch` → `commit_batch`; FloodWait **không** được chờ (job thành `waiting_flood`, thoát mã 3), limiter chỉ giãn cách batch.
+Bản dưới là pseudo-code; cài đặt thật ở `engine/runner.py` + `engine/flood.py` (phase 4): `claim` job → nạp `limiter_state` → reconcile → vòng `planner` → `batcher` → (bỏ unit đã `done`) → `guard.pace` (limiter, ngủ ngắt được) → kiểm `pause`/`stop` → write-ahead → `guard.write(copy_batch)` (FloodWait: log, AIMD, ngủ, gửi lại **đúng lời gọi đó**) → `commit_batch` (kèm `limiter_state`). Mọi lần đọc của runner (planner, reconcile) đi qua `guard.reader(gateway)`, cùng giãn cách và xử lý FloodWait (đọc tiếp từ tin cuối đã trao). `Runner._nap` ném `Interrupted` khi có pause/stop nên không lời gọi nào đi tiếp sau đó.
 
 ```
 job = store.load(job_id); gw = gateway; lim = limiter
@@ -128,7 +128,7 @@ for batch in batcher(planner.units(job), job.batch_size):
             results = await strategy.execute(batch)
             break
         except FloodWait as e:
-            lim.on_flood(e.seconds); store.log_flood(...)
+            lim.on_flood(); store.log_flood(...)
             if e.seconds > cfg.max_auto_wait: store.set_waiting(job, resume_at); return
             await sleep(e.seconds + jitter)     # then retry same batch
         except PeerFlood:
@@ -146,8 +146,9 @@ for batch in batcher(planner.units(job), job.batch_size):
 
 | Lỗi | Hành động |
 |---|---|
-| `FloodWaitError` | Sleep `seconds + jitter`, tăng delay (AIMD), retry cùng batch. Quá `max_auto_wait` → status `waiting_flood` + `resume_at`. **Phase 2**: luôn dừng job `waiting_flood` (chưa chờ tự động), xóa `pending` của batch bị từ chối, ghi `flood_log` |
-| `SlowModeWaitError` | Như FloodWait (chủ yếu nhóm) |
+| `FloodWaitError` | Ghi `flood_log`, tăng delay (AIMD), sleep `seconds + jitter`, retry đúng lời gọi đó (batch vẫn `pending`). Quá `max_auto_wait` (không có `--wait`) hoặc 5 lần liền cho một lời gọi → xóa `pending` của batch, status `waiting_flood` + `resume_at`, mã 3 |
+| Daily cap (`DailyCapReached`, không phải lỗi Telegram) | Trước write-ahead: job `waiting_flood` với `fail_reason='daily_cap'`, `resume_at` = 00:00 ngày kế, mã 3 |
+| `SlowModeWaitError` | Như FloodWait (chủ yếu nhóm); `FloodWait.slow_mode=True` để `flood_log` ghi `slow_mode` |
 | `PeerFloodError` | Dừng job, status `failed(peer_flood)`, khuyến cáo nghỉ >= 24h. Không retry |
 | `ChatWriteForbiddenError` / `ChatAdminRequiredError` | Dừng, báo thiếu quyền ở kênh đích |
 | `FileReferenceExpiredError` | Lấy lại message rồi retry một lần |
@@ -161,10 +162,10 @@ for batch in batcher(planner.units(job), job.batch_size):
 
 ```
 src/tgmirror/
-  core/     gateway.py  auth.py  telethon_gateway.py  limiter.py (tạm thời, phase 2)  errors.py  config.py  paths.py  uploader.py
-  engine/   endpoints.py  jobs.py  planner.py  batcher.py  copy.py  reconcile.py  preview.py  reupload.py  runner.py
+  core/     gateway.py  auth.py  telethon_gateway.py  limiter.py  errors.py  config.py  paths.py  uploader.py
+  engine/   endpoints.py  jobs.py  planner.py  batcher.py  copy.py  flood.py  reconcile.py  preview.py  reupload.py  runner.py
   filters/  model.py  parser.py  pushdown.py  matcher.py
-  store/    schema.sql  db.py  jobs.py  msgmap.py  floodlog.py
+  store/    schema.sql  db.py  jobs.py  msgmap.py  floodlog.py  limiterstate.py
   cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  commands/ (auth.py channels.py new.py run.py control.py ...)
   ui/       messages.py  prompts.py  tables.py  progress.py
 tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integration/
@@ -173,5 +174,5 @@ tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integrati
 ## Kiểm thử
 
 - `FakeGateway` mô phỏng kênh (danh sách tin, album, lỗi FloodWait/PeerFlood theo kịch bản) và đồng hồ giả cho limiter.
-- Test bắt buộc: resume sau khi kill giữa chừng không trùng/sót; album không bị tách; FloodWait làm tăng delay; PeerFlood dừng job; delta chỉ lấy tin mới. Phase 2 đã có (`tests/integration/test_runner.py`, `tests/unit/test_store.py`, ...) trừ phần AIMD của FloodWait (phase 4); test kiến trúc (`tests/unit/test_architecture.py`) giữ Telethon và SQL trong đúng chỗ.
+- Test bắt buộc: resume sau khi kill giữa chừng không trùng/sót; album không bị tách; FloodWait làm tăng delay; PeerFlood dừng job; delta chỉ lấy tin mới. Phase 2 có `tests/integration/test_runner.py`, `tests/unit/test_store.py`, ...; phase 4 thêm `tests/unit/test_limiter.py` (đồng hồ giả) và `tests/integration/test_runner_flood.py` (kịch bản flood trên `FakeGateway`); test kiến trúc (`tests/unit/test_architecture.py`) giữ Telethon và SQL trong đúng chỗ.
 - Không test tự động chống lại Telegram thật. Có script thủ công `scripts/smoke.py` dùng kênh test riêng.

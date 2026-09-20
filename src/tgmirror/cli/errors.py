@@ -1,6 +1,6 @@
 """Turning exceptions into one human sentence and an exit code (docs/02-cli-ux.md, "Mã thoát").
 
-``0`` ok · ``1`` general · ``2`` usage · ``3`` stopped by flood/peer_flood · ``4`` missing
+``0`` ok · ``1`` general · ``2`` usage · ``3`` stopped by flood/peer_flood/daily cap · ``4`` missing
 permission · ``130`` interrupted. Tracebacks only with ``--debug``.
 """
 
@@ -14,6 +14,7 @@ from tgmirror.cli.runtime import Runtime
 from tgmirror.core.errors import (
     BadApiCredentials,
     ConfigError,
+    DailyCapReached,
     FloodWait,
     ForwardsRestricted,
     JobBusy,
@@ -82,6 +83,9 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.flood", seconds=exc.seconds)
         case PeerFlood():
             return t("err.peer_flood")
+        case DailyCapReached():
+            until = exc.resume_at.astimezone().strftime("%Y-%m-%d %H:%M")
+            return t("err.daily_cap", sent=exc.sent_today, cap=exc.cap, until=until)
         case SourceRestricted():
             return t("err.source_restricted", title=exc.src.title)
         case DestinationNotWritable():
@@ -143,7 +147,7 @@ def describe(exc: TgMirrorError) -> str:
 
 
 def exit_code(exc: TgMirrorError) -> int:
-    if isinstance(exc, FloodWait | PeerFlood | JobWaiting):
+    if isinstance(exc, FloodWait | PeerFlood | DailyCapReached | JobWaiting):
         return 3
     if isinstance(
         exc, NoPermission | ForwardsRestricted | SourceRestricted | DestinationNotWritable

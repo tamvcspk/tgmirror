@@ -1,7 +1,7 @@
 """The SQLite state: schema/migrations, jobs, write-ahead batches, ownership and control."""
 
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -9,6 +9,7 @@ import pytest
 from tests.fakes import FakeGateway
 from tgmirror.core.errors import JobBusy, SchemaTooNew, StoreError
 from tgmirror.core.gateway import MediaKind, SrcMessage, Unit
+from tgmirror.core.limiter import LimiterState
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store, default_migrations
 from tgmirror.store.jobs import Control, JobOptions, JobSpec, JobStatus
 from tgmirror.store.msgmap import MessageResult
@@ -337,3 +338,40 @@ async def test_finish_sets_status_and_clears_control(store: Store, clock: Clock)
         Control.NONE,
         resume,
     )
+
+
+# ---- limiter state --------------------------------------------------------------------------
+
+LEARNED = LimiterState(delay=4.0, day=date(2026, 1, 1), sent_today=7)
+
+
+async def test_limiter_state_is_kept_per_account_and_overwritten(store: Store) -> None:
+    assert await store.load_limiter_state("default") is None
+
+    await store.save_limiter_state("default", LimiterState(2.0, date(2026, 1, 1), 1))
+    await store.save_limiter_state("other", LimiterState(9.0, date(2026, 1, 1), 5))
+    await store.save_limiter_state("default", LEARNED)
+
+    assert await store.load_limiter_state("default") == LEARNED
+    other = await store.load_limiter_state("other")
+    assert other is not None and other.delay == 9.0
+
+
+async def test_a_batch_commit_saves_the_limiter_state_with_it(store: Store) -> None:
+    job = await store.create_job(spec())
+    batch = await store.begin_batch(job.id, [unit(1)])
+
+    await store.commit_batch(job.id, batch, [MessageResult(1, 11)], 1, limiter=LEARNED)
+
+    assert await store.load_limiter_state(job.account) == LEARNED
+
+
+async def test_a_refused_commit_leaves_the_limiter_state_alone(store: Store) -> None:
+    job = await store.create_job(spec())
+    first = await store.begin_batch(job.id, [unit(1)])
+    await store.begin_batch(job.id, [unit(2)])  # still pending: the cursor may not pass it
+
+    with pytest.raises(StoreError):
+        await store.commit_batch(job.id, first, [MessageResult(1, 11)], 1, limiter=LEARNED)
+
+    assert await store.load_limiter_state(job.account) is None

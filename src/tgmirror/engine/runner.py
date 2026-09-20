@@ -4,9 +4,12 @@ Follows docs/01-kien-truc.md ("Vòng lặp runner") and docs/04-state-checkpoint
 written ``pending`` before Telegram is called and settled in one transaction afterwards, so a kill
 at any point is repaired by ``_reconcile`` on the next run.
 
-Interim behaviour until the limiter of phase 4: a FloodWait is not waited out. The batch that hit
-it is forgotten (Telegram created nothing), the job becomes ``waiting_flood`` with ``resume_at``,
-and the error is re-raised (exit code 3). PeerFlood fails the job and is never retried.
+Rate limits (docs/05-chong-flood.md) are ``engine/flood.py``'s business: it paces every read and
+write and sits out a FloodWait of up to ``max_auto_wait`` by repeating the same call. What reaches
+this module is what cannot be waited out. A FloodWait that is too long, or repeated too often, is
+forgotten by the batch that hit it (Telegram created nothing), the job becomes ``waiting_flood``
+with ``resume_at`` and the error is re-raised (exit code 3); the daily cap does the same with
+``DailyCapReached``. PeerFlood fails the job and is never retried.
 """
 
 import asyncio
@@ -20,6 +23,7 @@ from typing import Protocol
 
 from tgmirror.core.config import Limits
 from tgmirror.core.errors import (
+    DailyCapReached,
     FloodWait,
     GatewayError,
     PeerFlood,
@@ -27,11 +31,13 @@ from tgmirror.core.errors import (
     TgMirrorError,
     Transient,
 )
-from tgmirror.core.gateway import SrcMessage, TelegramGateway
+from tgmirror.core.gateway import MessageReader, SrcMessage, TelegramGateway
 from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
 from tgmirror.engine.copy import copy_batch
+from tgmirror.engine.flood import FloodGuard, Interrupted
+from tgmirror.engine.jobs import DAILY_CAP
 from tgmirror.engine.reconcile import Outcome, judge
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
@@ -48,7 +54,8 @@ class Reporter(Protocol):
 
     def notice(self, code: str, **params: object) -> None:
         """Something worth a line: ``reconciled``, ``reconcile_resend``, ``reconcile_ambiguous``,
-        ``flood_stopped``. Codes map to ``run.<code>`` in ``ui/messages.py``."""
+        ``flood_waiting``, ``flood_stopped``, ``throttled``. Codes map to ``run.<code>`` in
+        ``ui/messages.py``."""
         ...
 
     def progress(self, job: Job) -> None:
@@ -97,6 +104,7 @@ class Runner:
         rng: random.Random | None = None,
         clock: Clock = utc_now,
         timing: RunnerTiming | None = None,
+        wait: bool = False,
     ) -> None:
         self._store = store
         self._gateway = gateway
@@ -107,23 +115,53 @@ class Runner:
         self._rng = rng
         self._clock = clock
         self._timing = timing or RunnerTiming()
+        self._wait = wait  # sit out FloodWaits of any length instead of parking the job
         self._limiter: Limiter | None = None
-        self._calling = "iter_messages"  # what a FloodWait is blamed on in flood_log
+        self._guard: FloodGuard | None = None
+        self._reader: MessageReader | None = None
 
     async def run(self, job_id: int, *, force_takeover: bool = False) -> Job:
         """Run the job to a resting state and return it. Errors are saved, then re-raised."""
         job = await self._store.claim(job_id, force=force_takeover)
-        self._limiter = Limiter(self._limits, lambda s: self._nap(s, job.id), self._rng)
+
+        async def nap(seconds: float) -> None:
+            await self._nap(seconds, job.id)
+
+        self._limiter = Limiter(
+            self._limits,
+            nap,
+            state=await self._store.load_limiter_state(job.account),
+            clock=self._clock,
+            rng=self._rng,
+        )
+        self._guard = FloodGuard(
+            limiter=self._limiter,
+            store=self._store,
+            job=job,
+            limits=self._limits,
+            notifier=self._reporter,
+            nap=nap,
+            rng=self._rng,
+            wait=self._wait,
+        )
+        self._reader = self._guard.reader(self._gateway)
         heartbeat = asyncio.create_task(self._heartbeat(job.id))
         try:
             await self._reconcile(job)
             status = await self._loop(job)
             await self._store.finish(job.id, status)
+        except Interrupted:  # pause/stop/Ctrl+C arrived while the runner slept
+            ctl = await self._requested(job.id) or Control.STOP
+            await self._store.finish(job.id, _CONTROL_STATUS[ctl])
         except FloodWait as exc:
             await self._stop_on_flood(job, exc)
             raise
-        except PeerFlood:
-            await self._log_flood(job, "peer_flood", None)
+        except DailyCapReached as exc:  # our own budget: a rest, not a failure
+            await self._store.finish(
+                job.id, JobStatus.WAITING_FLOOD, fail_reason=DAILY_CAP, resume_at=exc.resume_at
+            )
+            raise
+        except PeerFlood:  # already logged by the guard
             await self._store.finish(job.id, JobStatus.FAILED, fail_reason="peer_flood")
             raise
         except TgMirrorError as exc:
@@ -143,11 +181,12 @@ class Runner:
     # ---- the loop -------------------------------------------------------------------------
 
     async def _loop(self, job: Job) -> JobStatus:
-        assert self._limiter is not None
+        assert self._limiter is not None and self._guard is not None and self._reader is not None
+        limiter = self._limiter
         spec = FilterSpec.from_json(job.filters_json)
         plan = plan_read(spec, job.cursor_src_id, pushdown=job.options.pushdown)
         read = planner.units(
-            self._gateway,
+            self._reader,
             job.src_id,
             min_id=plan.min_id,
             filters=plan.server,
@@ -156,7 +195,7 @@ class Runner:
         )
         async with (
             aclosing(read) as units,
-            aclosing(batches(units, job.options.batch_size)) as stream,
+            aclosing(batches(units, lambda: limiter.batch_size(job.options.batch_size))) as stream,
         ):
             async for batch in stream:
                 if (ctl := await self._requested(job.id)) is not None:
@@ -165,7 +204,7 @@ class Runner:
                 if not todo.units:  # nothing to send: only the cursor and the filter count move
                     await self._advance(job, todo)
                     continue
-                await self._limiter.acquire(todo.size)
+                await self._guard.pace(todo.size)
                 if (ctl := await self._requested(job.id)) is not None:  # arrived while sleeping
                     return _CONTROL_STATUS[ctl]
                 await self._send(job, todo)
@@ -189,58 +228,58 @@ class Runner:
             self._reporter.progress(updated)
 
     async def _send(self, job: Job, batch: Batch) -> None:
+        assert self._guard is not None and self._limiter is not None
         batch_id = await self._store.begin_batch(job.id, batch.units)  # write-ahead
-        self._calling = "copy_messages"
         try:
-            results = await copy_batch(self._gateway, job.src_id, job.dst_id, batch)
+            # A FloodWait is sat out inside ``write`` and the same call repeated: the batch stays
+            # ``pending`` meanwhile and nothing is rebuilt.
+            results = await self._guard.write(
+                "copy_messages",
+                batch.size,
+                lambda: copy_batch(self._gateway, job.src_id, job.dst_id, batch),
+            )
         except PerMessage as exc:
             if len(batch.units) > 1:
                 # Telegram refused the ids and created nothing. One bad message must not fail its
                 # neighbours: forget the batch and go again unit by unit.
                 await self._store.discard_batch(job.id, batch_id)
                 await self._send_units_apart(job, batch)
-                self._calling = "iter_messages"
                 return
             results = [MessageResult(i, None, exc.reason) for i in batch.ids]
         except Transient:
             raise  # outcome unknown: the rows stay pending, the next run reconciles them
-        except GatewayError:
-            await self._store.discard_batch(job.id, batch_id)  # rejected: nothing was created
+        except (GatewayError, Interrupted):
+            # Rejected, or paused while waiting out a flood: nothing was created either way.
+            await self._store.discard_batch(job.id, batch_id)
             raise
         extra = {"skipped_filter": batch.skipped} if batch.skipped else None
         updated = await self._store.commit_batch(
-            job.id, batch_id, results, batch.last_id, extra_stats=extra
+            job.id,
+            batch_id,
+            results,
+            batch.last_id,
+            extra_stats=extra,
+            limiter=self._limiter.state,
         )
-        self._calling = "iter_messages"  # back to reading; an error above keeps the label
         self._reporter.progress(updated)
 
     async def _send_units_apart(self, job: Job, batch: Batch) -> None:
-        assert self._limiter is not None
+        assert self._guard is not None
         last = len(batch.units) - 1
         for i, unit in enumerate(batch.units):
             if await self._requested(job.id) is not None:
                 return  # the units not sent yet are read again on the next run
-            await self._limiter.acquire(len(unit.messages))
+            await self._guard.pace(len(unit.messages))
             # the filter count and the cursor past the skipped messages go with the last unit
             await self._send(job, replace(batch, units=(unit,)) if i == last else Batch((unit,)))
 
     # ---- flood ----------------------------------------------------------------------------
 
     async def _stop_on_flood(self, job: Job, exc: FloodWait) -> None:
-        await self._log_flood(job, "flood_wait", exc.seconds)
+        """A FloodWait the guard would not sit out (too long or too often); it is logged already."""
         resume_at = self._clock() + timedelta(seconds=exc.seconds)
         await self._store.finish(job.id, JobStatus.WAITING_FLOOD, resume_at=resume_at)
         self._reporter.notice("flood_stopped", seconds=exc.seconds, resume_at=resume_at)
-
-    async def _log_flood(self, job: Job, kind: str, seconds: int | None) -> None:
-        await self._store.log_flood(
-            job.id,
-            kind=kind,
-            seconds=seconds,
-            method=self._calling,
-            delay_ms=int(self._limits.min_delay * 1000),
-            batch_size=job.options.batch_size,
-        )
 
     # ---- reconcile (docs/04-state-checkpoint.md, "Resume" step 1) --------------------------
 
@@ -272,8 +311,9 @@ class Runner:
         self, chat: int, *, after: int, until: int | None = None, only: set[int] | None = None
     ) -> list[SrcMessage]:
         """Non-service messages of ``chat`` with ``after < id <= until`` (and in ``only``)."""
+        assert self._reader is not None
         found: list[SrcMessage] = []
-        async with aclosing(self._gateway.iter_messages(chat, min_id=after)) as stream:
+        async with aclosing(self._reader.iter_messages(chat, min_id=after)) as stream:
             async for m in stream:
                 if until is not None and m.id > until:
                     break
@@ -292,14 +332,17 @@ class Runner:
         return None if control is Control.NONE else control
 
     async def _nap(self, seconds: float, job_id: int) -> None:
-        """Sleep in short slices so a pause/stop is noticed within ``poll_interval``."""
+        """Sleep in short slices so a pause/stop is noticed within ``poll_interval``.
+
+        Raises ``Interrupted`` when one arrives: whatever was waiting to go out must not.
+        """
         remaining = seconds
         while remaining > 0:
             step = min(remaining, self._timing.poll_interval)
             await self._sleep(step)
             remaining -= step
             if await self._requested(job_id) is not None:
-                return
+                raise Interrupted
 
     async def _heartbeat(self, job_id: int) -> None:
         while True:

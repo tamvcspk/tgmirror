@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from tgmirror.core.gateway import (
     ALBUM_MARGIN,
     NO_FILTER,
+    MessageReader,
     ServerFilter,
     SrcMessage,
-    TelegramGateway,
     Unit,
 )
 from tgmirror.filters.matcher import Matcher
@@ -33,7 +33,7 @@ class Skip:
 
 
 async def units(
-    gateway: TelegramGateway,
+    gateway: MessageReader,
     src: int,
     *,
     min_id: int = 0,
@@ -72,7 +72,7 @@ async def units(
 
 
 async def _whole_album(
-    gateway: TelegramGateway, src: int, seen: list[SrcMessage]
+    gateway: MessageReader, src: int, seen: list[SrcMessage]
 ) -> list[SrcMessage]:
     """``seen`` plus the members of the same album the server left out (one unfiltered read)."""
     group = seen[0].grouped_id

@@ -8,7 +8,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 - [x] Phase 1 — Login, channels, tạo kênh (2026-09-19)
 - [x] Phase 2 — Copy + state + pause/resume (2026-09-20; đã chạy được trên Telegram thật với kênh cho phép forward, kênh `noforwards` mới thử phía không phải admin, xem "Phase 2 — ghi chú")
 - [x] Phase 3 — Filters (2026-09-20; pushdown và cơ chế giữ album nguyên vẹn được kiểm bằng `FakeGateway`, chưa thử trên Telegram thật, xem "Phase 3 — ghi chú")
-- [ ] Phase 4 — Limiter & flood
+- [x] Phase 4 — Limiter & flood (2026-09-20; kịch bản flood được kiểm bằng `FakeGateway` và đồng hồ giả, chưa gặp FloodWait thật, xem "Phase 4 — ghi chú")
 - [ ] Phase 5 — Delta sync
 - [ ] Phase 6 — Reupload
 - [ ] Phase 7 — TUI, doctor, đóng gói
@@ -34,7 +34,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 Đã có: `login`/`logout`/`whoami`, `channels` (`--search`, `--writable`, `--json`), `new` (bước 1–2 của wizard: chọn nguồn, chọn hoặc tạo đích), `TelethonGateway`/`TelethonAuth`, `--debug`, UI tiếng Việt/Anh (`TGMIRROR_LANG`). Tất cả test bằng `FakeGateway`/`FakeAuth`/`ScriptedPrompter` và stub client Telethon, không cần mạng.
 
 - **`new` chưa lưu job (lúc đó)**: phase 1 dừng sau khi chốt cặp nguồn/đích (và tạo đích nếu được yêu cầu, luôn có xác nhận hoặc `--yes`). Phase 2 đã nối `plan_endpoints`/`materialize` vào `create_job` và lưu job.
-- **Chưa có limiter**: `core/limiter.py` là phase 4. Các lời gọi phase 1 (`iter_dialogs`, `get_entity`, `CreateChannelRequest`, đăng nhập) là thao tác đơn lẻ do người dùng khởi động; FloodWait/PeerFlood được ánh xạ sang `FloodWait`/`PeerFlood`, in một câu và thoát mã 3, không retry. Luật 1 (mọi lời gọi qua limiter) chỉ thực sự áp dụng từ phase 4; không thêm lời gọi ghi hàng loạt trước đó. Phase 2 thêm lời gọi ghi hàng loạt đầu tiên (copy) nên có limiter tạm thời (ghi chú phase 2).
+- **Chưa có limiter (lúc đó; phase 4 đã làm cho `run`)**: `core/limiter.py` là phase 4. Các lời gọi phase 1 (`iter_dialogs`, `get_entity`, `CreateChannelRequest`, đăng nhập) là thao tác đơn lẻ do người dùng khởi động; FloodWait/PeerFlood được ánh xạ sang `FloodWait`/`PeerFlood`, in một câu và thoát mã 3, không retry. Luật 1 (mọi lời gọi qua limiter) chỉ thực sự áp dụng từ phase 4; không thêm lời gọi ghi hàng loạt trước đó. Phase 2 thêm lời gọi ghi hàng loạt đầu tiên (copy) nên có limiter tạm thời (ghi chú phase 2).
 - **Đã kiểm chứng với Telegram thật (2026-09-19, người dùng chạy tay trên Windows/PowerShell)**: `login`, `channels`, `new --src ... --dst-new ...` (kênh broadcast được tạo, có hỏi xác nhận). Còn chưa thử trên account thật: nguồn/đích supergroup, forum, group thường (nên `can_post`/`is_admin` suy từ entity, spike 4, mới xác nhận cho broadcast). Lưu ý PowerShell: `@name` phải đặt trong dấu nháy.
 
 ### Phase 2 — ghi chú
@@ -43,8 +43,8 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 
 Các lựa chọn khi làm (không phải D1–D9):
 
-- **Limiter tạm thời** (`core/limiter.py`): chỉ giãn cách batch (`min_delay` ± `jitter`, nghỉ dài mỗi `long_pause_every` tin). AIMD, `daily_cap`, `limiter_state` là phase 4 sau cùng giao diện `acquire(cost)`.
-- **FloodWait chưa được chờ**: batch bị từ chối được xóa khỏi `pending` (Telegram không tạo gì), job thành `waiting_flood` + `resume_at`, ghi `flood_log`, thoát mã 3; `run` từ chối chạy lại trước `resume_at`. Chờ tự động (`max_auto_wait`) là phase 4. PeerFlood: job `failed(peer_flood)`, `run` từ chối trong 24h kể từ lúc đó.
+- **Limiter tạm thời (phase 4 đã thay bằng AIMD đầy đủ)** (`core/limiter.py`): chỉ giãn cách batch (`min_delay` ± `jitter`, nghỉ dài mỗi `long_pause_every` tin). AIMD, `daily_cap`, `limiter_state` là phase 4 sau cùng giao diện `acquire(cost)`.
+- **FloodWait chưa được chờ (phase 4 đã chờ tự động; chỉ còn dừng job khi quá `max_auto_wait`)**: batch bị từ chối được xóa khỏi `pending` (Telegram không tạo gì), job thành `waiting_flood` + `resume_at`, ghi `flood_log`, thoát mã 3; `run` từ chối chạy lại trước `resume_at`. Chờ tự động (`max_auto_wait`) là phase 4. PeerFlood: job `failed(peer_flood)`, `run` từ chối trong 24h kể từ lúc đó.
 - **Một job cho mỗi cặp nguồn/đích**: `new` từ chối tạo job thứ hai cho cùng cặp (mã 2, chỉ tới job đã có), vì nó sẽ copy mọi thứ hai lần.
 - **`run` chạy được với job `done`**: nhặt tin mới sau `cursor_src_id`. Phase 5 chỉ thêm `sync` (và `sync --all`) bọc quanh cùng đường đó.
 - **Tin `None` từ `copy_messages`** (id đã bị xóa ở nguồn): sau một lời gọi thành công nghĩa là Telegram không tạo tin nào, nên ghi `failed` với `reason='not_copied'` (không phải "chưa rõ"; chỉ lời gọi bị ngắt giữa chừng mới cần reconcile).
@@ -74,6 +74,24 @@ Các lựa chọn khi làm (không phải D1–D9; chi tiết ở `03-filters.md
 
 Chưa kiểm chứng (người dùng chạy tay): tất cả hành vi thật của Telegram ở spike 3 (`search` + `filter` + `reverse` + `min_id`, `get_messages(offset_date, reverse)`, tokenize hashtag, entity hashtag của tin trong group).
 
+### Phase 4 — ghi chú
+
+Đã có: `core/limiter.py` (AIMD, jitter, nghỉ dài, `daily_cap`, bucket đọc, giảm `batch_size` khi ≥ 3 flood/10 phút; đồng hồ và `sleep` tiêm vào), `engine/flood.py` (`FloodGuard`: `pace`, `write`, `reader`, xử lý FloodWait/SlowMode/PeerFlood, `Interrupted`), `Store.load_limiter_state`/`save_limiter_state` và `commit_batch(limiter=...)`, `DailyCapReached`, `FloodWait.slow_mode`, protocol `MessageReader`, khóa `[limits] read_delay`, cờ `run --wait`. Tiêu chí "test với FakeGateway kịch bản flood": `tests/unit/test_limiter.py` và `tests/integration/test_runner_flood.py` (FloodWait một lần → delay nhân đôi, batch gửi lại đúng một lần, không trùng `msg_map`; quá `max_auto_wait` → `waiting_flood`; PeerFlood; pause/Ctrl+C trong lúc chờ; daily cap qua nửa đêm bằng đồng hồ giả; đọc bị flood giữa chừng, kể cả giữa album). Đã thử đột biến (bỏ vị trí đọc tiếp, bỏ xóa `pending` khi `Interrupted`, bỏ lưu `limiter_state`, bỏ nhân đôi delay, bỏ throttle, bỏ daily cap, bỏ `max_auto_wait`, bỏ giới hạn 5 lần, bỏ giãn cách đọc): test đều đỏ.
+
+Các lựa chọn khi làm (không phải D1–D9; chi tiết ở `05-chong-flood.md`):
+
+- **`FloodGuard` thay vì bọc cả gateway**: runner vẫn gọi `pace` *trước* write-ahead (nên lúc ngủ giãn cách không có `pending`), rồi `write` bọc lời gọi copy; đọc đi qua `reader(gateway)` (một wrapper của `iter_messages`). Ghi và đọc cùng chia sẻ một `Limiter`.
+- **Đọc bị cắt bởi FloodWait thì đọc tiếp** từ id của tin cuối đã trao (`min_id = id đó`), vì đọc luôn tăng dần; album bị cắt giữa chừng vẫn nguyên vì planner ghép các tin cùng `grouped_id` liên tiếp.
+- **Đọc có bucket riêng** (`read_delay`, 0.5 s, nhân theo `delay/min_delay`); phần tra ngày → id của `--since`/`--until` tính là request đọc thêm. Việc khép kín "phase 4 phải đưa vào limiter" của phase 3.
+- **5 FloodWait liền cho cùng một lời gọi thì dừng job** (`MAX_FLOODS_PER_CALL`) thay vì ngủ vô hạn; `--wait` không bỏ giới hạn này.
+- **`--wait`** chỉ áp cho FloodWait, không cho daily cap (cap là ngân sách tự đặt: người dùng muốn chạy tiếp thì tăng `daily_cap`).
+- **Daily cap**: không gửi batch làm `sent_today` vượt cap, trừ batch đầu tiên của ngày; job `waiting_flood` với `fail_reason='daily_cap'` (cột `fail_reason` dùng cho lý do nghỉ); ngày tính theo giờ máy; bộ đếm theo account.
+- **SlowMode** giữ nguyên xử lý như FloodWait nhưng ghi `flood_log.kind='slow_mode'` (`FloodWait.slow_mode`).
+- **Chưa làm, để phase 7**: đếm ngược động khi chờ (hiện một dòng thông báo); `status` hiển thị delay/flood 24h (phase 5).
+- **Không qua limiter** (một lần, do người dùng khởi động): các lệnh phase 1, `last_message_id` khi tạo job, `--preview`. FloodWait ở đó vẫn in một câu và thoát mã 3.
+
+Chưa kiểm chứng (người dùng chạy tay): mọi hành vi thật của Telegram. Chạy một job đủ lớn để chạm FloodWait thật, rồi xem `flood_log` (spike 6) trước khi tin vào các số mặc định; kiểm tra thêm rằng khi `FloodWait` ném ở giữa `iter_messages` thật thì Telethon không để lại trạng thái lạ và lần đọc lại từ `min_id` cho đúng tin kế tiếp.
+
 Lưu ý cho phase 2 (đã áp dụng): schema đã có `jobs.src_kind`, `msg_map.src_topic_id`, `topic_map` (xem `04-state-checkpoint.md`) để phase 8 không cần migration. Đường code phase 1–7 vẫn viết với `kind` trong đầu, dù chỉ kiểm thử với broadcast.
 
 ## Việc cần xác minh sớm (spike, phase 0–1)
@@ -83,7 +101,7 @@ Lưu ý cho phase 2 (đã áp dụng): schema đã có `jobs.src_kind`, `msg_map
 3. `iter_messages(..., reverse=True, search=..., filter=...)` kết hợp `min_id` cho kết quả đúng thứ tự tăng dần? *(đọc mã Telethon 1.45: `min_id` thành `offset_id = min_id + 1`, `max_id` **loại trừ**; `search`/`filter` chuyển thành `messages.search` với `add_offset` âm, và `offset_date` trở thành `max_date` nên hỏng khi `reverse=True`, vì vậy ngày được đổi thành id bằng một lời gọi riêng. **Chưa thử trên Telegram thật**: chạy cùng một job với `--pushdown` và `--no-pushdown` rồi so số tin đã sao chép)*
 4. Hành vi thực tế của quyền để xác định `can_post` và `is_admin` (broadcast, supergroup, group). **Phase 1** suy từ entity (`creator`, `admin_rights`, `banned_rights`, `default_banned_rights`, có xét `until_date`) thay vì `get_permissions`, vì gọi `get_permissions` cho từng dialog là một request mỗi kênh; đã khớp trên account thật với kênh broadcast, còn cần đối chiếu supergroup/group/forum trước khi tick.
 5. Cách phát hiện `noforwards` đáng tin cậy (`Channel.noforwards`, và `Message.noforwards`). Phase 1 đọc `Channel.noforwards`/`Chat.noforwards` trong `channel_info`; `Message.noforwards` chưa dùng.
-6. Số tin/lời gọi và delay nào chạy êm trên một account thử (đo, không đoán).
+6. Số tin/lời gọi và delay nào chạy êm trên một account thử (đo, không đoán). *(Phase 4 đã có `flood_log` và `limiter_state` để đo; chưa có số liệu thật, các mặc định vẫn là điểm khởi đầu bảo thủ.)*
 7. Với `drop_author=True`, Telegram xử lý thế nào các loại poll, quiz, location, contact, game, invoice khi forward (giữ, lỗi, hay đổi thành tin khác)? Quyết định chiến lược A có cần tiền kiểm theo loại tin hay không.
 8. Quiz: admin/creator của nguồn có thấy đáp án đúng khi chưa trả lời không? (Telethon chỉ dựng lại được quiz khi có `results.results`.) Kiểm tra `poll.id`, `close_date`, `public_voters` có được chấp nhận khi gửi lại `InputMediaPoll`.
 9. Forum: `ForwardMessagesRequest(top_msg_id=...)` có đưa tin vào đúng topic đích không; `CreateForumTopicRequest` (icon, General); `iter_messages` trả `reply_to.forum_topic`/`reply_to_top_id` đủ để định tuyến topic; `ToggleForumRequest` để tạo đích forum; danh sách topic (`GetForumTopicsRequest`) và topic đã đóng/ẩn.
@@ -115,6 +133,7 @@ Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và l
 - 2026-09-19: Chốt: đích có sẵn phải cùng loại nguồn; không thêm tên người gửi; có cờ `--placeholder` gửi tin text thay thế cho tin bị bỏ vì không hỗ trợ.
 - 2026-09-19: Chốt xử lý tin đặc thù cho chiến lược B: poll/quiz/location/contact giữ (poll mất vote, opt-in), game/invoice bỏ + cảnh báo. Thêm trạng thái `msg_map.status='skipped'`. Đoạn code mẫu trong ghi chú nguồn (`PollAnswerSyntax`, tự lắp `InputMediaPoll`) **không dùng**: `PollAnswerSyntax` không tồn tại trong Telethon 1.45; dùng `send_message(file=message.media)`.
 
+- 2026-09-20: Phase 4 xong. Không đổi D1–D9 (D6 vẫn là `flood_sleep_threshold=0`, mọi FloodWait vào limiter của mình). Thêm khóa `[limits] read_delay` và cờ `run --wait` (`--wait` đã có trong thiết kế ở `05-chong-flood.md`); các lựa chọn nhỏ ghi ở "Phase 4 — ghi chú".
 - 2026-09-20: Phase 3 xong. Không đổi D1–D9. Thêm dependency `pyyaml` và `regex`. Các lựa chọn nhỏ ghi ở "Phase 3 — ghi chú" và `03-filters.md`: `date` nửa mở, thiếu thuộc tính thì predicate sai, không đẩy `contains`, `--refilter` là cách đổi filter.
 - 2026-09-20: Phase 2 xong. Không đổi D1–D9. Các lựa chọn nhỏ ghi ở "Phase 2 — ghi chú": limiter tạm thời, FloodWait dừng job thay vì chờ (cho tới phase 4), một job cho mỗi cặp nguồn/đích, `run` chạy được với job `done`, `last_message_id` vào protocol.
 - 2026-09-19: Thêm skill `doc-sync` và luật "mỗi task đều xét cập nhật docs/skills" (CLAUDE.md, luật 9).

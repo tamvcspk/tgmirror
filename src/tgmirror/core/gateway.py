@@ -130,6 +130,19 @@ class ServerFilter:
 NO_FILTER = ServerFilter()
 
 
+class MessageReader(Protocol):
+    """The read side of the gateway: all that the planner, preview and reconcile need.
+
+    ``FloodGuard`` (``engine/flood.py``) wraps one to pace and retry reads.
+    """
+
+    def iter_messages(
+        self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER
+    ) -> AsyncIterator[SrcMessage]:
+        """Messages with ``id > min_id``, ascending (decision D4), narrowed by ``filters``."""
+        ...
+
+
 @runtime_checkable
 class TelegramGateway(Protocol):
     async def list_channels(self) -> list[ChannelInfo]:

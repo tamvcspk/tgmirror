@@ -4,7 +4,7 @@ A batch also carries the messages the filter dropped just before it (``skipped``
 can count them and move the cursor past them in the same commit as the batch itself.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
 from tgmirror.core.gateway import Unit
@@ -41,9 +41,15 @@ class Batch:
 
 
 async def batches(
-    stream: AsyncIterator[Unit | Skip], batch_size: int, *, flush_after: int = FLUSH_AFTER
+    stream: AsyncIterator[Unit | Skip],
+    batch_size: int | Callable[[], int],
+    *,
+    flush_after: int = FLUSH_AFTER,
 ) -> AsyncIterator[Batch]:
     """Fill batches up to ``batch_size`` messages, never splitting a unit.
+
+    ``batch_size`` may be a callable, asked for every unit: the limiter shrinks it while Telegram
+    keeps answering with floods (docs/05-chong-flood.md).
 
     An album larger than ``batch_size`` still goes out whole, alone: at most 10 messages, so it
     stays below Telegram's 100 ids per call (docs/01-kien-truc.md, "Unit và Batch").
@@ -64,7 +70,8 @@ async def batches(
                 yield emit()
                 current, count, skipped, upto = [], 0, 0, 0
             continue
-        if current and count + len(item.messages) > batch_size:
+        limit = batch_size() if callable(batch_size) else batch_size
+        if current and count + len(item.messages) > limit:
             yield emit()
             current, count, skipped, upto = [], 0, 0, 0
         current.append(item)
