@@ -55,6 +55,7 @@ class RunRequest:
     # Canonical filter JSON; ``None`` keeps the filter of an earlier run of the pair.
     filters_json: str | None = None
     force: bool = False  # ``--force-takeover``
+    fresh: bool = False  # ``--fresh``: forget the pair's progress and copy everything again
 
 
 async def begin_run(
@@ -73,9 +74,10 @@ async def begin_run(
     previous = await store.latest_run(src.id, dst.id)
     if previous is not None:
         check_runnable(previous, clock())
-    # The destination's newest message only matters for a pair that is new: it is recorded once.
+    # The destination's newest message only matters for a pair that is new, or starts fresh:
+    # it is recorded once, so reconcile never scans what the destination held before.
     known = await store.find_mirror(src.id, dst.id) is not None
-    base = 0 if known else await gateway.last_message_id(dst.id)
+    base = 0 if known and not request.fresh else await gateway.last_message_id(dst.id)
     spec = RunSpec(
         src=src,
         dst=dst,
@@ -83,7 +85,7 @@ async def begin_run(
         options=RunOptions(request.batch_size, base, request.pushdown),
         filters_json=request.filters_json,
     )
-    return await store.start_run(spec, force=request.force)
+    return await store.start_run(spec, force=request.force, fresh=request.fresh)
 
 
 async def resolve_run(store: Store, ref: str | None) -> Run:

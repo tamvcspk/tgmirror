@@ -152,7 +152,15 @@ class Store:
         async with self._lock:
             return await self._mirror_of_pair(self._conn, src_id, dst_id)
 
-    async def start_run(self, spec: RunSpec, *, force: bool = False) -> StartedRun:
+    async def count_copied(self, src_id: int, dst_id: int) -> int:
+        """Messages the pair has copied so far (0 for a pair never cloned)."""
+        async with self._lock:
+            mirror = await self._mirror_of_pair(self._conn, src_id, dst_id)
+            return 0 if mirror is None else await msgmap.count_done(self._conn, mirror.id)
+
+    async def start_run(
+        self, spec: RunSpec, *, force: bool = False, fresh: bool = False
+    ) -> StartedRun:
         """Begin a run of ``spec``'s pair: get or create its mirror, settle the filter, insert.
 
         One transaction. Refuses (``RunBusy``) when another process holds the pair with a fresh
@@ -161,11 +169,17 @@ class Store:
         the remembered one restarts the read from the start: this is the one place the cursor moves
         backwards (rule 3 forbids it everywhere else). Messages already ``done`` are skipped
         through ``msg_map`` when the source is read again.
+
+        ``fresh`` is the other place the cursor goes back: the pair forgets its progress
+        (every ``msg_map`` row, the cursor) and records the destination's current newest
+        message as the new ``dst_base_id``, so the whole source is copied again. It is
+        checked after the busy test, so a pair someone else runs loses nothing.
         """
         now = self._now()
         ts = now.isoformat()
         async with self._tx() as db:
             mirror = await self._mirror_of_pair(db, spec.src.id, spec.dst.id)
+            forgot: int | None = None
             if mirror is None:
                 filters = spec.filters_json if spec.filters_json is not None else "{}"
                 cur = await db.execute(
@@ -197,6 +211,21 @@ class Store:
                     mirror.cursor_src_id,
                     FilterChange.SAME,
                 )
+                if fresh:
+                    forgot = await msgmap.count_done(db, mirror_id)
+                    await msgmap.delete_all(db, mirror_id)
+                    base, cursor = spec.options.dst_base_id, 0
+                    await db.execute(
+                        "UPDATE mirrors SET options_json = ?, cursor_src_id = 0, updated_at = ? "
+                        "WHERE id = ?",
+                        (
+                            RunOptions(
+                                spec.options.batch_size, base, spec.options.pushdown
+                            ).to_json(),
+                            ts,
+                            mirror_id,
+                        ),
+                    )
                 if spec.filters_json is not None and spec.filters_json != mirror.filters_json:
                     filters, cursor, change = spec.filters_json, 0, FilterChange.CHANGED
                     await db.execute(
@@ -213,7 +242,7 @@ class Store:
             )
             run_id = cur.lastrowid
         assert run_id is not None
-        return StartedRun(await self._require(run_id), change)
+        return StartedRun(await self._require(run_id), change, forgot)
 
     async def _close_dead_runs(
         self, db: aiosqlite.Connection, mirror_id: int, now: datetime, force: bool

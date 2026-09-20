@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from tgmirror.cli.errors import run
+from tgmirror.cli.errors import UsageProblem, run
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
 from tgmirror.core.gateway import ChannelInfo, TelegramGateway
@@ -18,6 +18,7 @@ from tgmirror.store.db import Store, utc_now
 from tgmirror.store.runs import Control, FilterChange, RunStatus, StartedRun
 from tgmirror.ui.messages import t
 from tgmirror.ui.progress import LineReporter
+from tgmirror.ui.tables import channel_label
 
 EXIT_INTERRUPTED = 130
 
@@ -39,6 +40,18 @@ def run_clone(
             help="Run even if another process seems to hold this clone (only if it is dead).",
         ),
     ] = False,
+    fresh: Annotated[
+        bool,
+        typer.Option(
+            "--fresh",
+            help="Forget what this pair has copied and copy everything again from the "
+            "start (the destination may get duplicates unless you emptied it). Asks first "
+            "when there is something to forget; --yes agrees.",
+        ),
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="With --fresh: do not ask for confirmation.")
+    ] = False,
     wait: Annotated[
         bool,
         typer.Option(
@@ -59,6 +72,7 @@ def run_clone(
     cap ([limits] daily_cap) always ends it until the next midnight.
 
     To change the filter, use `tgmirror clone` with the same --src/--dst and the new filter.
+    --fresh starts the pair over instead (see `tgmirror clone --help`).
 
     Example: tgmirror run        (or: tgmirror run 3)
     """
@@ -73,6 +87,7 @@ def run_clone(
                 and live.mirror_id == target.mirror_id
                 and live.status is RunStatus.PAUSED
                 and not force_takeover
+                and not fresh  # --fresh must not be swallowed by a resume: it ends in RunBusy
             ):  # paused in another terminal: carry on there, do not start a second one
                 await store.set_control(live.id, Control.NONE)
                 typer.echo(t("run.resumed_elsewhere", id=live.id))
@@ -84,14 +99,33 @@ def run_clone(
                 batch_size=target.options.batch_size,
                 pushdown=target.options.pushdown,
                 force=force_takeover,
+                fresh=fresh,
             )
+            src = ChannelInfo(target.src_id, target.src_title, target.src_kind)
+            dst = ChannelInfo(target.dst_id, target.dst_title, target.src_kind)
+            if fresh:
+                copied = await store.count_copied(src.id, dst.id)
+                await confirm_fresh(rt, copied, yes, channel_label(src), channel_label(dst))
             async with authorized(rt) as conn:
-                src = ChannelInfo(target.src_id, target.src_title, target.src_kind)
-                dst = ChannelInfo(target.dst_id, target.dst_title, target.src_kind)
                 started = await begin_run(store, conn.gateway, src, dst, request)
                 await execute(rt, store, conn.gateway, started, wait=wait)
 
     run(rt, command())
+
+
+async def confirm_fresh(rt: Runtime, copied: int, yes: bool, src: str, dst: str) -> None:
+    """The question before a fresh start forgets ``copied`` messages (none: nothing to ask).
+
+    ``--yes`` agrees; with no terminal and no ``--yes`` it is a usage error, so a script never
+    starts a second copy of a destination by accident.
+    """
+    if copied == 0 or yes:
+        return
+    if not rt.interactive:
+        raise UsageProblem("err.fresh_needs_yes", count=copied)
+    if not await rt.prompter.confirm(t("clone.confirm_fresh", count=copied, src=src, dst=dst)):
+        typer.echo(t("err.aborted"), err=True)
+        raise typer.Exit(1)
 
 
 async def execute(
@@ -126,9 +160,11 @@ async def execute(
             cursor=current.cursor_from,
         )
     )
-    if started.filters is FilterChange.CHANGED:
+    if started.forgot is not None:
+        typer.echo(t("run.fresh_started", count=started.forgot))
+    elif started.filters is FilterChange.CHANGED:
         typer.echo(t("run.filter_changed"))
-    elif started.filters is FilterChange.SAME and current.filters_json != "{}":
+    if started.filters is FilterChange.SAME and current.filters_json != "{}":
         typer.echo(t("run.filter_reused"))
     with (
         stop_on_interrupt(control, lambda: typer.echo(t("run.stopping"), err=True)) as interrupt,

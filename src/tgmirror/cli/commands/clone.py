@@ -11,7 +11,7 @@ from typing import Annotated
 import typer
 
 from tgmirror.cli import wizard
-from tgmirror.cli.commands.run import execute
+from tgmirror.cli.commands.run import confirm_fresh, execute
 from tgmirror.cli.errors import UsageProblem, run
 from tgmirror.cli.filter_options import (
     AlbumOption,
@@ -100,6 +100,16 @@ def clone(
             "everything (the source is read again from the start; nothing is copied twice).",
         ),
     ] = False,
+    fresh: Annotated[
+        bool,
+        typer.Option(
+            "--fresh",
+            help="Start this pair over: forget what it has copied and copy everything from "
+            "the start again (the destination may get duplicates unless you emptied it). "
+            "Keeps the remembered filter unless you give another or --no-filter. Asks first "
+            "when there is something to forget; --yes agrees.",
+        ),
+    ] = False,
     pushdown: Annotated[
         bool,
         typer.Option(
@@ -140,6 +150,8 @@ def clone(
     --yes when there is no terminal). Ctrl+C stops it, saving progress; `tgmirror run` continues.
     Cloning the same pair again copies only what is newer, with the same filter unless you give
     another one (then the source is read again from the start; nothing is copied twice).
+
+    To redo a pair from scratch (same destination): --fresh.
 
     Keys while it runs: p pause, r resume, q stop.
 
@@ -202,24 +214,26 @@ def clone(
             for code in plan.warnings:
                 typer.echo(t(f"warn.{code}"), err=True)
 
-            seen_before = False
+            seen_before, copied = False, 0
             async with opened_store(rt) as store:
                 if isinstance(plan.dst, ChannelInfo):  # fail before previewing or asking anything
                     if (last := await store.latest_run(plan.src.id, plan.dst.id)) is not None:
                         check_runnable(last, utc_now())
                     seen_before = await store.find_mirror(plan.src.id, plan.dst.id) is not None
+                    copied = await store.count_copied(plan.src.id, plan.dst.id)
 
-                if filters is None:  # no flags: the wizard asks, but only if it asked for the rest
-                    asked = (
-                        rt.interactive
-                        and not yes
-                        and (src is None or (dst is None and not dst_new))
-                    )
-                    if asked:
-                        filters = await wizard.pick_filters(rt.prompter, can_keep=seen_before)
+                # the wizard asks about filter and restart only if it also asked for the rest
+                asked = (
+                    rt.interactive and not yes and (src is None or (dst is None and not dst_new))
+                )
+                start_fresh = fresh
+                if asked and not fresh and copied > 0:
+                    start_fresh = await wizard.pick_resume(rt.prompter, copied)
+                if filters is None and asked:
+                    filters = await wizard.pick_filters(rt.prompter, can_keep=seen_before)
                 if filters is not None:
                     await _preview(rt, conn.gateway, source, filters, preview_flag, yes, pushdown)
-                await _confirm_start(rt, plan, yes)
+                await _confirm_start(rt, plan, yes, forget=copied if start_fresh else 0)
 
                 endpoints = await materialize(conn.gateway, plan)
                 typer.echo(t("clone.src", channel=channel_label(endpoints.src)))
@@ -232,6 +246,7 @@ def clone(
                     pushdown=pushdown,
                     filters_json=None if filters is None else filters.to_json(),
                     force=force_takeover,
+                    fresh=start_fresh,
                 )
                 started = await begin_run(
                     store, conn.gateway, endpoints.src, endpoints.dst, request
@@ -268,9 +283,16 @@ async def _preview(
             typer.echo(t("clone.preview_example", text=text))
 
 
-async def _confirm_start(rt: Runtime, plan: Plan, yes: bool) -> None:
+async def _confirm_start(rt: Runtime, plan: Plan, yes: bool, forget: int = 0) -> None:
     """The one question before copying starts. ``--yes`` skips it; with no terminal it is not
-    asked, except that creating a channel (a write on the account) then needs ``--yes``."""
+    asked, except that creating a channel (a write on the account) then needs ``--yes``.
+
+    A fresh start that forgets ``forget`` copied messages puts that in the same question (and
+    needs ``--yes`` without a terminal too).
+    """
+    if forget:
+        await confirm_fresh(rt, forget, yes, channel_label(plan.src), channel_label(plan.dst))
+        return
     new_channel = isinstance(plan.dst, NewChannelSpec)
     if yes:
         return

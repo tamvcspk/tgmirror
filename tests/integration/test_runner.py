@@ -114,6 +114,7 @@ class Rig:
         filters_json: str | None = None,
         pushdown: bool | None = None,
         after_wait: bool = False,
+        fresh: bool = False,
     ) -> Run:
         """Start a run of the pair (a pair seen before continues from its cursor)."""
         if batch_size is not None:
@@ -125,6 +126,7 @@ class Rig:
             pushdown=self.pushdown,
             filters_json=filters_json,
             force=force,
+            fresh=fresh,
         )
         clock = (lambda: datetime(2100, 1, 1, tzinfo=UTC)) if after_wait else utc_now
         started = await begin_run(store, self.gw, self.src, self.dst, request, clock=clock)
@@ -778,6 +780,44 @@ async def test_messages_already_done_are_skipped_even_below_the_cursor_reset(rig
 
     assert rig.copy_calls() == [[3, 4], [5]]  # batch [1, 2] was skipped whole, without a delay
     assert final.cursor_src_id == 5 and final.stats["done"] == 5
+
+
+async def test_a_fresh_run_copies_everything_again_from_a_refreshed_destination_base(
+    rig: Rig,
+) -> None:
+    rig.fill(4)
+    store = await rig.store()
+    await rig.runner(store).run(await rig.begin(store, batch_size=2))
+    rig.gw.add_message(rig.dst.id, "posted by someone")  # the destination grew: id 5
+
+    fresh = await rig.begin(store, fresh=True)
+    final = await rig.runner(store).run(fresh)
+
+    assert fresh.options.dst_base_id == 5  # reconcile would never scan what was there before
+    assert rig.dst_texts == rig.src_texts + ["posted by someone"] + rig.src_texts
+    assert (fresh.cursor_from, final.stats, final.cursor_src_id) == (0, {"done": 4, "failed": 0}, 4)
+
+
+async def test_a_fresh_run_killed_midway_resumes_without_a_duplicate(rig: Rig) -> None:
+    rig.fill(6)
+    store = await rig.store()
+    await rig.runner(store).run(await rig.begin(store, batch_size=2))
+
+    async def die(ids: list[int], n: int) -> None:
+        if n == 2:  # the second batch of the fresh run
+            raise Crash
+
+    rig.wrap_copy(die)
+    with pytest.raises(Crash):
+        await rig.runner(store).run(await rig.begin(store, fresh=True))
+    await store.close()
+    rig.unwrap_copy()
+
+    resumed = await rig.store()
+    final = await rig.runner(resumed).run(await rig.begin(resumed, force=True))
+
+    assert rig.dst_texts == rig.src_texts * 2  # two complete copies, no gap, no third copy
+    assert final.status is RunStatus.DONE
 
 
 # ---- pacing ---------------------------------------------------------------------------------

@@ -221,6 +221,87 @@ async def test_an_empty_filter_clears_a_remembered_one(store: Store) -> None:
     )
 
 
+async def _copied_pair(store: Store, filters: str | None = None):  # type: ignore[no-untyped-def]
+    """A finished run that copied 1 message, failed 1, and left 1 pending (dst base 42)."""
+    first = (
+        await store.start_run(spec(options=RunOptions(dst_base_id=42), filters_json=filters))
+    ).run
+    batch = await store.begin_batch(first.id, [unit(1), unit(2)])
+    await store.commit_batch(
+        first.id, batch, [MessageResult(1, 10), MessageResult(2, None, "x")], 2
+    )
+    await store.begin_batch(first.id, [unit(3)])
+    await store.finish(first.id, RunStatus.STOPPED)
+    return first
+
+
+def again_spec(first, **kw: object) -> RunSpec:  # type: ignore[no-untyped-def]
+    return RunSpec(ChannelInfo(first.src_id, "Src"), ChannelInfo(first.dst_id, "Dst"), **kw)  # type: ignore[arg-type]
+
+
+async def test_a_fresh_start_forgets_the_progress_and_records_the_new_destination_base(
+    store: Store,
+) -> None:
+    first = await _copied_pair(store)
+    assert await store.count_copied(first.src_id, first.dst_id) == 1
+
+    started = await store.start_run(
+        again_spec(first, options=RunOptions(dst_base_id=90)), fresh=True
+    )
+
+    run = started.run
+    assert started.forgot == 1  # done messages; the failed and pending rows go too
+    assert (run.cursor_from, run.cursor_src_id, run.options.dst_base_id) == (0, 0, 90)
+    assert (
+        await store.done_ids(run.id, [1, 2, 3]) == set() and await store.pending_rows(run.id) == []
+    )
+    assert await store.count_copied(first.src_id, first.dst_id) == 0
+    mirror = await store.find_mirror(first.src_id, first.dst_id)
+    assert mirror is not None and (mirror.cursor_src_id, mirror.options.dst_base_id) == (0, 90)
+    assert run.mirror_id == first.mirror_id  # the same pair: its log continues
+    kept = await store.get_run(first.id)
+    assert kept is not None and kept.stats == {"done": 1, "failed": 1}  # history is untouched
+    assert [r.id for r in await store.list_runs()] == [run.id, first.id]
+
+
+async def test_a_fresh_start_keeps_the_remembered_filter_unless_another_is_given(
+    store: Store,
+) -> None:
+    first = await _copied_pair(store, filters='{"media": ["video"]}')
+
+    kept = await store.start_run(again_spec(first), fresh=True)
+    await store.finish(kept.run.id, RunStatus.DONE)
+    cleared = await store.start_run(again_spec(first, filters_json="{}"), fresh=True)
+
+    assert (kept.filters, kept.run.filters_json) == (FilterChange.SAME, '{"media": ["video"]}')
+    assert (cleared.filters, cleared.run.filters_json) == (FilterChange.CHANGED, "{}")
+    assert cleared.forgot == 0  # the first fresh start already forgot everything
+
+
+async def test_a_fresh_start_of_a_live_pair_is_refused_before_anything_is_forgotten(
+    store: Store,
+) -> None:
+    run = (await store.start_run(spec())).run
+    batch = await store.begin_batch(run.id, [unit(1)])
+    await store.commit_batch(run.id, batch, [MessageResult(1, 10)], 1)  # still running
+
+    with pytest.raises(RunBusy):
+        await store.start_run(again_spec(run, options=RunOptions(dst_base_id=99)), fresh=True)
+
+    assert await store.count_copied(run.src_id, run.dst_id) == 1
+    mirror = await store.find_mirror(run.src_id, run.dst_id)
+    assert mirror is not None and (mirror.cursor_src_id, mirror.options.dst_base_id) == (1, 0)
+
+
+async def test_fresh_on_a_new_pair_is_just_a_first_run_and_count_copied_knows_no_pair(
+    store: Store,
+) -> None:
+    started = await store.start_run(spec(), fresh=True)
+
+    assert (started.filters, started.forgot) == (FilterChange.NEW, None)
+    assert await store.count_copied(-1, -2) == 0
+
+
 def test_unknown_option_keys_from_a_newer_version_are_ignored() -> None:
     assert RunOptions.from_json('{"batch_size": 5, "from_the_future": true}') == RunOptions(5, 0)
 

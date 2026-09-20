@@ -490,14 +490,14 @@ def test_the_wizard_offers_to_keep_the_filter_of_a_pair_it_has_seen(
         make_runtime,
         gateway,
         tmp_path / "w",
-        select=["Source", "Copy", "Keep the filter of the previous run"],
+        select=["Source", "Copy", "Continue", "Keep the filter of the previous run"],
         confirm=[True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 0, result.output
-    assert prompter.select_labels[2][0].startswith("Keep the filter")  # the first choice
+    assert prompter.select_labels[3][0].startswith("Keep the filter")  # the first choice
     assert "Preview" not in result.output  # nothing new was chosen to preview
     first, second = saved_runs(rt)
     assert second.filters_json == first.filters_json != "{}"
@@ -519,3 +519,35 @@ def test_the_wizard_does_not_offer_to_keep_a_filter_for_a_new_pair(
     runner.invoke(app, ["clone"], obj=rt)
 
     assert not any("Keep the filter" in label for label in prompter.select_labels[2])
+
+
+# ---- a fresh start keeps the remembered filter unless told otherwise ------------------------
+
+
+def test_a_fresh_start_keeps_the_remembered_filter(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = tagged_source(gateway, 4)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, [*CLONE, "--hashtag", "#k", "--no-pushdown"], obj=rt)
+
+    result = runner.invoke(app, [*CLONE, "--fresh", "--no-pushdown"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Fresh start: forgot 2 copied messages" in result.output
+    assert "Using the filter of the previous run" in result.output
+    assert texts(gateway, dst) == ["m1 #k", "m3 #k", "m1 #k", "m3 #k"]  # same filter, once more
+
+
+def test_a_fresh_start_with_no_filter_drops_it_too(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = tagged_source(gateway, 4)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, [*CLONE, "--hashtag", "#k", "--no-pushdown"], obj=rt)
+
+    result = runner.invoke(app, [*CLONE, "--fresh", "--no-filter", "--no-pushdown"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst)[2:] == ["m1 #k", "m2", "m3 #k", "m4"]  # everything, from the start
+    assert saved_runs(rt)[1].filters_json == "{}"

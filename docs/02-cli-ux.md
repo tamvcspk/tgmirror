@@ -10,8 +10,8 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 | `tgmirror login` | Nhập `api_id`/`api_hash` (lưu config), đăng nhập (phone, code, 2FA), tạo session. Cần terminal (mã gửi qua Telegram); `--phone` điền sẵn số. Nếu đã đăng nhập thì chỉ báo lại, không cần terminal |
 | `tgmirror logout` / `tgmirror whoami` | Xóa session / xem account hiện tại |
 | `tgmirror channels` | Liệt kê kênh/group/forum đã join (cột: loại, tên + @username, id, số thành viên, noforwards, quyền post). `--search TEXT` lọc theo tên/username, `--writable` chỉ giữ chỗ user là admin và đăng được, `--json` |
-| `tgmirror clone` | Sao chép một nguồn vào một đích **ngay bây giờ**, trong terminal này (foreground): không chạy nền, không lên lịch; Ctrl+C dừng (tiến độ đã lưu). Wizard (bước 1–3 chọn nguồn/đích/filter, bước 5 xem trước, một câu xác nhận) hoặc cờ không tương tác. Chạy lại cho cùng cặp nguồn/đích thì chỉ lấy tin mới hơn con trỏ (delta), dùng lại filter của lần trước; đưa filter khác thì quét lại từ đầu (bỏ qua tin đã sao chép), `--no-filter` bỏ filter cũ (xem `03-filters.md`). Cờ: `--src`, `--dst` \| `--dst-new` (+ `--about`), cờ lọc (`--media`, `--hashtag`, `--contains`, `--regex`, `--exclude-regex`, `--exclude-media`, `--since`, `--until`, `--min-size`, `--max-size`, `--album`, `--filter-file`), `--no-filter`, `--pushdown/--no-pushdown`, `--preview/--no-preview`, `--mode auto\|copy` (`reupload` từ phase 6, hiện báo mã 2), `--batch-size 1..100` (mặc định `[limits] batch_size`), `--wait`, `--force-takeover`, `--yes` (bỏ câu xác nhận). Chưa có bước 4 (tùy chọn) và `--caption` |
-| `tgmirror run [n]` | Chạy lại cặp nguồn/đích của lần chạy `n` (mặc định lần gần nhất; số lấy từ `tgmirror history`) với filter và tùy chọn của lần đó: chỉ lấy tin mới hơn, hoặc tiếp tục chỗ Ctrl+C/lỗi đã dừng. Nếu lần chạy đó đang **tạm dừng ở terminal khác** thì cho nó chạy tiếp ở đó thay vì mở lần thứ hai. `--force-takeover`: chạy dù có vẻ tiến trình khác đang giữ (chỉ khi chắc nó đã chết). `--wait`: chờ hết mọi FloodWait thay vì kết thúc khi chờ dài hơn `max_auto_wait` (không áp dụng cho `daily_cap`). FloodWait ngắn hơn `max_auto_wait` luôn được chờ rồi gửi lại đúng batch đó. Từ chối khi lần chạy trước là `waiting_flood` trước `resume_at` (kể cả nghỉ vì `daily_cap`, có câu riêng) hoặc `failed(peer_flood)` trong 24 giờ (mã 3). Đổi filter: dùng `tgmirror clone` với cùng `--src/--dst` |
+| `tgmirror clone` | Sao chép một nguồn vào một đích **ngay bây giờ**, trong terminal này (foreground): không chạy nền, không lên lịch; Ctrl+C dừng (tiến độ đã lưu). Wizard (bước 1–3 chọn nguồn/đích/filter, bước 5 xem trước, một câu xác nhận) hoặc cờ không tương tác. Chạy lại cho cùng cặp nguồn/đích thì chỉ lấy tin mới hơn con trỏ (delta), dùng lại filter của lần trước; đưa filter khác thì quét lại từ đầu (bỏ qua tin đã sao chép), `--no-filter` bỏ filter cũ (xem `03-filters.md`). Cờ: `--src`, `--dst` \| `--dst-new` (+ `--about`), cờ lọc (`--media`, `--hashtag`, `--contains`, `--regex`, `--exclude-regex`, `--exclude-media`, `--since`, `--until`, `--min-size`, `--max-size`, `--album`, `--filter-file`), `--no-filter`, `--fresh` (làm lại từ đầu, xem dưới), `--pushdown/--no-pushdown`, `--preview/--no-preview`, `--mode auto\|copy` (`reupload` từ phase 6, hiện báo mã 2), `--batch-size 1..100` (mặc định `[limits] batch_size`), `--wait`, `--force-takeover`, `--yes` (bỏ câu xác nhận). Chưa có bước 4 (tùy chọn) và `--caption` |
+| `tgmirror run [n]` | Chạy lại cặp nguồn/đích của lần chạy `n` (mặc định lần gần nhất; số lấy từ `tgmirror history`) với filter và tùy chọn của lần đó: chỉ lấy tin mới hơn, hoặc tiếp tục chỗ Ctrl+C/lỗi đã dừng. Nếu lần chạy đó đang **tạm dừng ở terminal khác** thì cho nó chạy tiếp ở đó thay vì mở lần thứ hai. `--force-takeover`: chạy dù có vẻ tiến trình khác đang giữ (chỉ khi chắc nó đã chết). `--wait`: chờ hết mọi FloodWait thay vì kết thúc khi chờ dài hơn `max_auto_wait` (không áp dụng cho `daily_cap`). FloodWait ngắn hơn `max_auto_wait` luôn được chờ rồi gửi lại đúng batch đó. Từ chối khi lần chạy trước là `waiting_flood` trước `resume_at` (kể cả nghỉ vì `daily_cap`, có câu riêng) hoặc `failed(peer_flood)` trong 24 giờ (mã 3). `--fresh`: quên tiến độ của cặp và sao chép lại từ đầu (kèm `--yes` để không hỏi). Đổi filter: dùng `tgmirror clone` với cùng `--src/--dst` |
 | `tgmirror pause` / `tgmirror stop` | Từ terminal khác: đặt cờ `control` trên lần chạy đang chạy (chỉ có tối đa một mỗi account). `pause` giữ nó **tại chỗ** sau batch hiện tại (tiến trình vẫn sống và giữ terminal của nó) cho tới khi `tgmirror run` hoặc phím `r`; `stop` kết thúc nó (`stopped`) như Ctrl+C. Không có gì đang chạy thì báo "Không có clone nào đang chạy", mã 1 |
 | `tgmirror history [n]` | Nhật ký các lần chạy, mới nhất trước: số lần, lúc bắt đầu, nguồn → đích, trạng thái, số tin đã sao chép/lỗi/bị filter loại (`--limit`, `--json`). `history n`: chi tiết một lần: thời gian, khoảng tin nguồn, filter, tin lỗi kèm lý do (tối đa 20), các lần Telegram giới hạn (flood) |
 | `tgmirror retry [n]` | (Phase 5) thử lại các tin `failed` của lần chạy `n` |
@@ -29,6 +29,8 @@ Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, 
 1. Chọn nguồn           ← danh sách dialogs: channel/supergroup/forum/group (gõ để lọc); cảnh báo nếu noforwards
 2. Chọn đích            ← (a) có sẵn, cùng loại với nguồn, có quyền post
                            (b) Tạo mới: nhập tên [+ about] [+ copy avatar]; nguồn forum → tự tạo topic tương ứng
+2b. Tiếp tục hay làm lại ← chỉ với cặp đã sao chép được tin: "Tiếp tục: chỉ lấy tin mới" / "Làm lại từ đầu: sao chép
+                           lại tất cả" (= `--fresh`). Chỉ hỏi khi wizard cũng hỏi nguồn/đích, không có `--yes` và chưa có `--fresh`
 3. Chọn filter          ← "Không lọc" / "Chọn tiêu chí" (checkbox media types, rồi hỏi hashtag, từ khóa,
                            từ ngày, đến ngày, dung lượng min/max) / "Nạp từ file YAML"; với cặp đã clone còn có
                            lựa chọn đầu "Giữ filter của lần chạy trước". Trả lời sai thì hỏi lại (tối đa 3 lần)
@@ -37,7 +39,8 @@ Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, 
 5. Xem trước            ← số tin khớp filter trong 100 tin đầu của khoảng đã chọn + vài caption mẫu
                            (phase 3; ước lượng tổng số tin và ETA theo limiter chưa có). Chạy trước khi tạo đích
 6. Xác nhận             ← MỘT câu "Sao chép <nguồn> → <đích> ngay bây giờ?" (đích mới ghi rõ sẽ được tạo), rồi
-                           tạo đích (nếu cần) và sao chép ngay. Trả lời không: thoát mã 1, chưa tạo/ghi gì
+                           tạo đích (nếu cần) và sao chép ngay. Trả lời không: thoát mã 1, chưa tạo/ghi gì.
+                           Làm lại từ đầu trên cặp đã có tin: câu hỏi nêu số tin sẽ bị quên và cảnh báo đích có thể bị trùng
 ```
 
 Tương đương không tương tác:
@@ -132,3 +135,11 @@ daily_cap = 5000
 max_auto_wait = 900
 upload_concurrency = 1
 ```
+
+## Làm lại từ đầu (`--fresh`)
+
+Chạy lại cùng cặp nguồn/đích là delta; `--fresh` (trên `clone` và `run`) là "bắt đầu lại": **quên tiến độ của cặp** (mọi hàng `msg_map`, con trỏ), đọc lại tin mới nhất của đích làm `dst_base_id` mới, rồi sao chép lại từ tin đầu tiên. Filter đang nhớ được giữ (đưa filter khác hoặc `--no-filter` nếu muốn đổi). Nhật ký `history` không bị đụng tới.
+
+Nó có thể làm **trùng tin** nếu đích còn các bản sao cũ, nên có hàng rào: khi có tin để quên, một câu hỏi nêu số tin ("Đích đã có N tin từ các lần chạy trước; làm lại từ đầu sẽ sao chép lại tất cả và có thể bị trùng…"); với `clone` đó chính là câu xác nhận duy nhất. `--yes` đồng ý; không có terminal mà thiếu `--yes` thì mã 2 và không quên gì. Cặp chưa có tin nào thì không hỏi. `run --fresh` không nhận lệnh "chạy tiếp lần đang tạm dừng ở terminal khác": cặp đang có lần chạy sống thì báo bị giữ (mã 1) và không quên gì. Chưa làm: chế độ kiểm tra/sửa (chỉ sao chép lại tin còn thiếu ở đích).
+
+Dùng khi đã dọn kênh đích, hoặc thật sự muốn một bản sao thứ hai. Nếu chỉ cần bản sao sạch thì `--dst-new` đã là cặp mới.

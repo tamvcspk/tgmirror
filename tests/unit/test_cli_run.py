@@ -433,6 +433,203 @@ def test_run_resumes_a_clone_paused_in_another_terminal_instead_of_starting_a_se
     assert gateway.calls_to("copy_messages") == [] and len(saved_runs(rt)) == 1
 
 
+# ---- fresh start ----------------------------------------------------------------------------
+
+
+def copied_count(rt: Runtime, gateway: FakeGateway) -> int:
+    by_title = {c.title: c for c in gateway.channels.values()}
+
+    async def read() -> int:
+        async with opened_store(rt) as store:
+            return await store.count_copied(by_title["Source"].id, by_title["Copy"].id)
+
+    return asyncio.run(read())
+
+
+def test_clone_fresh_copies_everything_again_and_says_so(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+
+    result = runner.invoke(app, [*CLONE, "--fresh"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Fresh start: forgot 3 copied messages" in result.output
+    assert "already skipped" not in result.output and "filter changed" not in result.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"] * 2
+    first, second = saved_runs(rt)
+    assert (second.cursor_from, second.done) == (0, 3) and first.done == 3  # the log keeps both
+    listing = runner.invoke(app, ["history"], obj=rt).output
+    assert listing.count("Source → Copy") == 2  # both runs are still in the log
+
+
+def test_a_fresh_start_asks_first_on_a_terminal_and_declining_forgets_nothing(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    prompter = ScriptedPrompter(confirm=[False])
+    asking = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+
+    result = runner.invoke(
+        app, ["clone", "--src", "Source", "--dst", "Copy", "--fresh"], obj=asking
+    )
+
+    assert result.exit_code == 1
+    ((kind, question),) = prompter.asked
+    assert kind == "confirm" and "already has 3 messages" in question
+    assert copied_count(rt, gateway) == 3 and len(saved_runs(rt)) == 1  # untouched
+    again = runner.invoke(app, CLONE, obj=rt)
+    assert "0 messages copied" in again.output and texts(gateway, dst) == ["m1", "m2", "m3"]
+
+
+def test_a_fresh_start_without_yes_or_a_terminal_is_a_usage_error_and_forgets_nothing(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+
+    result = runner.invoke(app, ["clone", "--src", "Source", "--dst", "Copy", "--fresh"], obj=rt)
+
+    assert result.exit_code == 2 and "--yes" in result.output and "3 copied" in result.output
+    assert copied_count(rt, gateway) == 3 and len(gateway.calls_to("copy_messages")) == 1
+
+
+def test_fresh_on_a_pair_with_nothing_to_forget_asks_nothing_and_needs_no_yes(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Source", "--dst", "Copy", "--fresh"],
+        obj=make_runtime(gateway=gateway),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"] and "Fresh start" not in result.output
+
+
+def test_run_fresh_starts_the_latest_pair_over(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+
+    refused = runner.invoke(app, ["run", "--fresh"], obj=rt)
+    assert refused.exit_code == 2 and "--yes" in refused.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"]
+
+    result = runner.invoke(app, ["run", "--fresh", "--yes"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Fresh start: forgot 3 copied messages" in result.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"] * 2
+
+
+def test_run_fresh_on_a_terminal_asks_with_the_count(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    prompter = ScriptedPrompter(confirm=[True])
+
+    result = runner.invoke(
+        app,
+        ["run", "--fresh"],
+        obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "already has 3 messages" in prompter.asked[0][1]
+
+
+def test_run_fresh_is_not_swallowed_by_a_run_paused_in_another_terminal(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    held = start_elsewhere(rt, gateway)
+    set_status(rt, held.id, RunStatus.PAUSED)
+    calls = len(gateway.calls_to("copy_messages"))
+
+    result = runner.invoke(app, ["run", "--fresh", "--yes"], obj=rt)
+
+    assert result.exit_code == 1 and "--force-takeover" in result.output  # RunBusy, not a resume
+    assert copied_count(rt, gateway) == 3  # nothing was forgotten
+    assert len(gateway.calls_to("copy_messages")) == calls
+    assert control_of(rt, held.id) is Control.NONE
+
+
+def test_the_wizard_offers_continue_or_scratch_only_for_a_pair_with_progress(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+    fresh_pair = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[True])
+    runner.invoke(
+        app, ["clone"], obj=make_runtime(gateway=gateway, prompter=fresh_pair, interactive=True)
+    )
+    assert len(fresh_pair.select_labels) == 3  # source, destination, filter: no restart question
+
+    scratch = ScriptedPrompter(
+        select=["Source", "Copy", "Start from scratch", "No filter"], confirm=[True]
+    )
+    result = runner.invoke(
+        app, ["clone"], obj=make_runtime(gateway=gateway, prompter=scratch, interactive=True)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [label for label in scratch.select_labels[2]] == [
+        "Continue: only what is new",
+        "Start from scratch: copy everything again",
+    ]
+    assert "already has 3 messages" in [m for k, m in scratch.asked if k == "confirm"][0]
+    assert texts(gateway, dst) == ["m1", "m2", "m3"] * 2 and "Fresh start" in result.output
+
+
+def test_the_wizard_continue_choice_is_an_ordinary_delta(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, dst = source_with_messages(gateway, 2)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    gateway.add_message(src, "m3")
+    carry_on = ScriptedPrompter(select=["Source", "Copy", "Continue", "No filter"], confirm=[True])
+
+    result = runner.invoke(
+        app, ["clone"], obj=make_runtime(gateway=gateway, prompter=carry_on, interactive=True)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"] and "Fresh start" not in result.output
+
+
+def test_the_fresh_flag_skips_the_wizard_restart_question(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    prompter = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[True])
+
+    result = runner.invoke(
+        app,
+        ["clone", "--fresh"],
+        obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(prompter.select_labels) == 3
+    assert texts(gateway, dst) == ["m1", "m2", "m3"] * 2
+
+
 # ---- Ctrl+C and the hotkeys -----------------------------------------------------------------
 
 

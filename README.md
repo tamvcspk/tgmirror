@@ -26,7 +26,9 @@ tgmirror clone --src "@my_channel" --dst-new "Videos" --media video --hashtag "#
 tgmirror clone --src "@my_channel" --dst "Copy" --filter-file filters.yaml --preview   # YAML: include/exclude/date/id/album
 tgmirror clone --src "@my_channel" --dst "Copy" --yes   # the same pair again: only what is new, same filter
 tgmirror clone --src "@my_channel" --dst "Copy" --media photo --yes   # another filter: read again, nothing copied twice
+tgmirror clone --src "@my_channel" --dst "Copy" --fresh   # start the pair over: forget what it copied, copy everything again (asks first)
 tgmirror run [n]              # the latest run's clone again (or run n of `history`); Ctrl+C stops it, saving progress
+tgmirror run --fresh [--yes]   # the same, for the latest run's pair
 tgmirror run --wait           # sit out FloodWaits of any length (default: end the run after [limits] max_auto_wait)
 tgmirror pause | stop         # from another terminal: pause in place / stop after the current batch
 tgmirror history [n] [--json] # what earlier runs did (n: one run in detail, with failed messages and why)

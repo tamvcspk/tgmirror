@@ -176,3 +176,17 @@ async def failed_of_run(
         params = (run_id, limit)
     cur = await db.execute(sql, params)
     return [FailedMessage(r[0], r[1]) for r in await cur.fetchall()]
+
+
+async def count_done(db: aiosqlite.Connection, mirror_id: int) -> int:
+    cur = await db.execute(
+        "SELECT COUNT(*) FROM msg_map WHERE mirror_id = ? AND status = 'done'", (mirror_id,)
+    )
+    row = await cur.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+async def delete_all(db: aiosqlite.Connection, mirror_id: int) -> None:
+    """Forget every row of the pair (a fresh start): done, failed, skipped and pending alike."""
+    await db.execute("DELETE FROM msg_map WHERE mirror_id = ?", (mirror_id,))

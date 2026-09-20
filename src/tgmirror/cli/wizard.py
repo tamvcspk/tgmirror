@@ -60,6 +60,17 @@ async def ask_new_channel(prompter: Prompter) -> NewChannelSpec:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+async def pick_resume(prompter: Prompter, copied: int) -> bool:
+    """For a pair with progress: ``True`` to start from scratch, ``False`` to continue."""
+    return await prompter.select(
+        t("clone.pick_resume", count=copied),
+        [
+            Choice(t("clone.resume_continue"), False),
+            Choice(t("clone.resume_fresh"), True),
+        ],
+    )
+
+
 async def pick_filters(prompter: Prompter, *, can_keep: bool = False) -> FilterSpec | None:
     """Step 3: no filter, a few criteria, or a YAML file. A rejected answer asks again.
 

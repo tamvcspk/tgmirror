@@ -237,6 +237,18 @@ VI: dict[str, str] = {
     "history.still_running": "đang chạy",
     "err.run_not_found": "Không có lần chạy «{ref}». Xem `tgmirror history`.",
     "err.run_none": "Chưa clone gì cả. Bắt đầu bằng `tgmirror clone`.",
+    "clone.pick_resume": "Cặp này đã sao chép {count} tin. Làm gì tiếp?",
+    "clone.resume_continue": "Tiếp tục: chỉ lấy tin mới",
+    "clone.resume_fresh": "Làm lại từ đầu: sao chép lại tất cả",
+    "clone.confirm_fresh": (
+        "Đích đã có {count} tin từ các lần chạy trước; làm lại từ đầu sẽ sao chép lại "
+        "tất cả và có thể bị trùng. Sao chép {src} → {dst} ngay bây giờ?"
+    ),
+    "run.fresh_started": "Làm lại từ đầu: đã quên {count} tin đã sao chép, đọc nguồn từ đầu.",
+    "err.fresh_needs_yes": (
+        "--fresh sẽ quên {count} tin đã sao chép và sao chép lại (đích có thể bị "
+        "trùng); thêm --yes để đồng ý khi không có terminal."
+    ),
 }
 
 EN: dict[str, str] = {
@@ -462,6 +474,22 @@ EN: dict[str, str] = {
     "history.still_running": "running",
     "err.run_not_found": "No run '{ref}'. See `tgmirror history`.",
     "err.run_none": "Nothing has been cloned yet. Start with `tgmirror clone`.",
+    "clone.pick_resume": "This pair already has {count} messages copied. What next?",
+    "clone.resume_continue": "Continue: only what is new",
+    "clone.resume_fresh": "Start from scratch: copy everything again",
+    "clone.confirm_fresh": (
+        "The destination already has {count} messages from earlier runs; starting "
+        "fresh copies everything again and may duplicate them. Clone {src} → {dst} "
+        "now?"
+    ),
+    "run.fresh_started": (
+        "Fresh start: forgot {count} copied messages, reading the source from the start."
+    ),
+    "err.fresh_needs_yes": (
+        "--fresh forgets {count} copied messages and copies them again (the "
+        "destination may get duplicates); add --yes to agree when there is no "
+        "terminal to ask."
+    ),
 }
 
 

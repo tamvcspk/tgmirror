@@ -146,6 +146,8 @@ class Run:
 class StartedRun:
     run: Run
     filters: FilterChange
+    # A fresh start: how many copied messages the pair forgot (``None``: not a fresh start).
+    forgot: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

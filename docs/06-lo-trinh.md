@@ -53,6 +53,15 @@ Các lựa chọn khi làm (không phải D1–D9; D5 đổi lý do, xem nhật 
 
 Chưa kiểm chứng (người dùng chạy tay): hai bộ đọc phím thật (`msvcrt` trên Windows Terminal/PowerShell, `termios` trên POSIX) chỉ được kiểm bằng script giả; pause/resume tại chỗ qua terminal thứ hai.
 
+### `--fresh` — làm lại từ đầu (2026-09-20)
+
+Đã chạy một cặp nhưng muốn bắt đầu lại từ đầu (đã dọn đích, hoặc muốn bản sao thứ hai) thì trước đây không có cách: đổi filter vẫn bỏ qua tin đã sao chép, còn `--dst-new` là cặp khác. Người dùng chọn: tên **`--fresh`** (không phải `--new-run`: mọi lần `clone` vốn đã là một run mới), có cả ở `clone` và `run`, và wizard hỏi "Tiếp tục / Làm lại" với cặp đã có tin.
+
+- Quên **chỉ tiến độ** (`msg_map`, con trỏ), giữ filter và nhật ký; `--fresh --no-filter` bỏ cả filter.
+- Có hàng rào vì có thể trùng tin: một câu hỏi nêu số tin bị quên; `--yes` đồng ý; không terminal + không `--yes` thì mã 2.
+- Con trỏ lùi ở hai chỗ, cả hai trong `Store.start_run` (filter đổi, làm lại).
+- Để sau: chế độ kiểm tra/sửa (`--verify`: xem tin nào còn ở đích rồi chỉ sao chép lại tin thiếu).
+
 ### Phase 1 — ghi chú
 
 Đã có: `login`/`logout`/`whoami`, `channels` (`--search`, `--writable`, `--json`), `new` (bước 1–2 của wizard: chọn nguồn, chọn hoặc tạo đích), `TelethonGateway`/`TelethonAuth`, `--debug`, UI tiếng Việt/Anh (`TGMIRROR_LANG`). Tất cả test bằng `FakeGateway`/`FakeAuth`/`ScriptedPrompter` và stub client Telethon, không cần mạng.
@@ -152,6 +161,7 @@ Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đ�
 
 Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và lý do ở đây.
 
+- 2026-09-20: Thêm `--fresh` (xem "`--fresh` — làm lại từ đầu"): cờ trên `clone`/`run`, chỉ quên tiến độ, có câu hỏi hàng rào khi đích có thể bị trùng; không phải D1–D9, người dùng đã duyệt kế hoạch trước khi viết mã.
 - 2026-09-20: Bỏ khái niệm job (xem "Tái thiết luồng job"). `clone` chạy ngay trong foreground; chỉ lưu nhật ký các lần chạy (`runs`) cộng một điểm kiểm tra ẩn theo cặp (`mirrors`); chạy lại cùng cặp là delta, filter được nhớ; `run`/`pause`/`stop` giữ nhưng nhắm vào lần chạy; pause giữ tại chỗ; phím `p`/`r`/`q`. D5 (một file SQLite) giữ nguyên, chỉ đổi lý do ("`tgmirror jobs` đơn giản" → "`tgmirror history` đơn giản"). Không viết migration từ `jobs` (dự án đang phát triển, người dùng chọn xóa DB cũ). Đảo ngược quyết định "mỗi cặp một job, cặp đã có job thì mã 2" (commit 9ed8509): cùng một cặp giờ là trường hợp delta. Người dùng đã duyệt kế hoạch trước khi viết mã.
 
 - 2026-09-19: Đổi tên dự án `twingram` → **tgmirror** (package `tgmirror`, lệnh `tgmirror`, DB `tgmirror.db`, biến môi trường `TGMIRROR_API_ID`/`TGMIRROR_API_HASH`), vì `twingram` đã bị chiếm trên PyPI/GitHub. Lệnh `twin` bỏ hẳn, không giữ alias.

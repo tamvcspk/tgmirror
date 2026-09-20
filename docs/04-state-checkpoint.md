@@ -113,7 +113,7 @@ Các phương thức của `Store` nhận `run_id` (lần chạy đang làm vi�
 
 1. **Trước** khi gọi Telegram cho một batch: `INSERT msg_map(... status='pending', batch_id, run_id)` (write-ahead), commit.
 2. **Sau** khi Telegram trả kết quả: trong **một transaction** — cập nhật các hàng thành `done` (kèm `dst_msg_id`) hoặc `failed` (kèm `reason`), cập nhật `mirrors.cursor_src_id`, `runs.cursor_to`, `runs.stats_json`, `updated_at`, `limiter_state` (`commit_batch(limiter=...)`: `sent_today` đi cùng các tin nó đếm; sau một flood `limiter_state` được lưu ngay bằng `save_limiter_state`; hàng theo `mirrors.account`, dùng chung cho mọi cặp của account). Batch được reconcile xác nhận (`confirm_pending`) không cộng vào `sent_today`: đếm hụt tối đa một batch sau một lần crash, chấp nhận được vì cap là ngân sách mềm.
-3. `cursor_src_id` chỉ tiến (`MAX(cursor_src_id, ?)` trong SQL), và chỉ tiến tới id lớn nhất của batch đã kết thúc hoàn toàn (không còn `pending`; `commit_batch` từ chối nếu còn hàng `pending` nào khác). Ngoại lệ **duy nhất**: `Store.start_run` đặt lại về 0 khi filter đổi (xem "Filter khi chạy lại").
+3. `cursor_src_id` chỉ tiến (`MAX(cursor_src_id, ?)` trong SQL), và chỉ tiến tới id lớn nhất của batch đã kết thúc hoàn toàn (không còn `pending`; `commit_batch` từ chối nếu còn hàng `pending` nào khác). Ngoại lệ **duy nhất**, cả hai nằm trong `Store.start_run`: đặt lại về 0 khi filter đổi (xem "Filter khi chạy lại") và khi làm lại từ đầu (xem "Làm lại từ đầu").
 
 Kết quả của một lời gọi copy:
 
@@ -147,6 +147,10 @@ Ngữ nghĩa: **at-least-once có reconcile**; trùng lặp chỉ có thể xả
 - Khác: **một transaction** thay `mirrors.filters_json`, đặt `cursor_src_id = 0`, rồi mở run với `cursor_from = 0`. `done`/`failed` của `msg_map` giữ nguyên: bước 3 của Resume bỏ qua unit đã `done`, nên không sao chép hai lần; tin `failed` khớp filter mới thì được thử lại. Bộ đếm `skipped_filter` là của từng run nên tự bắt đầu lại. Tin khớp mới được thêm vào cuối kênh đích (thứ tự đích không còn theo thời gian).
 
 Từ chối (`RunBusy`) khi cặp đang có run `running`/`paused` với heartbeat còn mới, trước khi đổi gì.
+
+## Làm lại từ đầu
+
+`start_run(spec, fresh=True)` (`clone --fresh`, `run --fresh`): trong **cùng một transaction** và **sau** khi kiểm tra cặp có bị giữ (`RunBusy` thì chưa xóa gì), đếm rồi xóa mọi hàng `msg_map` của mirror (mọi trạng thái, kể cả `pending`), đặt `cursor_src_id = 0` và ghi `dst_base_id` mới (tin mới nhất của đích lúc đó, do `begin_run` đọc bằng `last_message_id` — với cặp đã có mirror bình thường không đọc lại) vào `mirrors.options_json`. Lần chạy mới bắt đầu ở `cursor_from = 0`. Filter xử lý như thường (không đưa thì giữ filter đang nhớ). Cặp chưa có mirror thì `fresh` không có gì để quên: coi như lần chạy đầu. `StartedRun.forgot` là số tin `done` đã quên (`None` nếu không phải làm lại). `Store.count_copied(src, dst)` cho CLI đếm trước để hỏi. Các run cũ và bộ đếm của chúng giữ nguyên; danh sách tin lỗi của run cũ (`history n`) mất theo `msg_map`. Reconcile của lần chạy làm lại chỉ đọc đích sau `dst_base_id` mới nên không quét phần đã có từ trước.
 
 ## Điều khiển
 
