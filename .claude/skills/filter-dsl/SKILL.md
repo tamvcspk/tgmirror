@@ -25,7 +25,7 @@ Inside a rule, predicates are ANDed; rules are ORed. Service messages are always
 
 ## Adding a predicate — checklist
 
-1. Add the field to `model.py` with validation and a normalised canonical form (this is what gets stored in `jobs.filters_json`; keep it backwards compatible — old stored JSON must still load, and the *serialised* form must pass the *input* validators: sizes are stored as `"<bytes>B"` because bare numbers are rejected on input).
+1. Add the field to `model.py` with validation and a normalised canonical form (this is what gets stored in `mirrors.filters_json` and `runs.filters_json`; keep it backwards compatible — old stored JSON must still load, and the *serialised* form must pass the *input* validators: sizes are stored as `"<bytes>B"` because bare numbers are rejected on input).
 2. Implement in `matcher.py`, operating on our `SrcMessage` dataclass (never Telethon types).
 3. Decide pushdown: only if it can **only narrow safely** (never drops a message that matches). If unsure, do not push down.
 4. Parser: YAML key + CLI flag (`FlagFilters`, `cli/filter_options.py`, `docs/02-cli-ux.md` shorthand table) + wizard step (`cli/wizard.py::pick_filters`) if user-facing.
@@ -39,9 +39,9 @@ Inside a rule, predicates are ANDed; rules are ORed. Service messages are always
 - A predicate about something the message lacks is false, for `max` too; all predicates of a rule look at the same message; `date` is `[from, to)` UTC and `id` inclusive, both judged on the unit's first message.
 - Hashtags match `MessageEntityHashtag` entities, case-insensitive; do not rely on raw substring `#`. Convert entities to plain data in the gateway so the matcher stays pure.
 - Album semantics: caption/hashtag is usually on one member. Default `album: any` for include; **exclude always uses `any`** (one excluded member excludes the album).
-- Regex: compile once, reject patterns that are invalid at spec-validation time (job creation), and guard against catastrophic backtracking (timeout or a safe engine) — filters may come from shared YAML files.
+- Regex: compile once, reject patterns that are invalid at spec-validation time (before the clone starts), and guard against catastrophic backtracking (timeout or a safe engine) — filters may come from shared YAML files.
 - Sizes/durations use explicit units; reject bare ambiguous numbers in size fields.
-- Changing filters on an existing job never rewrites history: it is a new job or `--refilter` (cursor back to 0, `done` items skipped through `msg_map`).
+- Changing the filter of a pair never rewrites history: cloning it again with another filter (or `--no-filter`) reads from cursor 0 and skips `done` items through `msg_map` (`Store.start_run`); no filter flag reuses the remembered one.
 - Filter-skipped messages are not written to `msg_map` (see `checkpoint-state`); they only bump `skipped_filter` and advance the cursor. This is different from *unsupported* messages (game, invoice, ...), which are recorded as `skipped`.
 - `media` also has `geo contact game invoice`; the `topic` and `from_user` predicates only make sense for group/forum sources (`docs/03-filters.md`).
 

@@ -1,6 +1,7 @@
-"""The filter flags of ``tgmirror new`` and ``tgmirror run --refilter`` (docs/03-filters.md).
+"""The filter flags of ``tgmirror clone`` (docs/03-filters.md).
 
-Declared once as Typer option types so both commands offer exactly the same flags, and ``collect``
+Declared once as Typer option types so every command that takes them offers exactly the same
+flags, and ``collect``
 turns them into a ``FilterSpec`` through the parser the wizard and YAML files also use.
 """
 

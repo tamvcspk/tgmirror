@@ -12,38 +12,38 @@ Source doc: `docs/02-cli-ux.md` (command table, wizard flow, exit codes, config)
 - `cli/app.py`: Typer app, registers commands from `cli/commands/*.py` (one module per command group). Its callback puts a `Runtime` in `ctx.obj`.
 - `cli/runtime.py`: `Runtime` = paths, `connect(config)` (async context manager giving `Connection(auth, gateway)`), prompter, `interactive` (TTY), env. Commands use only this, so tests inject fakes with `CliRunner.invoke(app, args, obj=runtime)` (`make_runtime` fixture in `tests/conftest.py`). `authorized(rt)` is the connect-and-require-login helper.
 - `cli/errors.py`: `run(rt, coro)` runs a command's coroutine (`asyncio.run`) and turns `TgMirrorError`s into one sentence + exit code (`describe`, `exit_code`); `UsageProblem(key, **params)` is a usage error (exit 2) that already names its message key. Add a new error type there together with its message.
-- `cli/filter_options.py`: the filter flags as Typer option types, shared by `new` and `run --refilter`; `collect(...)` turns them into a `FilterSpec` (or `None` when none was given) before anything else happens, so a bad filter is exit `2` with nothing written. Add a filter flag there once, not per command.
+- `cli/filter_options.py`: the filter flags as Typer option types, shared by `clone`; `collect(...)` turns them into a `FilterSpec` (or `None` when none was given) before anything else happens, so a bad filter is exit `2` with nothing written. Add a filter flag there once, not per command.
 - `cli/wizard.py`: questionary prompts only. **Wizard functions collect values and return a spec; they contain no business logic and never talk to Telegram directly** (they receive already-fetched data, e.g. the channel list).
 - `ui/`: `messages.py` (all user strings), `prompts.py` (async `Prompter` protocol with `say`/`text`/`secret`/`confirm`/`select`/`checkbox` + questionary implementation; async because prompts happen between Telegram calls inside a running loop; `ScriptedPrompter` in `tests/fakes.py`), `tables.py` (Rich table / `--json`), `progress.py` (`LineReporter`: plain lines, no ANSI, throttled; the Rich live view is phase 7).
-- `cli/interrupt.py`: `stop_on_interrupt` (first Ctrl+C asks the runner to finish the batch and save, exit 130; the second quits at once). `cli/runtime.py` also has `opened_store(rt)` (SQLite state, migrated on first use). `cli/commands/run.py::execute` is shared by `run` and `new --run`; `pause`/`stop` need no Telegram connection.
+- `cli/interrupt.py`: `stop_on_interrupt` (first Ctrl+C asks the runner to finish the batch and save, exit 130; the second quits at once; yields an `Interruption` whose `hit` tells Ctrl+C from the key `q`, which exits 0). `cli/keys.py`: the hotkeys `p` pause / `r` resume / `q` stop while a clone runs (`apply_key` maps a key onto `RunControl`; `terminal_keys` runs a reader thread with `msvcrt` on Windows or `termios` cbreak on POSIX; `Runtime.keys` injects it, tests use `no_keys` or a scripted provider). Plain keys, because the VS Code terminal swallows Ctrl+P/Ctrl+R. `cli/runtime.py` also has `opened_store(rt)` (SQLite state, migrated on first use). `cli/commands/run.py::execute` is shared by `clone` and `run`; `pause`, `stop` and `history` need no Telegram connection.
 - Business logic lives in `engine/` and `store/`. A command is: parse args → build a spec → call one function → render the result.
 
 ## The parity rule
 
-Every wizard outcome must be expressible with flags/YAML, and both paths call the same `create_job(spec)`. When adding a wizard step:
+Every wizard outcome must be expressible with flags/YAML, and both paths call the same `begin_run(...)` (`engine/runs.py`). When adding a wizard step:
 
 1. Add the flag(s) (and YAML key if it belongs to filters) first.
 2. Add the wizard step that fills the same field.
-3. Add a test that creates a job via flags and via a scripted wizard (`questionary` can be fed with `pytest` monkeypatch / prompt-toolkit input pipes) and asserts equal specs.
+3. Add a test that clones via flags and via a scripted wizard (`questionary` can be fed with `pytest` monkeypatch / prompt-toolkit input pipes) and asserts equal specs.
 
-The filter step asks only when the wizard was needed for the rest too (no `--src`, or no destination) and no filter flag or `--yes` was given; the preview (`--preview/--no-preview`, default: terminal + filter + no `--yes`) and its "save this job?" confirmation run before any channel is created. `tgmirror run <job> --refilter <filter flags>` is the only way to change a job's filter; filter flags without `--refilter` are refused.
+The filter step asks only when the wizard was needed for the rest too (no `--src`, or no destination) and no filter flag or `--yes` was given; for a pair cloned before it also offers "keep the filter of the previous run" first (answer `None`, like giving no flag). No filter flag ⇒ the remembered filter (delta); a flag or `--filter-file` ⇒ that filter, and if it differs the source is read again from the start; `--no-filter` clears it (usage error together with filter flags). The preview (`--preview/--no-preview`, default: terminal + a filter chosen + no `--yes`) prints only; it never asks its own question.
 
-The "run it now?" question is `--run/--no-run` (unset: ask on a terminal; never runs when `--yes` is given or there is no terminal). `--yes` skips confirmations only; it never skips safety prompts that have their own explicit flag (e.g. the reupload-on-protected-channel confirmation, see `telethon-engine`). Same for unsupported message types under `--mode reupload`: `--ignore-unsupported` (game/invoice/unanswered quiz; `--placeholder` implies it and also posts a stub text) and `--reset-polls` must be given explicitly; without them the wizard asks and non-interactive runs exit `2` (`docs/02-cli-ux.md`, "Tin đặc thù").
+`clone` runs at once: there is **one** confirmation, asked before anything is written (`_confirm_start`: "Clone A → B now?", the destination described as «title» when it will be created). `--yes` skips it; with no terminal it is not asked, except that creating a channel then needs `--yes` (exit 2). There is no "save the job" step and no `--run/--no-run`: a clone is a foreground command like any other, Ctrl+C ends it, `tgmirror run` continues it. `--yes` skips confirmations only; it never skips safety prompts that have their own explicit flag (e.g. the reupload-on-protected-channel confirmation, see `telethon-engine`). Same for unsupported message types under `--mode reupload`: `--ignore-unsupported` (game/invoice/unanswered quiz; `--placeholder` implies it and also posts a stub text) and `--reset-polls` must be given explicitly; without them the wizard asks and non-interactive runs exit `2` (`docs/02-cli-ux.md`, "Tin đặc thù").
 
 ## Adding a command — checklist
 
-- [ ] Name is a verb or noun consistent with the table in `docs/02-cli-ux.md`; job commands take `<job>` (id or name).
+- [ ] Name is a verb or noun consistent with the table in `docs/02-cli-ux.md`; run commands take an optional run number (`run [n]`, `history [n]`); there are no job ids or names.
 - [ ] `--help` text is concrete, with one example.
 - [ ] Non-interactive friendly: no prompt unless a TTY is attached and `--yes`/all needed flags aren't given; when there is no TTY and info is missing → exit code 2 with the missing flag named.
 - [ ] Exit codes: `0` ok · `1` general error · `2` usage · `3` stopped by flood/peer_flood/daily cap · `4` missing permission · `130` interrupted.
-- [ ] Machine-readable output via `--json` for `status`, `jobs`, `channels`.
+- [ ] Machine-readable output via `--json` for `status`, `history`, `channels`.
 - [ ] Errors are human sentences with the next step ("Bạn không phải admin của kênh nguồn; ..."), not tracebacks. Tracebacks only with `--debug`.
 - [ ] Never prints secrets (`api_hash`, session, phone, login code). Phone/code prompts use hidden input where applicable.
 - [ ] Tests with Typer's `CliRunner` and `FakeGateway`.
 
 ## TUI conventions
 
-- Rich `Live` layout: header (job, mode, current delay), progress bar, counters (done, failed, skipped by filter, floods), key hints.
+- Rich `Live` layout: header (run, mode, current delay), progress bar, counters (done, failed, skipped by filter, floods), key hints.
 - Keys: `p` pause/resume, `q` save & quit. No key lowers delay below `min_delay`.
 - FloodWait shows a visible countdown and the reason; never a frozen screen.
 - Non-TTY: plain line logging every N seconds, no ANSI.

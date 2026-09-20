@@ -42,28 +42,26 @@ VI: dict[str, str] = {
     "no": "không",
     "admin": "admin",
     # new (wizard steps 1-2)
-    "new.pick_source": "Chọn kênh/nhóm nguồn (gõ để lọc)",
-    "new.pick_destination": "Chọn đích (gõ để lọc)",
-    "new.create_new": "+ Tạo kênh mới",
-    "new.prompt_title": "Tên kênh mới",
-    "new.prompt_about": "Mô tả (có thể để trống)",
-    "new.confirm_create": "Tạo kênh «{title}»?",
-    "new.no_candidates": "Không có đích có sẵn phù hợp, sẽ tạo mới.",
-    "new.src": "Nguồn: {channel}",
-    "new.dst": "Đích:  {channel}",
-    "new.dst_created": "Đích:  {channel} (vừa tạo)",
-    "new.saved": "Đã lưu job {id} «{name}».",
-    "new.run_hint": "Chạy job: tgmirror run {id}",
-    "new.confirm_run": "Chạy ngay?",
+    "clone.pick_source": "Chọn kênh/nhóm nguồn (gõ để lọc)",
+    "clone.pick_destination": "Chọn đích (gõ để lọc)",
+    "clone.create_new": "+ Tạo kênh mới",
+    "clone.prompt_title": "Tên kênh mới",
+    "clone.prompt_about": "Mô tả (có thể để trống)",
+    "clone.no_candidates": "Không có đích có sẵn phù hợp, sẽ tạo mới.",
+    "clone.src": "Nguồn: {channel}",
+    "clone.dst": "Đích:  {channel}",
+    "clone.dst_created": "Đích:  {channel} (vừa tạo)",
     "kind.broadcast": "kênh",
     "kind.supergroup": "supergroup",
     "kind.forum": "forum",
     "kind.group": "nhóm",
     # run / pause / stop
-    "run.start": "Chạy job {id} «{name}» (tiếp từ tin nguồn {cursor}).",
-    "run.progress": "Job {id}: {done} tin đã sao chép, {failed} lỗi (tin nguồn tới id {cursor}).",
+    "run.start": "Lần chạy {id}: {src} → {dst}, tiếp từ tin nguồn {cursor}.",
+    "run.progress": (
+        "Lần chạy {id}: {done} tin đã sao chép, {failed} lỗi (tin nguồn tới id {cursor})."
+    ),
     "run.stopping": "Đang dừng sau batch hiện tại (Ctrl+C lần nữa để thoát ngay).",
-    "run.result": "Job {id}: {status}. {done} tin đã sao chép, {failed} lỗi.",
+    "run.result": "Lần chạy {id}: {status}. {done} tin đã sao chép, {failed} lỗi.",
     "run.reconciled": (
         "Lần chạy trước bị ngắt giữa chừng: {count} tin đã có ở đích, ghi nhận và không gửi lại."
     ),
@@ -75,8 +73,9 @@ VI: dict[str, str] = {
         "gửi lại nên đích có thể bị trùng vài tin."
     ),
     "run.flood_stopped": (
-        "Telegram yêu cầu chờ {seconds}s. Job đã lưu ở trạng thái chờ đến {resume_at}; "
-        "chạy lại `tgmirror run` sau đó (hoặc `tgmirror run --wait` để chờ luôn)."
+        "Telegram yêu cầu chờ {seconds}s. Lần chạy đã lưu ở trạng thái chờ đến "
+        "{resume_at}; chạy lại `tgmirror run` sau đó (hoặc `tgmirror run --wait` để "
+        "chờ luôn)."
     ),
     "run.flood_waiting": (
         "Telegram yêu cầu chờ {seconds}s; đang chờ rồi gửi lại đúng batch đó "
@@ -86,16 +85,14 @@ VI: dict[str, str] = {
         "Telegram giới hạn liên tiếp: tạm thời chỉ gửi {batch_size} tin mỗi lần và nghỉ "
         "{delay}s giữa các lần, cho tới khi yên ổn trở lại."
     ),
-    "status.created": "mới tạo",
     "status.running": "đang chạy",
     "status.paused": "tạm dừng",
     "status.stopped": "đã dừng",
     "status.waiting_flood": "chờ flood",
     "status.done": "xong",
     "status.failed": "lỗi",
-    "control.pause_requested": "Đã yêu cầu tạm dừng job {id}; nó dừng sau batch hiện tại.",
-    "control.stop_requested": "Đã yêu cầu dừng job {id}; nó dừng sau batch hiện tại.",
-    "control.not_running": "Job {id} không đang chạy (trạng thái: {status}).",
+    "control.pause_requested": "Đã yêu cầu tạm dừng lần chạy {id}; nó dừng sau batch hiện tại.",
+    "control.stop_requested": "Đã yêu cầu dừng lần chạy {id}; nó dừng sau batch hiện tại.",
     # warnings
     "warn.noforwards_admin": (
         "Nguồn bật «Restrict saving content». Bạn là admin nên có thể tắt tùy chọn này tạm thời, "
@@ -108,7 +105,9 @@ VI: dict[str, str] = {
         "TGMIRROR_API_ID và TGMIRROR_API_HASH."
     ),
     "err.config": "Cấu hình lỗi: {detail}",
-    "err.bad_api": "Telegram từ chối api_id/api_hash. Kiểm tra lại tại https://my.telegram.org/apps.",
+    "err.bad_api": (
+        "Telegram từ chối api_id/api_hash. Kiểm tra lại tại https://my.telegram.org/apps."
+    ),
     "err.flood": "Telegram yêu cầu chờ {seconds}s (FLOOD_WAIT). Thử lại sau.",
     "err.peer_flood": (
         "Telegram đánh dấu tài khoản này là spam (PEER_FLOOD). Đừng thử lại; nghỉ ít nhất 24h."
@@ -145,35 +144,24 @@ VI: dict[str, str] = {
         "Chưa tạo được đích mới cho nguồn loại {kind} (có từ phase 8). "
         "Chọn một đích có sẵn cùng loại."
     ),
-    "err.job_not_found": "Không có job «{ref}». Dùng id hoặc tên chính xác.",
-    "err.job_ambiguous": "«{ref}» khớp nhiều job: {matches}. Dùng id.",
-    "err.job_exists": (
-        "Job {id} đã sao chép nguồn này vào đích này. Chạy tiếp bằng `tgmirror run {id}`."
-    ),
-    "err.job_exists_refilter": (
-        "Job {id} đã sao chép nguồn này vào đích này, nên filter bạn vừa nhập KHÔNG được áp dụng "
-        "và không có gì được lưu. Đổi filter của job đó: `tgmirror run {id} --refilter <cờ lọc>` "
-        "(tin đã sao chép giữ nguyên ở đích, tin khớp mới được thêm vào cuối), "
-        "hoặc chọn một đích khác."
-    ),
     "err.mode_unsupported": (
         "Chế độ «{mode}» chưa dùng được (reupload có từ phase 6). Dùng auto hoặc copy."
     ),
-    "err.job_busy": (
-        "Job {id} đang được một tiến trình khác chạy. Nếu chắc chắn nó đã chết, "
+    "err.run_busy": (
+        "Lần chạy {id} đang được một tiến trình khác giữ. Nếu chắc chắn nó đã chết, "
         "chạy lại với --force-takeover."
     ),
-    "err.job_waiting_flood": "Telegram đã yêu cầu chờ; job chưa được chạy lại trước {until}.",
-    "err.job_waiting_daily_cap": (
-        "Hôm nay đã gửi đủ số tin cho phép (daily_cap); job chưa được chạy lại trước {until}."
+    "err.run_waiting_flood": "Telegram đã yêu cầu chờ; chưa chạy lại được trước {until}.",
+    "err.run_waiting_daily_cap": (
+        "Hôm nay đã gửi đủ số tin cho phép (daily_cap); chưa chạy lại được trước {until}."
     ),
     "err.daily_cap": (
-        "Hôm nay đã gửi {sent} tin, chạm giới hạn ngày ({cap}). Job đã lưu; chạy lại "
-        "`tgmirror run` sau {until}."
+        "Hôm nay đã gửi {sent} tin, chạm giới hạn ngày ({cap}). Tiến độ đã lưu; chạy "
+        "lại `tgmirror run` sau {until}."
     ),
-    "err.job_waiting_peer_flood": (
-        "Telegram đánh dấu tài khoản là spam (PEER_FLOOD) ở lần chạy trước. "
-        "Nghỉ đến {until} rồi hãy chạy lại."
+    "err.run_waiting_peer_flood": (
+        "Telegram đánh dấu tài khoản là spam (PEER_FLOOD) ở lần chạy trước. Nghỉ đến "
+        "{until} rồi hãy chạy lại."
     ),
     "err.forwards_restricted": (
         "Nguồn bật «Restrict saving content» nên Telegram từ chối forward. Nếu bạn là admin, "
@@ -185,12 +173,9 @@ VI: dict[str, str] = {
     "err.filter_mix": (
         "Không dùng --filter-file cùng các cờ lọc khác (--media, --hashtag, --since, ...)."
     ),
-    "err.refilter_needs_filter": "--refilter cần filter mới: các cờ lọc hoặc --filter-file.",
-    "err.filter_needs_refilter": (
-        "Job đã tạo rồi nên các cờ lọc chỉ dùng được cùng --refilter (đổi filter, quét lại từ đầu)."
-    ),
     # filters (wizard step 3, preview, refilter)
     "filter.pick": "Lọc nội dung sao chép?",
+    "filter.keep": "Giữ filter của lần chạy trước",
     "filter.none": "Không lọc: sao chép tất cả",
     "filter.criteria": "Chọn tiêu chí",
     "filter.file": "Nạp từ file YAML",
@@ -202,25 +187,62 @@ VI: dict[str, str] = {
     "filter.ask_min_size": "Dung lượng tối thiểu, ví dụ 10MB (để trống = không giới hạn)",
     "filter.ask_max_size": "Dung lượng tối đa, ví dụ 2GB (để trống = không giới hạn)",
     "filter.ask_file": "Đường dẫn file YAML",
-    "new.preview": (
+    "clone.preview": (
         "Xem trước: {matched} trong {scanned} tin đầu tiên của khoảng đã chọn sẽ được sao chép."
     ),
-    "new.preview_empty": "Xem trước: nguồn không có tin nào trong khoảng đã chọn.",
-    "new.preview_example": "  · {text}",
-    "new.confirm_save": "Lưu job này?",
-    "run.refiltered": (
-        "Đã đổi filter của job {id}; quét lại nguồn từ đầu. Tin khớp mà chưa sao chép sẽ được "
-        "thêm vào cuối đích (thứ tự ở đích không còn theo thời gian)."
-    ),
+    "clone.preview_empty": "Xem trước: nguồn không có tin nào trong khoảng đã chọn.",
+    "clone.preview_example": "  · {text}",
     "run.skipped": "{count} tin bị filter loại.",
     "run.progress_filtered": (
-        "Job {id}: {done} tin đã sao chép, {skipped} bị filter loại, {failed} lỗi "
-        "(tin nguồn tới id {cursor})."
+        "Lần chạy {id}: {done} tin đã sao chép, {skipped} bị filter loại, {failed} "
+        "lỗi (tin nguồn tới id {cursor})."
     ),
+    "clone.confirm_start": "Sao chép {src} → {dst} ngay bây giờ?",
+    "clone.dst_will_be_created": "«{title}» (kênh mới sẽ được tạo)",
+    "run.filter_reused": "Dùng lại filter của lần chạy trước; chỉ lấy tin mới hơn lần trước.",
+    "run.filter_changed": (
+        "Filter đã đổi: quét lại nguồn từ đầu. Tin đã sao chép được bỏ qua; tin khớp "
+        "mà chưa sao chép sẽ được thêm vào cuối đích (thứ tự ở đích không còn theo "
+        "thời gian)."
+    ),
+    "run.keys_hint": "Phím: [p] tạm dừng  [r] chạy tiếp  [q] dừng. Ctrl+C cũng dừng.",
+    "run.paused": "Đã tạm dừng. Bấm r để chạy tiếp, q để dừng.",
+    "run.resumed": "Chạy tiếp.",
+    "run.continue_hint": "Chạy tiếp sau: tgmirror run {id}",
+    "run.resumed_elsewhere": "Lần chạy {id} đang tạm dừng ở terminal khác; đã cho chạy tiếp ở đó.",
+    "control.nothing_running": "Không có clone nào đang chạy.",
+    "history.empty": "Chưa có lần chạy nào. Bắt đầu bằng `tgmirror clone`.",
+    "history.title": "Các lần chạy gần đây",
+    "history.col_run": "Lần",
+    "history.col_started": "Bắt đầu",
+    "history.col_pair": "Nguồn → đích",
+    "history.col_status": "Trạng thái",
+    "history.col_copied": "Đã chép",
+    "history.col_failed": "Lỗi",
+    "history.col_filtered": "Bị lọc",
+    "history.header": "Lần chạy {id}: {src} → {dst}",
+    "history.line_status": "Trạng thái:  {status}{note}",
+    "history.line_time": "Bắt đầu:     {started}   Kết thúc: {ended}",
+    "history.line_counts": (
+        "Kết quả:     {done} đã sao chép, {failed} lỗi, {skipped} bị filter loại"
+    ),
+    "history.line_cursor": "Tin nguồn:   từ id {start} tới id {end}",
+    "history.line_filter": "Filter:      {filter}",
+    "history.no_filter": "không lọc",
+    "history.failed_title": "Tin lỗi ({count}):",
+    "history.failed_line": "  · tin nguồn {id}: {reason}",
+    "history.failed_more": "  … và còn nữa; xem bằng --json",
+    "history.floods_title": "Giới hạn từ Telegram:",
+    "history.flood_line": "  · {ts} {kind} {seconds}s ({method})",
+    "history.still_running": "đang chạy",
+    "err.run_not_found": "Không có lần chạy «{ref}». Xem `tgmirror history`.",
+    "err.run_none": "Chưa clone gì cả. Bắt đầu bằng `tgmirror clone`.",
 }
 
 EN: dict[str, str] = {
-    "login.api_intro": "Your api_id and api_hash are needed. Create them at https://my.telegram.org/apps.",
+    "login.api_intro": (
+        "Your api_id and api_hash are needed. Create them at https://my.telegram.org/apps."
+    ),
     "login.prompt_api_id": "api_id",
     "login.prompt_api_hash": "api_hash (hidden while typing)",
     "login.api_id_invalid": "api_id must be a positive integer.",
@@ -249,27 +271,23 @@ EN: dict[str, str] = {
     "yes": "yes",
     "no": "no",
     "admin": "admin",
-    "new.pick_source": "Pick the source channel/group (type to filter)",
-    "new.pick_destination": "Pick the destination (type to filter)",
-    "new.create_new": "+ Create a new channel",
-    "new.prompt_title": "New channel title",
-    "new.prompt_about": "Description (may be empty)",
-    "new.confirm_create": "Create channel «{title}»?",
-    "new.no_candidates": "No suitable existing destination; a new one will be created.",
-    "new.src": "Source:      {channel}",
-    "new.dst": "Destination: {channel}",
-    "new.dst_created": "Destination: {channel} (just created)",
-    "new.saved": "Saved job {id} '{name}'.",
-    "new.run_hint": "Run it with: tgmirror run {id}",
-    "new.confirm_run": "Run it now?",
+    "clone.pick_source": "Pick the source channel/group (type to filter)",
+    "clone.pick_destination": "Pick the destination (type to filter)",
+    "clone.create_new": "+ Create a new channel",
+    "clone.prompt_title": "New channel title",
+    "clone.prompt_about": "Description (may be empty)",
+    "clone.no_candidates": "No suitable existing destination; a new one will be created.",
+    "clone.src": "Source:      {channel}",
+    "clone.dst": "Destination: {channel}",
+    "clone.dst_created": "Destination: {channel} (just created)",
     "kind.broadcast": "channel",
     "kind.supergroup": "supergroup",
     "kind.forum": "forum",
     "kind.group": "group",
-    "run.start": "Running job {id} '{name}' (continuing after source message {cursor}).",
-    "run.progress": "Job {id}: {done} messages copied, {failed} failed (source up to id {cursor}).",
+    "run.start": "Run {id}: {src} → {dst}, continuing after source message {cursor}.",
+    "run.progress": "Run {id}: {done} messages copied, {failed} failed (source up to id {cursor}).",
     "run.stopping": "Stopping after the current batch (press Ctrl+C again to quit at once).",
-    "run.result": "Job {id}: {status}. {done} messages copied, {failed} failed.",
+    "run.result": "Run {id}: {status}. {done} messages copied, {failed} failed.",
     "run.reconciled": (
         "The previous run was interrupted: {count} messages are already in the destination, "
         "recorded without sending them again."
@@ -282,8 +300,9 @@ EN: dict[str, str] = {
         "they are sent again, so the destination may get a few duplicates."
     ),
     "run.flood_stopped": (
-        "Telegram asks to wait {seconds}s. The job is saved as waiting until {resume_at}; "
-        "run `tgmirror run` again after that (or `tgmirror run --wait` to wait it out)."
+        "Telegram asked to wait {seconds}s. The run is saved as waiting until "
+        "{resume_at}; run `tgmirror run` again after that (or `tgmirror run --wait` "
+        "to sit it out)."
     ),
     "run.flood_waiting": (
         "Telegram asks to wait {seconds}s; waiting, then sending that same batch again "
@@ -293,16 +312,14 @@ EN: dict[str, str] = {
         "Telegram limited us repeatedly: for now batches are {batch_size} messages and the pause "
         "between them is {delay}s, until things calm down."
     ),
-    "status.created": "created",
     "status.running": "running",
     "status.paused": "paused",
     "status.stopped": "stopped",
     "status.waiting_flood": "waiting (flood)",
     "status.done": "done",
     "status.failed": "failed",
-    "control.pause_requested": "Asked job {id} to pause; it stops after the current batch.",
-    "control.stop_requested": "Asked job {id} to stop; it stops after the current batch.",
-    "control.not_running": "Job {id} is not running (status: {status}).",
+    "control.pause_requested": "Asked run {id} to pause; it holds after the current batch.",
+    "control.stop_requested": "Asked run {id} to stop; it stops after the current batch.",
     "warn.noforwards_admin": (
         "The source has 'Restrict saving content' on. You are an admin, so you can turn it off "
         "temporarily, or use --mode reupload with confirmation (available from phase 6)."
@@ -350,39 +367,25 @@ EN: dict[str, str] = {
         "Creating a new destination for a {kind} source arrives in phase 8. "
         "Pick an existing destination of the same kind."
     ),
-    "err.job_not_found": "No job '{ref}'. Use its id or its exact name.",
-    "err.job_ambiguous": "'{ref}' matches several jobs: {matches}. Use the id.",
-    "err.job_exists": (
-        "Job {id} already copies this source into this destination. "
-        "Continue it with `tgmirror run {id}`."
-    ),
-    "err.job_exists_refilter": (
-        "Job {id} already copies this source into this destination, so the filter you just gave "
-        "was NOT applied and nothing was saved. To change that job's filter: "
-        "`tgmirror run {id} --refilter <filter flags>` (what was copied stays in the destination, "
-        "newly matching messages are appended), or pick another destination."
-    ),
     "err.mode_unsupported": (
         "Mode '{mode}' is not available yet (reupload arrives in phase 6). Use auto or copy."
     ),
-    "err.job_busy": (
-        "Job {id} is being run by another process. If you are sure it is dead, "
-        "run again with --force-takeover."
+    "err.run_busy": (
+        "Run {id} is held by another process. If you are sure it is dead, run again "
+        "with --force-takeover."
     ),
-    "err.job_waiting_flood": (
-        "Telegram asked us to wait; the job must not run again before {until}."
-    ),
-    "err.job_waiting_daily_cap": (
-        "The daily limit on messages sent (daily_cap) is used up; the job must not run again "
-        "before {until}."
+    "err.run_waiting_flood": "Telegram asked to wait; the clone must not run again before {until}.",
+    "err.run_waiting_daily_cap": (
+        "The daily limit on messages sent (daily_cap) is used up; the clone must not run "
+        "again before {until}."
     ),
     "err.daily_cap": (
-        "{sent} messages sent today, the daily cap ({cap}) is reached. The job is saved; run "
-        "`tgmirror run` again after {until}."
+        "{sent} messages sent today, the daily cap ({cap}) is reached. Progress is "
+        "saved; run `tgmirror run` again after {until}."
     ),
-    "err.job_waiting_peer_flood": (
-        "Telegram flagged the account as spam (PEER_FLOOD) on the last run. "
-        "Rest until {until} before running again."
+    "err.run_waiting_peer_flood": (
+        "Telegram flagged the account as spam (PEER_FLOOD) on the previous run. Rest "
+        "until {until}, then run again."
     ),
     "err.forwards_restricted": (
         "The source has 'Restrict saving content' on, so Telegram refuses to forward. If you are "
@@ -394,12 +397,8 @@ EN: dict[str, str] = {
     "err.filter_mix": (
         "Do not combine --filter-file with the other filter flags (--media, --hashtag, ...)."
     ),
-    "err.refilter_needs_filter": "--refilter needs the new filter: filter flags or --filter-file.",
-    "err.filter_needs_refilter": (
-        "The job already exists, so filter flags only work together with --refilter "
-        "(replace the filter and scan again from the start)."
-    ),
     "filter.pick": "Filter what gets copied?",
+    "filter.keep": "Keep the filter of the previous run",
     "filter.none": "No filter: copy everything",
     "filter.criteria": "Pick criteria",
     "filter.file": "Load from a YAML file",
@@ -411,22 +410,58 @@ EN: dict[str, str] = {
     "filter.ask_min_size": "Minimum size, e.g. 10MB (empty = no limit)",
     "filter.ask_max_size": "Maximum size, e.g. 2GB (empty = no limit)",
     "filter.ask_file": "Path of the YAML file",
-    "new.preview": (
+    "clone.preview": (
         "Preview: {matched} of the first {scanned} messages in the chosen range would be copied."
     ),
-    "new.preview_empty": "Preview: the source has no messages in the chosen range.",
-    "new.preview_example": "  · {text}",
-    "new.confirm_save": "Save this job?",
-    "run.refiltered": (
-        "Replaced the filter of job {id}; scanning the source again from the start. Messages that "
-        "now match but were not copied are appended to the end of the destination (its order is "
-        "no longer chronological)."
-    ),
+    "clone.preview_empty": "Preview: the source has no messages in the chosen range.",
+    "clone.preview_example": "  · {text}",
     "run.skipped": "{count} messages were left out by the filter.",
     "run.progress_filtered": (
-        "Job {id}: {done} messages copied, {skipped} left out by the filter, {failed} failed "
-        "(source up to id {cursor})."
+        "Run {id}: {done} messages copied, {skipped} left out by the filter, {failed} "
+        "failed (source up to id {cursor})."
     ),
+    "clone.confirm_start": "Clone {src} → {dst} now?",
+    "clone.dst_will_be_created": "'{title}' (a new channel will be created)",
+    "run.filter_reused": (
+        "Using the filter of the previous run; only messages newer than last time."
+    ),
+    "run.filter_changed": (
+        "The filter changed: reading the source again from the start. Messages "
+        "already copied are skipped; ones that now match but were not copied go to "
+        "the end of the destination (its order is no longer chronological)."
+    ),
+    "run.keys_hint": "Keys: [p] pause  [r] resume  [q] stop. Ctrl+C also stops.",
+    "run.paused": "Paused. Press r to resume, q to stop.",
+    "run.resumed": "Resumed.",
+    "run.continue_hint": "Continue with: tgmirror run {id}",
+    "run.resumed_elsewhere": "Run {id} was paused in another terminal; it is running again there.",
+    "control.nothing_running": "No clone is running.",
+    "history.empty": "No runs yet. Start with `tgmirror clone`.",
+    "history.title": "Recent runs",
+    "history.col_run": "Run",
+    "history.col_started": "Started",
+    "history.col_pair": "Source → destination",
+    "history.col_status": "Status",
+    "history.col_copied": "Copied",
+    "history.col_failed": "Failed",
+    "history.col_filtered": "Filtered",
+    "history.header": "Run {id}: {src} → {dst}",
+    "history.line_status": "Status:      {status}{note}",
+    "history.line_time": "Started:     {started}   Ended: {ended}",
+    "history.line_counts": (
+        "Result:      {done} copied, {failed} failed, {skipped} left out by the filter"
+    ),
+    "history.line_cursor": "Source:      from id {start} to id {end}",
+    "history.line_filter": "Filter:      {filter}",
+    "history.no_filter": "no filter",
+    "history.failed_title": "Failed messages ({count}):",
+    "history.failed_line": "  · source message {id}: {reason}",
+    "history.failed_more": "  … and more; see --json",
+    "history.floods_title": "Limits from Telegram:",
+    "history.flood_line": "  · {ts} {kind} {seconds}s ({method})",
+    "history.still_running": "running",
+    "err.run_not_found": "No run '{ref}'. See `tgmirror history`.",
+    "err.run_none": "Nothing has been cloned yet. Start with `tgmirror clone`.",
 }
 
 

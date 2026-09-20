@@ -1,4 +1,4 @@
-"""Filters through the CLI: ``new`` flags and wizard, ``--preview``, ``run --refilter``.
+"""Filters through the CLI: ``clone`` flags and wizard, ``--preview``, and a remembered filter.
 
 Same setup as ``test_cli_run.py``: the real Typer app on ``FakeGateway``, a scripted prompter and a
 SQLite file under tmp_path. Parity rule (skill ``cli-wizard``): flags, a YAML file and the wizard
@@ -12,11 +12,11 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from tests.fakes import FakeGateway, ScriptedPrompter
-from tests.unit.test_cli_run import saved_jobs, texts
+from tests.unit.test_cli_run import saved_runs, texts
 from tgmirror.cli.app import app
 from tgmirror.cli.runtime import Runtime
 from tgmirror.core.gateway import MediaKind
-from tgmirror.store.jobs import JobStatus
+from tgmirror.store.runs import RunStatus
 
 runner = CliRunner()
 MakeRuntime = Callable[..., Runtime]
@@ -43,21 +43,21 @@ def tagged_source(gateway: FakeGateway, count: int = 6) -> tuple[int, int]:
 
 
 def filters_of(rt: Runtime) -> dict[str, object]:
-    (job,) = saved_jobs(rt)
-    return json.loads(job.filters_json)
+    (run,) = saved_runs(rt)
+    return json.loads(run.filters_json)
 
 
-# ---- new with flags -------------------------------------------------------------------------
+# ---- clone with flags -------------------------------------------------------------------------
 
 
-def test_the_filter_flags_are_stored_on_the_job(
+def test_the_filter_flags_are_stored_with_the_clone(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     source_and_target(gateway)
     rt = make_runtime(gateway=gateway)
 
     result = runner.invoke(
-        app, ["new", "--src", "Source", "--dst", "Copy", "--yes", *FLAGS], obj=rt
+        app, ["clone", "--src", "Source", "--dst", "Copy", "--yes", *FLAGS], obj=rt
     )
 
     assert result.exit_code == 0, result.output
@@ -70,10 +70,10 @@ def test_no_filter_flags_store_an_empty_filter(
     source_and_target(gateway)
     rt = make_runtime(gateway=gateway)
 
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+    runner.invoke(app, ["clone", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
 
-    (job,) = saved_jobs(rt)
-    assert job.filters_json == "{}" and job.options.pushdown is True
+    (run,) = saved_runs(rt)
+    assert run.filters_json == "{}" and run.options.pushdown is True
 
 
 def test_a_yaml_file_gives_the_same_stored_filter_as_the_flags(
@@ -89,7 +89,7 @@ def test_a_yaml_file_gives_the_same_stored_filter_as_the_flags(
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst", "Copy", "--yes", "--filter-file", str(path)],
+        ["clone", "--src", "Source", "--dst", "Copy", "--yes", "--filter-file", str(path)],
         obj=rt,
     )
 
@@ -108,7 +108,7 @@ def test_a_yaml_file_together_with_flags_is_a_usage_error(
     result = runner.invoke(
         app,
         [
-            "new",
+            "clone",
             "--src",
             "Source",
             "--dst",
@@ -123,7 +123,7 @@ def test_a_yaml_file_together_with_flags_is_a_usage_error(
     )
 
     assert result.exit_code == 2 and "--filter-file" in result.output
-    assert saved_jobs(rt) == []
+    assert saved_runs(rt) == []
 
 
 def test_a_bad_filter_is_refused_before_anything_is_created(
@@ -133,13 +133,13 @@ def test_a_bad_filter_is_refused_before_anything_is_created(
     rt = make_runtime(gateway=gateway)
 
     result = runner.invoke(
-        app, ["new", "--src", "Source", "--dst-new", "Copy", "--yes", "--media", "vidoe"], obj=rt
+        app, ["clone", "--src", "Source", "--dst-new", "Copy", "--yes", "--media", "vidoe"], obj=rt
     )
 
     assert result.exit_code == 2
     assert "Invalid filter" in result.output and "include[0].media[0]" in result.output
     assert gateway.calls_to("create_channel") == [] and gateway.calls_to("list_channels") == []
-    assert saved_jobs(rt) == []
+    assert saved_runs(rt) == []
 
 
 def test_a_missing_filter_file_is_a_usage_error(
@@ -150,7 +150,7 @@ def test_a_missing_filter_file_is_a_usage_error(
     result = runner.invoke(
         app,
         [
-            "new",
+            "clone",
             "--src",
             "Source",
             "--dst",
@@ -165,19 +165,19 @@ def test_a_missing_filter_file_is_a_usage_error(
     assert result.exit_code == 2 and "cannot read" in result.output
 
 
-def test_no_pushdown_is_kept_on_the_job(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
+def test_no_pushdown_is_kept_on_the_run(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
     source_and_target(gateway)
     rt = make_runtime(gateway=gateway)
 
     runner.invoke(
-        app, ["new", "--src", "Source", "--dst", "Copy", "--yes", "--no-pushdown"], obj=rt
+        app, ["clone", "--src", "Source", "--dst", "Copy", "--yes", "--no-pushdown"], obj=rt
     )
 
-    (job,) = saved_jobs(rt)
-    assert job.options.pushdown is False
+    (run,) = saved_runs(rt)
+    assert run.options.pushdown is False
 
 
-def test_a_filtered_job_run_from_the_flags_copies_only_what_matches(
+def test_a_filtered_clone_from_the_flags_copies_only_what_matches(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     _, dst = tagged_source(gateway)
@@ -186,13 +186,12 @@ def test_a_filtered_job_run_from_the_flags_copies_only_what_matches(
     result = runner.invoke(
         app,
         [
-            "new",
+            "clone",
             "--src",
             "Source",
             "--dst",
             "Copy",
             "--yes",
-            "--run",
             "--hashtag",
             "#k",
             "--no-pushdown",
@@ -217,14 +216,14 @@ def test_preview_shows_how_much_matches_and_a_few_examples(
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst", "Copy", "--yes", "--hashtag", "#k", "--preview"],
+        ["clone", "--src", "Source", "--dst", "Copy", "--yes", "--hashtag", "#k", "--preview"],
         obj=rt,
     )
 
     assert result.exit_code == 0, result.output
     assert "Preview: 3 of the first 6 messages" in result.output
     assert "· m1 #k" in result.output and "· m5 #k" in result.output
-    assert len(saved_jobs(rt)) == 1  # a preview without a terminal never blocks
+    assert len(saved_runs(rt)) == 1  # a preview without a terminal never blocks
 
 
 def test_preview_is_off_by_default_without_a_terminal(
@@ -234,7 +233,7 @@ def test_preview_is_off_by_default_without_a_terminal(
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst", "Copy", "--yes", "--hashtag", "#k"],
+        ["clone", "--src", "Source", "--dst", "Copy", "--yes", "--hashtag", "#k"],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -246,7 +245,17 @@ def test_preview_of_an_empty_range_says_so(make_runtime: MakeRuntime, gateway: F
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst", "Copy", "--yes", "--since", "2030-01-01", "--preview"],
+        [
+            "clone",
+            "--src",
+            "Source",
+            "--dst",
+            "Copy",
+            "--yes",
+            "--since",
+            "2030-01-01",
+            "--preview",
+        ],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -273,7 +282,7 @@ def test_the_wizard_stores_the_same_filter_as_the_flags(
     for gw in (flags_gw, wizard_gw):
         source_and_target(gw)
     flags_rt = make_runtime(gateway=flags_gw, root=tmp_path / "flags")
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes", *FLAGS], obj=flags_rt)
+    runner.invoke(app, ["clone", "--src", "Source", "--dst", "Copy", "--yes", *FLAGS], obj=flags_rt)
 
     rt, prompter = wizard_rt(
         make_runtime,
@@ -282,13 +291,14 @@ def test_the_wizard_stores_the_same_filter_as_the_flags(
         select=["Source", "Copy", CRITERIA],
         checkbox=[["video"]],
         text=["#News", "", "2024-01-01", "", "", ""],  # hashtags, keywords, since, until, sizes
-        confirm=[True, False],  # save after the preview, do not run now
+        confirm=[True],  # the one question, after the preview
     )
-    result = runner.invoke(app, ["new"], obj=rt)
+    result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 0, result.output
     assert filters_of(rt) == filters_of(flags_rt) == NEWS_SINCE_2024
-    assert ("confirm", "Save this job?") in prompter.asked
+    assert "Preview" in result.output
+    assert [k for k, _ in prompter.asked if k == "confirm"] == ["confirm"]
 
 
 def test_choosing_no_filter_in_the_wizard_stores_an_empty_one_and_shows_no_preview(
@@ -300,16 +310,16 @@ def test_choosing_no_filter_in_the_wizard_stores_an_empty_one_and_shows_no_previ
         gateway,
         tmp_path / "w",
         select=["Source", "Copy", "No filter"],
-        confirm=[False],
+        confirm=[True],
     )
 
-    result = runner.invoke(app, ["new"], obj=rt)
+    result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 0, result.output
-    (job,) = saved_jobs(rt)
-    assert job.filters_json == "{}"
+    (run,) = saved_runs(rt)
+    assert run.filters_json == "{}"
     assert [k for k, _ in prompter.asked if k == "checkbox"] == []
-    assert "Preview" not in result.output and ("confirm", "Save this job?") not in prompter.asked
+    assert "Preview" not in result.output
 
 
 def test_the_wizard_loads_a_yaml_file(
@@ -324,10 +334,10 @@ def test_the_wizard_loads_a_yaml_file(
         tmp_path / "w",
         select=["Source", "Copy", "Load from a YAML file"],
         text=[f'"{path}"'],  # pasted with quotes, as "Copy as path" gives it
-        confirm=[True, False],
+        confirm=[True],
     )
 
-    result = runner.invoke(app, ["new"], obj=rt)
+    result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 0, result.output
     assert filters_of(rt) == NEWS_SINCE_2024
@@ -344,10 +354,10 @@ def test_the_wizard_asks_again_after_an_invalid_answer(
         select=["Source", "Copy", CRITERIA],
         checkbox=[["video"], ["video"]],
         text=["", "", "last week", "", "", "", "", "", "2024-01-01", "", "", ""],
-        confirm=[True, False],
+        confirm=[True],
     )
 
-    result = runner.invoke(app, ["new"], obj=rt)
+    result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 0, result.output
     assert any("not a date like 2024-01-01" in line for line in prompter.said)
@@ -357,7 +367,7 @@ def test_the_wizard_asks_again_after_an_invalid_answer(
     }
 
 
-def test_declining_the_preview_leaves_nothing_behind(
+def test_declining_after_the_preview_leaves_nothing_behind(
     make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
 ) -> None:
     src = gateway.add_channel("Source")
@@ -369,13 +379,13 @@ def test_declining_the_preview_leaves_nothing_behind(
         select=["Source", CRITERIA],  # no existing destination: it asks for a new one
         checkbox=[[]],
         text=["Copy", "", "#k", "", "", "", "", ""],
-        confirm=[False],  # save after the preview: no
+        confirm=[False],  # the one question, after the preview: no
     )
 
-    result = runner.invoke(app, ["new"], obj=rt)
+    result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 1 and "Preview: 1 of the first 1" in result.output
-    assert gateway.calls_to("create_channel") == [] and saved_jobs(rt) == []
+    assert gateway.calls_to("create_channel") == [] and saved_runs(rt) == []
 
 
 def test_flags_given_on_a_terminal_do_not_start_the_filter_wizard(
@@ -384,12 +394,12 @@ def test_flags_given_on_a_terminal_do_not_start_the_filter_wizard(
     source_and_target(gateway)
     rt, prompter = wizard_rt(make_runtime, gateway, tmp_path / "w", confirm=[False])
 
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy"], obj=rt)
+    runner.invoke(app, ["clone", "--src", "Source", "--dst", "Copy"], obj=rt)
 
     assert [k for k, _ in prompter.asked if k in ("select", "checkbox")] == []
 
 
-# ---- run --refilter -------------------------------------------------------------------------
+# ---- a remembered filter --------------------------------------------------------------------
 
 
 def photo_and_video_source(gateway: FakeGateway) -> tuple[int, int]:
@@ -399,121 +409,113 @@ def photo_and_video_source(gateway: FakeGateway) -> tuple[int, int]:
     return src, dst
 
 
-def test_refilter_replaces_the_filter_and_backfills(
+CLONE = ["clone", "--src", "Source", "--dst", "Copy", "--yes"]
+
+
+def test_cloning_again_with_another_filter_reads_from_the_start_and_copies_nothing_twice(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     _, dst = photo_and_video_source(gateway)
     rt = make_runtime(gateway=gateway)
-    runner.invoke(
-        app,
-        [
-            "new",
-            "--src",
-            "Source",
-            "--dst",
-            "Copy",
-            "--yes",
-            "--run",
-            "--media",
-            "photo",
-            "--no-pushdown",
-        ],
-        obj=rt,
-    )
+    runner.invoke(app, [*CLONE, "--media", "photo", "--no-pushdown"], obj=rt)
     assert texts(gateway, dst) == ["m1", "m3", "m5"]
 
-    result = runner.invoke(app, ["run", "1", "--refilter", "--exclude-media", "sticker"], obj=rt)
+    result = runner.invoke(app, [*CLONE, "--exclude-media", "sticker", "--no-pushdown"], obj=rt)
 
     assert result.exit_code == 0, result.output
-    assert "Replaced the filter of job 1" in result.output
+    assert "The filter changed: reading the source again from the start" in result.output
     assert texts(gateway, dst) == ["m1", "m3", "m5", "m2", "m4", "m6"]  # nothing twice
-    (job,) = saved_jobs(rt)
-    assert json.loads(job.filters_json) == {"exclude": [{"media": ["sticker"]}]}
-    assert (job.status, job.done, job.skipped_filter, job.cursor_src_id) == (
-        JobStatus.DONE,
-        6,
-        0,
-        6,
-    )
+    first, second = saved_runs(rt)
+    assert json.loads(second.filters_json) == {"exclude": [{"media": ["sticker"]}]}
+    assert (second.status, second.done, second.skipped_filter) == (RunStatus.DONE, 3, 0)
+    assert (second.cursor_from, second.cursor_src_id) == (0, 6)
 
 
-def test_refilter_needs_a_filter(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
-    photo_and_video_source(gateway)
-    rt = make_runtime(gateway=gateway)
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
-
-    result = runner.invoke(app, ["run", "1", "--refilter"], obj=rt)
-
-    assert result.exit_code == 2 and "--refilter needs the new filter" in result.output
-
-
-def test_filter_flags_without_refilter_are_refused_not_ignored(
+def test_cloning_again_without_filter_flags_keeps_the_filter_and_reads_only_what_is_new(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
-    photo_and_video_source(gateway)
+    src, dst = tagged_source(gateway, 4)
     rt = make_runtime(gateway=gateway)
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+    runner.invoke(app, [*CLONE, "--hashtag", "#k", "--no-pushdown"], obj=rt)
+    gateway.add_message(src, "m5 #k", hashtags=("#k",))
+    gateway.add_message(src, "m6")
 
-    result = runner.invoke(app, ["run", "1", "--media", "photo"], obj=rt)
+    result = runner.invoke(app, [*CLONE, "--no-pushdown"], obj=rt)
 
-    assert result.exit_code == 2 and "--refilter" in result.output
-    assert filters_of(rt) == {}
-    assert gateway.calls_to("copy_messages") == []
+    assert result.exit_code == 0, result.output
+    assert "Using the filter of the previous run" in result.output
+    assert texts(gateway, dst) == ["m1 #k", "m3 #k", "m5 #k"]
+    first, second = saved_runs(rt)
+    assert second.filters_json == first.filters_json != "{}"
+    assert (second.cursor_from, second.done, second.skipped_filter) == (4, 1, 1)
 
 
-# ---- a pair that already has a job ----------------------------------------------------------
-
-
-def test_a_filter_for_a_pair_that_already_has_a_job_is_refused_up_front_and_says_how_to_change_it(
+def test_no_filter_drops_the_remembered_filter_and_backfills(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
-    """The real-account slip: preview and 'save?' first, 'job exists' last, then `run 1` ran the
-    old unfiltered job. Now it stops before previewing, and names --refilter."""
-    tagged_source(gateway)
+    _, dst = tagged_source(gateway, 4)
     rt = make_runtime(gateway=gateway)
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+    runner.invoke(app, [*CLONE, "--hashtag", "#k", "--no-pushdown"], obj=rt)
 
-    result = runner.invoke(
-        app,
-        ["new", "--src", "Source", "--dst", "Copy", "--media", "video", "--preview"],
-        obj=rt,
-    )
+    result = runner.invoke(app, [*CLONE, "--no-filter", "--no-pushdown"], obj=rt)
 
-    assert result.exit_code == 2
-    assert "Preview" not in result.output  # refused before any read
-    assert "NOT applied" in result.output and "run 1 --refilter" in result.output
-    (job,) = saved_jobs(rt)
-    assert job.filters_json == "{}"
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst) == ["m1 #k", "m3 #k", "m2", "m4"]  # the rest, once each
+    assert saved_runs(rt)[1].filters_json == "{}"
 
 
-def test_without_a_filter_the_existing_job_message_just_says_to_continue_it(
+def test_no_filter_together_with_filter_flags_is_a_usage_error(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     source_and_target(gateway)
     rt = make_runtime(gateway=gateway)
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
 
-    result = runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+    result = runner.invoke(app, [*CLONE, "--no-filter", "--media", "photo"], obj=rt)
 
-    assert result.exit_code == 2
-    assert "run 1" in result.output and "--refilter" not in result.output
+    assert result.exit_code == 2 and "--no-filter" in result.output
+    assert saved_runs(rt) == []
 
 
-def test_the_wizard_stops_before_asking_for_a_filter_when_the_pair_has_a_job(
+def test_the_wizard_offers_to_keep_the_filter_of_a_pair_it_has_seen(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    src, dst = tagged_source(gateway, 4)
+    runner.invoke(
+        app,
+        [*CLONE, "--hashtag", "#k", "--no-pushdown"],
+        obj=make_runtime(gateway=gateway, root=tmp_path / "w"),
+    )
+    gateway.add_message(src, "m5 #k", hashtags=("#k",))
+    rt, prompter = wizard_rt(
+        make_runtime,
+        gateway,
+        tmp_path / "w",
+        select=["Source", "Copy", "Keep the filter of the previous run"],
+        confirm=[True],
+    )
+
+    result = runner.invoke(app, ["clone"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert prompter.select_labels[2][0].startswith("Keep the filter")  # the first choice
+    assert "Preview" not in result.output  # nothing new was chosen to preview
+    first, second = saved_runs(rt)
+    assert second.filters_json == first.filters_json != "{}"
+    assert texts(gateway, dst)[-1] == "m5 #k"
+
+
+def test_the_wizard_does_not_offer_to_keep_a_filter_for_a_new_pair(
     make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
 ) -> None:
     source_and_target(gateway)
-    runner.invoke(
-        app,
-        ["new", "--src", "Source", "--dst", "Copy", "--yes"],
-        obj=make_runtime(gateway=gateway, root=tmp_path / "w"),
-    )
     rt, prompter = wizard_rt(
-        make_runtime, gateway, tmp_path / "w", select=["Source", "Copy"], confirm=[]
+        make_runtime,
+        gateway,
+        tmp_path / "w",
+        select=["Source", "Copy", "No filter"],
+        confirm=[True],
     )
 
-    result = runner.invoke(app, ["new"], obj=rt)
+    runner.invoke(app, ["clone"], obj=rt)
 
-    assert result.exit_code == 2
-    assert [k for k, _ in prompter.asked if k in ("checkbox", "confirm")] == []
-    assert len(prompter.select_labels) == 2  # source and destination, not the filter step
+    assert not any("Keep the filter" in label for label in prompter.select_labels[2])

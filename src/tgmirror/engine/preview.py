@@ -1,4 +1,4 @@
-"""A sample of what a filter would clone, before the job is saved (wizard step 5).
+"""A sample of what a filter would clone, before the clone starts (wizard step 5).
 
 It reads the first ``sample`` messages of the range the filter selects (id and date bounds only:
 narrowing by content would make almost everything match) and judges them with the real matcher.

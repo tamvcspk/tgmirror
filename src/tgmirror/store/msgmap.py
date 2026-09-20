@@ -1,5 +1,9 @@
 """SQL for ``msg_map``. Every function takes an open transaction from ``Store`` (``store/db.py``).
 
+Rows belong to a mirror (the source/destination pair), so a later run of the same pair sees what an
+earlier one copied. ``run_id`` records the run that last wrote the row, which is how ``history``
+shows the failed messages of one run.
+
 The states follow docs/04-state-checkpoint.md: ``pending`` is written *before* Telegram is called
 (write-ahead), and turns ``done`` or ``failed`` in the same transaction that moves the cursor.
 """
@@ -11,7 +15,7 @@ import aiosqlite
 
 from tgmirror.core.errors import StoreError
 from tgmirror.core.gateway import Unit
-from tgmirror.store.jobs import MsgStatus
+from tgmirror.store.runs import FailedMessage, MsgStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,9 +38,9 @@ class PendingRow:
     batch_id: int
 
 
-async def next_batch_id(db: aiosqlite.Connection, job_id: int) -> int:
+async def next_batch_id(db: aiosqlite.Connection, mirror_id: int) -> int:
     cur = await db.execute(
-        "SELECT COALESCE(MAX(batch_id), 0) + 1 FROM msg_map WHERE job_id = ?", (job_id,)
+        "SELECT COALESCE(MAX(batch_id), 0) + 1 FROM msg_map WHERE mirror_id = ?", (mirror_id,)
     )
     row = await cur.fetchone()
     assert row is not None
@@ -44,20 +48,26 @@ async def next_batch_id(db: aiosqlite.Connection, job_id: int) -> int:
 
 
 async def insert_pending(
-    db: aiosqlite.Connection, job_id: int, units: Sequence[Unit], batch_id: int, ts: str
+    db: aiosqlite.Connection,
+    mirror_id: int,
+    run_id: int,
+    units: Sequence[Unit],
+    batch_id: int,
+    ts: str,
 ) -> None:
     """Write-ahead rows. A ``failed`` row from an earlier attempt is reused; ``done`` never is."""
     rows = [
-        (job_id, m.id, m.grouped_id, MsgStatus.PENDING, batch_id, ts)
+        (mirror_id, m.id, m.grouped_id, MsgStatus.PENDING, batch_id, run_id, ts)
         for unit in units
         for m in unit.messages
     ]
     await db.executemany(
-        "INSERT INTO msg_map(job_id, src_msg_id, grouped_id, status, batch_id, ts) "
-        "VALUES(?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(job_id, src_msg_id) DO UPDATE SET "
+        "INSERT INTO msg_map(mirror_id, src_msg_id, grouped_id, status, batch_id, run_id, ts) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(mirror_id, src_msg_id) DO UPDATE SET "
         "  dst_msg_id = NULL, grouped_id = excluded.grouped_id, status = excluded.status, "
-        "  reason = NULL, batch_id = excluded.batch_id, ts = excluded.ts "
+        "  reason = NULL, batch_id = excluded.batch_id, run_id = excluded.run_id, "
+        "  ts = excluded.ts "
         "WHERE msg_map.status != 'done'",
         rows,
     )
@@ -65,14 +75,14 @@ async def insert_pending(
 
 async def finish_batch(
     db: aiosqlite.Connection,
-    job_id: int,
+    mirror_id: int,
     batch_id: int,
     results: Iterable[MessageResult],
     ts: str,
 ) -> tuple[int, int]:
     """Turn a batch's pending rows into ``done``/``failed``; returns ``(done, failed)`` counts."""
     results = list(results)
-    expected = {r.src_msg_id for r in await pending_rows(db, job_id, batch_id)}
+    expected = {r.src_msg_id for r in await pending_rows(db, mirror_id, batch_id)}
     if {r.src_id for r in results} != expected or len(results) != len(expected):
         raise StoreError(f"results do not match the pending rows of batch {batch_id}")
     done = failed = 0
@@ -83,70 +93,86 @@ async def finish_batch(
             status, failed = MsgStatus.FAILED, failed + 1
         await db.execute(
             "UPDATE msg_map SET status = ?, dst_msg_id = ?, reason = ?, ts = ? "
-            "WHERE job_id = ? AND src_msg_id = ?",
-            (status, r.dst_id, r.reason, ts, job_id, r.src_id),
+            "WHERE mirror_id = ? AND src_msg_id = ?",
+            (status, r.dst_id, r.reason, ts, mirror_id, r.src_id),
         )
     return done, failed
 
 
 async def pending_rows(
-    db: aiosqlite.Connection, job_id: int, batch_id: int | None = None
+    db: aiosqlite.Connection, mirror_id: int, batch_id: int | None = None
 ) -> list[PendingRow]:
     sql = (
         "SELECT src_msg_id, grouped_id, batch_id FROM msg_map "
-        "WHERE job_id = ? AND status = 'pending'"
+        "WHERE mirror_id = ? AND status = 'pending'"
     )
-    params: tuple[int, ...] = (job_id,)
+    params: tuple[int, ...] = (mirror_id,)
     if batch_id is not None:
         sql += " AND batch_id = ?"
-        params = (job_id, batch_id)
+        params = (mirror_id, batch_id)
     cur = await db.execute(sql + " ORDER BY src_msg_id", params)
     return [PendingRow(r[0], r[1], r[2]) for r in await cur.fetchall()]
 
 
 async def delete_pending(
-    db: aiosqlite.Connection, job_id: int, batch_id: int | None = None
+    db: aiosqlite.Connection, mirror_id: int, batch_id: int | None = None
 ) -> None:
-    sql = "DELETE FROM msg_map WHERE job_id = ? AND status = 'pending'"
-    params: tuple[int, ...] = (job_id,)
+    sql = "DELETE FROM msg_map WHERE mirror_id = ? AND status = 'pending'"
+    params: tuple[int, ...] = (mirror_id,)
     if batch_id is not None:
         sql += " AND batch_id = ?"
-        params = (job_id, batch_id)
+        params = (mirror_id, batch_id)
     await db.execute(sql, params)
 
 
 async def confirm_pending(
-    db: aiosqlite.Connection, job_id: int, mapping: dict[int, int], ts: str
+    db: aiosqlite.Connection, mirror_id: int, run_id: int, mapping: dict[int, int], ts: str
 ) -> None:
     """Reconcile: pending rows whose copy was found in the destination become ``done``."""
-    expected = {r.src_msg_id for r in await pending_rows(db, job_id)}
+    expected = {r.src_msg_id for r in await pending_rows(db, mirror_id)}
     if set(mapping) != expected:
         raise StoreError("reconcile mapping does not cover exactly the pending rows")
     for src_id, dst_id in mapping.items():
         await db.execute(
-            "UPDATE msg_map SET status = 'done', dst_msg_id = ?, reason = NULL, ts = ? "
-            "WHERE job_id = ? AND src_msg_id = ?",
-            (dst_id, ts, job_id, src_id),
+            "UPDATE msg_map SET status = 'done', dst_msg_id = ?, reason = NULL, run_id = ?, "
+            "ts = ? WHERE mirror_id = ? AND src_msg_id = ?",
+            (dst_id, run_id, ts, mirror_id, src_id),
         )
 
 
-async def done_ids(db: aiosqlite.Connection, job_id: int, ids: Sequence[int]) -> set[int]:
+async def done_ids(db: aiosqlite.Connection, mirror_id: int, ids: Sequence[int]) -> set[int]:
     if not ids:
         return set()
     marks = ",".join("?" * len(ids))
     cur = await db.execute(
-        f"SELECT src_msg_id FROM msg_map WHERE job_id = ? AND status = 'done' "  # noqa: S608
+        f"SELECT src_msg_id FROM msg_map WHERE mirror_id = ? AND status = 'done' "  # noqa: S608
         f"AND src_msg_id IN ({marks})",
-        (job_id, *ids),
+        (mirror_id, *ids),
     )
     return {r[0] for r in await cur.fetchall()}
 
 
-async def last_done_dst_id(db: aiosqlite.Connection, job_id: int) -> int:
+async def last_done_dst_id(db: aiosqlite.Connection, mirror_id: int) -> int:
     cur = await db.execute(
-        "SELECT COALESCE(MAX(dst_msg_id), 0) FROM msg_map WHERE job_id = ? AND status = 'done'",
-        (job_id,),
+        "SELECT COALESCE(MAX(dst_msg_id), 0) FROM msg_map WHERE mirror_id = ? AND status = 'done'",
+        (mirror_id,),
     )
     row = await cur.fetchone()
     assert row is not None
     return int(row[0])
+
+
+async def failed_of_run(
+    db: aiosqlite.Connection, run_id: int, limit: int | None = None
+) -> list[FailedMessage]:
+    """The messages a run left ``failed`` (rows a later run picked up again are not listed)."""
+    sql = (
+        "SELECT src_msg_id, COALESCE(reason, '') FROM msg_map "
+        "WHERE run_id = ? AND status = 'failed' ORDER BY src_msg_id"
+    )
+    params: tuple[int, ...] = (run_id,)
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (run_id, limit)
+    cur = await db.execute(sql, params)
+    return [FailedMessage(r[0], r[1]) for r in await cur.fetchall()]

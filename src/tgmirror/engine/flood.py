@@ -8,7 +8,7 @@
 - ``reader`` wraps the gateway's ``iter_messages`` the same way: it paces every read request and,
   after a FloodWait, carries on from the last message it handed out.
 - A wait longer than ``max_auto_wait`` (unless ``wait``) or too many floods in a row on one call
-  are not slept through: the FloodWait propagates and the runner parks the job as
+  are not slept through: the FloodWait propagates and the runner parks the run as
   ``waiting_flood``. PeerFlood is logged and propagates at once; it is never retried.
 
 Every sleep goes through ``nap``, which raises ``Interrupted`` when a pause/stop is requested, so
@@ -25,11 +25,11 @@ from tgmirror.core.errors import FloodWait, PeerFlood
 from tgmirror.core.gateway import NO_FILTER, MessageReader, ServerFilter, SrcMessage
 from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.store.db import Store
-from tgmirror.store.jobs import Job
+from tgmirror.store.runs import Run
 
 T = TypeVar("T")
 
-# Telegram keeps refusing the very same call: stop rather than sleep in a loop. The job is parked
+# Telegram keeps refusing the very same call: stop rather than sleep in a loop. The run is parked
 # and a later run tries again.
 MAX_FLOODS_PER_CALL = 5
 
@@ -48,7 +48,7 @@ class FloodGuard:
         *,
         limiter: Limiter,
         store: Store,
-        job: Job,
+        run: Run,
         limits: Limits,
         notifier: Notifier,
         nap: Sleep,
@@ -57,7 +57,7 @@ class FloodGuard:
     ) -> None:
         self._limiter = limiter
         self._store = store
-        self._job = job
+        self._run = run
         self._limits = limits
         self._notifier = notifier
         self._nap = nap
@@ -106,11 +106,11 @@ class FloodGuard:
         await self._log(method, "slow_mode" if exc.slow_mode else "flood_wait", exc.seconds)
         throttled = self._limiter.throttle
         self._limiter.on_flood()
-        await self._store.save_limiter_state(self._job.account, self._limiter.state)
+        await self._store.save_limiter_state(self._run.account, self._limiter.state)
         if self._limiter.throttle > throttled:
             self._notifier.notice(
                 "throttled",
-                batch_size=self._limiter.batch_size(self._job.options.batch_size),
+                batch_size=self._limiter.batch_size(self._run.options.batch_size),
                 delay=round(self._limiter.delay, 1),
             )
         if give_up or (exc.seconds > self._limits.max_auto_wait and not self._wait):
@@ -125,12 +125,12 @@ class FloodGuard:
     async def _log(self, method: str, kind: str, seconds: int | None) -> None:
         """One ``flood_log`` row; its delay is the one that led to the flood, before backing off."""
         await self._store.log_flood(
-            self._job.id,
+            self._run.id,
             kind=kind,
             seconds=seconds,
             method=method,
             delay_ms=int(self._limiter.delay * 1000),
-            batch_size=self._limiter.batch_size(self._job.options.batch_size),
+            batch_size=self._limiter.batch_size(self._run.options.batch_size),
         )
 
 

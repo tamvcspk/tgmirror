@@ -1,7 +1,9 @@
-"""``tgmirror new``: choose the source, the destination and the filter, then save the job.
+"""``tgmirror clone``: choose the source, the destination and the filter, then copy, right now.
 
-Wizard steps 1-3 (source, destination, filter), the preview of step 5 and the "run it now?"
-question. The options step (4) arrives with later phases; until then a job uses the defaults.
+Wizard steps 1-3 (source, destination, filter), the preview of step 5 and one confirmation, then
+the clone runs in the foreground like any other command: no background process, no schedule, and
+Ctrl+C ends it with the progress saved. Cloning the same pair again copies only what is newer
+(delta) with the filter of the previous run; the options step (4) arrives with later phases.
 """
 
 from typing import Annotated
@@ -31,17 +33,25 @@ from tgmirror.core.gateway import ChannelInfo, TelegramGateway
 from tgmirror.engine import preview
 from tgmirror.engine.endpoints import (
     NewChannelSpec,
+    Plan,
     find_channel,
     materialize,
     plan_endpoints,
 )
-from tgmirror.engine.jobs import SUPPORTED_MODES, JobExists, ModeUnsupported, NewJob, create_job
+from tgmirror.engine.runs import (
+    SUPPORTED_MODES,
+    ModeUnsupported,
+    RunRequest,
+    begin_run,
+    check_runnable,
+)
 from tgmirror.filters.model import FilterSpec
+from tgmirror.store.db import utc_now
 from tgmirror.ui.messages import t
 from tgmirror.ui.tables import channel_label
 
 
-def new(
+def clone(
     ctx: typer.Context,
     src: Annotated[
         str | None,
@@ -57,9 +67,6 @@ def new(
         typer.Option("--dst-new", help="Create a new destination channel with this title."),
     ] = None,
     about: Annotated[str, typer.Option("--about", help="Description of the new channel.")] = "",
-    name: Annotated[
-        str | None, typer.Option("--name", help='Job name (default: "<source> → <destination>").')
-    ] = None,
     mode: Annotated[
         str,
         typer.Option("--mode", help="auto or copy (server-side copy); reupload comes in phase 6."),
@@ -85,6 +92,14 @@ def new(
     max_size: MaxSizeOption = None,
     album: AlbumOption = None,
     filter_file: FilterFileOption = None,
+    no_filter: Annotated[
+        bool,
+        typer.Option(
+            "--no-filter",
+            help="Drop the filter remembered from an earlier clone of this pair and copy "
+            "everything (the source is read again from the start; nothing is copied twice).",
+        ),
+    ] = False,
     pushdown: Annotated[
         bool,
         typer.Option(
@@ -101,21 +116,36 @@ def new(
             "a filter is set and --yes is not given).",
         ),
     ] = None,
-    run_now: Annotated[
-        bool | None,
-        typer.Option("--run/--no-run", help="Run the job right after saving it (default: ask)."),
-    ] = None,
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait",
+            help="Sit out a FloodWait of any length instead of saving progress and exiting "
+            "(waits longer than [limits] max_auto_wait normally end the run). "
+            "Does not apply to the daily cap.",
+        ),
+    ] = False,
+    force_takeover: Annotated[
+        bool,
+        typer.Option(
+            "--force-takeover",
+            help="Run even if another process seems to hold this clone (only if it is dead).",
+        ),
+    ] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
 ) -> None:
-    """Pick a source, a destination (existing, or newly created) and a filter; save the job.
+    """Clone a source into a destination (existing, or newly created) and start copying now.
 
-    Without --src/--dst/--dst-new it asks; with them it never prompts.
+    Without --src/--dst/--dst-new it asks; with them it never prompts (only a new channel needs
+    --yes when there is no terminal). Ctrl+C stops it, saving progress; `tgmirror run` continues.
+    Cloning the same pair again copies only what is newer, with the same filter unless you give
+    another one (then the source is read again from the start; nothing is copied twice).
 
-    The job only runs if you say so (--run, or yes to the question); else `tgmirror run <job>`.
+    Keys while it runs: p pause, r resume, q stop.
 
-    Example: tgmirror new --src "@my_channel" --dst-new "My channel (copy)" --yes --run
+    Example: tgmirror clone --src "@my_channel" --dst-new "My channel (copy)" --yes
 
-    With a filter: tgmirror new --src "@my_channel" --dst-new "Videos" --media video
+    With a filter: tgmirror clone --src "@my_channel" --dst-new "Videos" --media video
     --hashtag "#news" --since 2024-01-01 --yes
 
     In PowerShell keep the quotes around @names: an unquoted @name is dropped by the shell.
@@ -141,6 +171,10 @@ def new(
             album=album,
             filter_file=filter_file,
         )  # a bad filter is a usage error before anything is asked or written
+        if no_filter:
+            if filters is not None:
+                raise UsageProblem("err.conflicting_flags", flags="--no-filter / filter flags")
+            filters = FilterSpec()
 
         async with authorized(rt) as conn:
             channels = await conn.gateway.list_channels()
@@ -168,37 +202,41 @@ def new(
             for code in plan.warnings:
                 typer.echo(t(f"warn.{code}"), err=True)
 
-            if isinstance(plan.dst, ChannelInfo):  # fail before previewing or asking anything
-                async with opened_store(rt) as store:
-                    if (old := await store.find_job_for_pair(plan.src.id, plan.dst.id)) is not None:
-                        raise JobExists(old, refilter=filters is not None and not filters.is_empty)
-
-            if filters is None:  # no flags: the wizard asks, but only if it asked for the rest too
-                asked = (
-                    rt.interactive and not yes and (src is None or (dst is None and not dst_new))
-                )
-                filters = await wizard.pick_filters(rt.prompter) if asked else FilterSpec()
-            await _preview(rt, conn.gateway, source, filters, preview_flag, yes, pushdown)
-
-            if isinstance(plan.dst, NewChannelSpec):
-                await _confirm_creation(rt, plan.dst, yes)
-
+            seen_before = False
             async with opened_store(rt) as store:
+                if isinstance(plan.dst, ChannelInfo):  # fail before previewing or asking anything
+                    if (last := await store.latest_run(plan.src.id, plan.dst.id)) is not None:
+                        check_runnable(last, utc_now())
+                    seen_before = await store.find_mirror(plan.src.id, plan.dst.id) is not None
+
+                if filters is None:  # no flags: the wizard asks, but only if it asked for the rest
+                    asked = (
+                        rt.interactive
+                        and not yes
+                        and (src is None or (dst is None and not dst_new))
+                    )
+                    if asked:
+                        filters = await wizard.pick_filters(rt.prompter, can_keep=seen_before)
+                if filters is not None:
+                    await _preview(rt, conn.gateway, source, filters, preview_flag, yes, pushdown)
+                await _confirm_start(rt, plan, yes)
+
                 endpoints = await materialize(conn.gateway, plan)
-                typer.echo(t("new.src", channel=channel_label(endpoints.src)))
-                key = "new.dst_created" if endpoints.created else "new.dst"
+                typer.echo(t("clone.src", channel=channel_label(endpoints.src)))
+                key = "clone.dst_created" if endpoints.created else "clone.dst"
                 typer.echo(t(key, channel=channel_label(endpoints.dst)))
 
-                options = NewJob(
-                    name, mode, batch_size or rt.config().limits.batch_size, filters, pushdown
+                request = RunRequest(
+                    mode=mode,
+                    batch_size=batch_size or rt.config().limits.batch_size,
+                    pushdown=pushdown,
+                    filters_json=None if filters is None else filters.to_json(),
+                    force=force_takeover,
                 )
-                job = await create_job(store, conn.gateway, endpoints, options)
-                typer.echo(t("new.saved", id=job.id, name=job.name))
-
-                if await _run_now(rt, run_now, yes):
-                    await execute(rt, store, conn.gateway, job)
-                else:
-                    typer.echo(t("new.run_hint", id=job.id))
+                started = await begin_run(
+                    store, conn.gateway, endpoints.src, endpoints.dst, request
+                )
+                await execute(rt, store, conn.gateway, started, wait=wait)
 
     run(rt, command())
 
@@ -212,41 +250,40 @@ async def _preview(
     yes: bool,
     pushdown: bool,
 ) -> None:
-    """Wizard step 5: a sample of what the filter selects, and (on a terminal) a last yes/no.
+    """Wizard step 5: a sample of what the filter selects.
 
     Shown when asked for with ``--preview``, or by default on a terminal with a filter and no
-    ``--yes``. Declining leaves nothing behind: it runs before any channel is created.
+    ``--yes``. It runs before anything is created, so declining the confirmation that follows
+    leaves nothing behind.
     """
     shown = flag if flag is not None else (rt.interactive and not yes and not spec.is_empty)
     if not shown:
         return
     result = await preview.sample(gateway, source.id, spec, pushdown=pushdown)
     if result.scanned == 0:
-        typer.echo(t("new.preview_empty"))
+        typer.echo(t("clone.preview_empty"))
     else:
-        typer.echo(t("new.preview", matched=result.matched, scanned=result.scanned))
+        typer.echo(t("clone.preview", matched=result.matched, scanned=result.scanned))
         for text in result.examples:
-            typer.echo(t("new.preview_example", text=text))
-    if rt.interactive and not yes and not await rt.prompter.confirm(t("new.confirm_save")):
-        typer.echo(t("err.aborted"), err=True)
-        raise typer.Exit(1)
+            typer.echo(t("clone.preview_example", text=text))
 
 
-async def _confirm_creation(rt: Runtime, spec: NewChannelSpec, yes: bool) -> None:
-    """Creating a channel is a write on the user's account: confirm unless ``--yes``."""
+async def _confirm_start(rt: Runtime, plan: Plan, yes: bool) -> None:
+    """The one question before copying starts. ``--yes`` skips it; with no terminal it is not
+    asked, except that creating a channel (a write on the account) then needs ``--yes``."""
+    new_channel = isinstance(plan.dst, NewChannelSpec)
     if yes:
         return
     if not rt.interactive:
-        raise UsageProblem("err.needs_yes", flag="--yes")
-    if not await rt.prompter.confirm(t("new.confirm_create", title=spec.title)):
+        if new_channel:
+            raise UsageProblem("err.needs_yes", flag="--yes")
+        return
+    target = (
+        t("clone.dst_will_be_created", title=plan.dst.title)
+        if isinstance(plan.dst, NewChannelSpec)
+        else channel_label(plan.dst)
+    )
+    question = t("clone.confirm_start", src=channel_label(plan.src), dst=target)
+    if not await rt.prompter.confirm(question):
         typer.echo(t("err.aborted"), err=True)
         raise typer.Exit(1)
-
-
-async def _run_now(rt: Runtime, flag: bool | None, yes: bool) -> bool:
-    """``--run``/``--no-run`` decide; otherwise ask on a terminal, never run unasked."""
-    if flag is not None:
-        return flag
-    if yes or not rt.interactive:
-        return False
-    return await rt.prompter.confirm(t("new.confirm_run"), default=False)

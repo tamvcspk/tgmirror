@@ -1,4 +1,5 @@
-"""Plain-line progress for ``tgmirror run`` (implements ``engine.runner.Reporter``).
+"""Plain-line progress for ``tgmirror clone`` and ``tgmirror run``
+(implements ``engine.runner.Reporter``).
 
 Works without a terminal: no ANSI, one line at most every ``interval`` seconds, and notices
 (reconcile results, flood stop) always. The Rich live view with keys is phase 7
@@ -9,7 +10,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from tgmirror.store.jobs import Job
+from tgmirror.store.runs import Run
 from tgmirror.ui.messages import t
 
 
@@ -36,19 +37,19 @@ class LineReporter:
     def notice(self, code: str, **params: object) -> None:
         self._emit(t(f"run.{code}", **{k: _plain(v) for k, v in params.items()}))
 
-    def progress(self, job: Job) -> None:
+    def progress(self, run: Run) -> None:
         now = self._clock()
         if self._last is not None and now - self._last < self._interval:
             return
         self._last = now
-        key = "run.progress_filtered" if job.skipped_filter else "run.progress"
+        key = "run.progress_filtered" if run.skipped_filter else "run.progress"
         self._emit(
             t(
                 key,
-                id=job.id,
-                done=job.done,
-                skipped=job.skipped_filter,
-                failed=job.failed,
-                cursor=job.cursor_src_id,
+                id=run.id,
+                done=run.done,
+                skipped=run.skipped_filter,
+                failed=run.failed,
+                cursor=run.cursor_src_id,
             )
         )

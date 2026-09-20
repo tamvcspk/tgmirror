@@ -9,7 +9,8 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 - [x] Phase 2 — Copy + state + pause/resume (2026-09-20; đã chạy được trên Telegram thật với kênh cho phép forward, kênh `noforwards` mới thử phía không phải admin, xem "Phase 2 — ghi chú")
 - [x] Phase 3 — Filters (2026-09-20; pushdown và cơ chế giữ album nguyên vẹn được kiểm bằng `FakeGateway`, chưa thử trên Telegram thật, xem "Phase 3 — ghi chú")
 - [x] Phase 4 — Limiter & flood (2026-09-20; kịch bản flood được kiểm bằng `FakeGateway` và đồng hồ giả, chưa gặp FloodWait thật, xem "Phase 4 — ghi chú")
-- [ ] Phase 5 — Delta sync
+- [x] Tái thiết luồng job (2026-09-20): `clone` chạy ngay và Ctrl+C dừng, nhật ký lần chạy (`history`) thay cho job, chạy lại cùng cặp là delta, pause tại chỗ + phím `p`/`r`/`q` (xem "Tái thiết luồng job")
+- [ ] Phase 5 — `retry`, `status` (delta đã có từ việc tái thiết)
 - [ ] Phase 6 — Reupload
 - [ ] Phase 7 — TUI, doctor, đóng gói
 - [ ] Phase 8 — Group, supergroup, forum topics
@@ -23,11 +24,34 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 | 2 | Strategy A (copy) + SQLite state + pause/resume/stop; album; reconcile pending | Kill giữa chừng rồi resume không trùng/sót (test) |
 | 3 | Filters: media/hashtag/regex/date/id/size + server pushdown | Bộ test filter + so sánh pushdown vs full-scan |
 | 4 | Limiter AIMD, FloodWait handler, PeerFlood, daily cap, long pause, `flood_log` | Test với FakeGateway kịch bản flood |
-| 5 | `tgmirror sync` (delta), `sync --all`, `retry`, `status`, `jobs` | Delta chỉ lấy tin mới |
+| 5 | `tgmirror retry`, `status` (delta đã làm bằng `clone`/`run` chạy lại; `sync`, `sync --all`, `jobs`, `rm` bỏ hẳn vì không còn job) | `retry` thử lại đúng các tin `failed`; `status` cho thấy tiến độ, tốc độ, ETA |
 | 6 | Strategy B (reupload) cho admin-owned `noforwards`/biến đổi caption; uploader song song | Clone kênh thử có video lớn |
-| 7 | TUI đẹp hơn, `doctor`, đóng gói (pipx/uv tool), tài liệu người dùng | Cài được bằng một lệnh |
+| 7 | Giao diện Rich (xem tiến độ, chạy/dừng/chạy lại; các phím `p`/`r`/`q` và `RunControl` đã có), `doctor`, đóng gói (pipx/uv tool), tài liệu người dùng | Cài được bằng một lệnh |
 | 8 | Nguồn group/supergroup/forum: `ChatKind`, ánh xạ topic (`topic_map`), forward vào topic đích, filter `topic`/`from_user` | Clone thử một forum có nhiều topic, đúng topic và đúng thứ tự trong từng topic |
 | 9+ | Đồng bộ edit/delete | Theo nhu cầu |
+
+### Tái thiết luồng job (2026-09-20)
+
+Lý do: `new` chỉ lưu một "job" rồi bắt người dùng gõ thêm `tgmirror run <job>`; "chạy tay" phải nghĩa là gõ một lệnh như mọi lệnh khác (foreground, không chạy nền, không lên lịch, Ctrl+C là dừng), chứ không phải gõ hai lệnh. Người dùng cũng không muốn quản lý job: chỉ cần nhật ký các lần chạy, và chạy lại cùng cặp thì là delta. Các ghi chú Phase 2–4 dưới đây viết theo mô hình job (`new`, `run <job>`, `--refilter`, `sync`); bản hiện hành là mục này và `02-cli-ux.md`, `04-state-checkpoint.md`.
+
+Đã có:
+
+- **`tgmirror clone`** (thay `new`): wizard hoặc cờ, xem trước, **một** câu xác nhận, rồi sao chép ngay. Bỏ `--name`, `--run/--no-run`, `JobExists`.
+- **Nhật ký + điểm kiểm tra**: bảng `jobs` tách thành `runs` (nhật ký, người dùng thấy qua `history`) và `mirrors` (con trỏ, filter nhớ, `dst_base_id` của một cặp; người dùng không thấy). Không có migration: dự án chưa phát hành nên schema mới thay thẳng `schema.sql`, DB cũ bị xóa.
+- **Chạy lại = delta; filter được nhớ**: không cờ lọc → dùng lại filter và chỉ lấy tin mới; filter khác → quét lại từ đầu bỏ qua tin đã sao chép (thay `--refilter`); `--no-filter` bỏ filter cũ.
+- **`run [n]`, `pause`, `stop`** giữ lại nhưng nhắm vào lần chạy (không còn id/tên job); `history [n] [--json]` mới.
+- **Pause tại chỗ**: tiến trình vẫn sống và giữ terminal, heartbeat vẫn ghi; `p`/`r`/`q` (phím thường vì VS Code nuốt Ctrl+P/Ctrl+R; `cli/keys.py`), Ctrl+C như cũ. Tất cả cùng đi vào `RunControl` để giao diện Rich sau này cắm vào.
+
+Các lựa chọn khi làm (không phải D1–D9; D5 đổi lý do, xem nhật ký quyết định):
+
+- **Vẫn phải có trạng thái theo cặp**: delta cần con trỏ, crash-safety cần `msg_map` ghi trước và `dst_base_id`; không suy ra được từ nhật ký mà không quét lại cả hai kênh. "Không lưu job" = không có thực thể để quản lý, không phải không có trạng thái.
+- **`q` thoát mã 0** (như `stop`), chỉ Ctrl+C thoát 130.
+- **Pause có hiệu lực ở ranh giới batch**, không cắt ngang lúc chờ FloodWait (stop thì cắt ngang được).
+- **Bộ đếm là của từng lần chạy**: con trỏ và `msg_map` là của cả cặp, nhưng `done/failed/skipped_filter` của `history` chỉ gồm việc lần đó làm.
+- **`sync`, `sync --all`, `jobs`, `rm` bỏ khỏi lộ trình** (không còn job để liệt kê hay xóa; `run` chính là `sync`). `retry` và `status` vẫn ở Phase 5.
+- **Run bị bỏ rơi** (heartbeat cũ hơn 2 phút) được ghi `failed('interrupted')` khi lần sau chạy cặp đó; `--force-takeover` ghi run cũ là `failed('taken_over')`.
+
+Chưa kiểm chứng (người dùng chạy tay): hai bộ đọc phím thật (`msvcrt` trên Windows Terminal/PowerShell, `termios` trên POSIX) chỉ được kiểm bằng script giả; pause/resume tại chỗ qua terminal thứ hai.
 
 ### Phase 1 — ghi chú
 
@@ -116,7 +140,7 @@ Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đ�
 |---|---|---|
 | Nguồn là supergroup/group hay chỉ broadcast? | Tất cả: broadcast, supergroup, group, forum | `00-tong-quan.md` (mục tiêu), `01-kien-truc.md` |
 | Forum: ánh xạ topic → topic ở đích? | Có | `01-kien-truc.md`, `04-state-checkpoint.md` (`topic_map`) |
-| Chế độ chạy nền (daemon)? | Không. Chỉ `sync` chạy tay | `00-tong-quan.md` (không phải mục tiêu) |
+| Chế độ chạy nền (daemon)? | Không, không lên lịch. Chỉ chạy tay: `clone`/`run` chạy ngay trong terminal (lúc đó gọi là `sync`, nay là chạy lại) | `00-tong-quan.md` (không phải mục tiêu) |
 | Nhiều account? | Không, một account | `00-tong-quan.md` (không phải mục tiêu) |
 | Tên PyPI/GitHub còn trống? | Không (`twingram` đã bị chiếm). Chọn **tgmirror** | `00-tong-quan.md` (Tên dự án) |
 | Poll/quiz/location/contact/invoice/game khi copy? | Location/contact: giữ. Poll: giữ nhưng mất vote (opt-in `--reset-polls`). Quiz: giữ nếu đã trả lời. Game/invoice: bỏ + cảnh báo (`--ignore-unsupported`) | `01-kien-truc.md`, `02-cli-ux.md`, `04-state-checkpoint.md` |
@@ -127,6 +151,8 @@ Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đ�
 ## Nhật ký quyết định
 
 Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và lý do ở đây.
+
+- 2026-09-20: Bỏ khái niệm job (xem "Tái thiết luồng job"). `clone` chạy ngay trong foreground; chỉ lưu nhật ký các lần chạy (`runs`) cộng một điểm kiểm tra ẩn theo cặp (`mirrors`); chạy lại cùng cặp là delta, filter được nhớ; `run`/`pause`/`stop` giữ nhưng nhắm vào lần chạy; pause giữ tại chỗ; phím `p`/`r`/`q`. D5 (một file SQLite) giữ nguyên, chỉ đổi lý do ("`tgmirror jobs` đơn giản" → "`tgmirror history` đơn giản"). Không viết migration từ `jobs` (dự án đang phát triển, người dùng chọn xóa DB cũ). Đảo ngược quyết định "mỗi cặp một job, cặp đã có job thì mã 2" (commit 9ed8509): cùng một cặp giờ là trường hợp delta. Người dùng đã duyệt kế hoạch trước khi viết mã.
 
 - 2026-09-19: Đổi tên dự án `twingram` → **tgmirror** (package `tgmirror`, lệnh `tgmirror`, DB `tgmirror.db`, biến môi trường `TGMIRROR_API_ID`/`TGMIRROR_API_HASH`), vì `twingram` đã bị chiếm trên PyPI/GitHub. Lệnh `twin` bỏ hẳn, không giữ alias.
 - 2026-09-19: Mở rộng phạm vi v1 từ "chỉ broadcast" sang mọi loại nguồn (broadcast, supergroup, group, forum) kèm ánh xạ topic; thành phase 8. Không phải D1–D9 nhưng đổi danh sách "không phải mục tiêu". Ngược lại chốt **không** làm daemon và **không** làm multi-account.

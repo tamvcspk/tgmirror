@@ -22,7 +22,7 @@ Các điểm đã chốt khi làm phase 3 (không phải D1–D9):
 - **Thiếu thuộc tính thì predicate sai**, kể cả `max`: `size`/`duration`/`mime` của tin chỉ có chữ, `views` của tin trong group. Nên `exclude: {size: {min: 2GB}}` vẫn giữ tin chữ, còn `include: {size: {max: 10MB}}` loại tin chữ.
 - **`date` là nửa mở `[from, to)`**, UTC (ngày không kèm giờ = 00:00 UTC; giờ không kèm múi giờ coi là UTC), nên một năm là `2024-01-01` → `2025-01-01`. **`id` tính cả hai đầu.** Unit được xét theo **tin đầu tiên** của nó (id và date).
 - Rule rỗng (`{}`) bị từ chối, vì làm `include` thì khớp tất cả, làm `exclude` thì loại tất cả. Khóa lạ cũng bị từ chối (báo đúng vị trí, ví dụ `include[0].media[1]`).
-- Filter được kiểm tra khi tạo job: regex sai, đơn vị thiếu, ngày sai... đều là lỗi mã 2, chưa có gì bị ghi.
+- Filter được kiểm tra trước khi chạy: regex sai, đơn vị thiếu, ngày sai... đều là lỗi mã 2, chưa có gì bị ghi.
 
 ## Predicate
 
@@ -31,7 +31,7 @@ Các điểm đã chốt khi làm phase 3 (không phải D1–D9):
 | `media` | `photo video audio voice document gif sticker video_note poll geo contact game invoice webpage text` | `text` = tin chỉ có chữ (tin có link preview là `webpage`; muốn cả hai: `[text, webpage]`). `document` = tệp không thuộc loại nào khác, cùng các loại lạ (dice, ...). Loại `game`/`invoice` chủ yếu để `--exclude-media` |
 | `hashtag` | list `"#tag"` (một chuỗi = list một phần tử) | Khớp entity `MessageEntityHashtag` (không phải `#` trong text), không phân biệt hoa/thường, nguyên thẻ (`#news` không khớp `#newsletter`), any-of. Chấp nhận có hoặc không có `#`, lưu dạng `#chữthường`. `#tag@kênh` trong group chỉ lấy `#tag` |
 | `contains` | list chuỗi | Trên text + caption, chuỗi con, không phân biệt hoa/thường, any-of |
-| `regex` | pattern | Trên text + caption. Thư viện `regex` (không phải `re`), tìm kiếm (`search`, không cần khớp cả chuỗi), phân biệt hoa/thường (dùng `(?i)`). Biên dịch khi tạo filter; mỗi lần tìm có timeout 0,5 giây: quá hạn thì job dừng `failed` với lỗi filter nêu id tin và pattern (không bỏ tin âm thầm). Ghi chú: `regex` tự tối ưu vài mẫu kinh điển như `(a+)+$` |
+| `regex` | pattern | Trên text + caption. Thư viện `regex` (không phải `re`), tìm kiếm (`search`, không cần khớp cả chuỗi), phân biệt hoa/thường (dùng `(?i)`). Biên dịch khi tạo filter; mỗi lần tìm có timeout 0,5 giây: quá hạn thì lần chạy dừng `failed` với lỗi filter nêu id tin và pattern (không bỏ tin âm thầm). Ghi chú: `regex` tự tối ưu vài mẫu kinh điển như `(a+)+$` |
 | `has_caption` | bool | `true` khi text/caption khác rỗng (tin chữ cũng có) |
 | `size` | `{min,max}` (`500MB`, `2GB`) | Kích thước file media, byte, `1KB` = 1024 B. **Bắt buộc có đơn vị** (số trần bị từ chối); lưu trong DB dạng `"<byte>B"`. Ảnh: thumbnail lớn nhất, xấp xỉ |
 | `duration` | `{min,max}` | Video/audio/voice. Số giây, hoặc `90s`, `5m`, `1h30m` |
@@ -83,12 +83,18 @@ Nhiều rule OR hoặc `regex`/`contains` → không đẩy phần đó (quét �
 
 Ghép cờ thành filter: các cờ "dương" (`--media`, `--hashtag`, `--contains`, `--regex`, `--min-size`, `--max-size`) tạo **một** rule `include` (AND); mỗi cờ `--exclude-*` là **một rule `exclude` riêng** (OR). Việc phức tạp hơn (nhiều rule include, `mime`, `duration`, `views`, `id`, `has_caption`) dùng YAML. Wizard thu thập cùng các giá trị chuỗi này rồi qua cùng `from_flags`, nên cờ, YAML và wizard cho ra cùng một filter (có test).
 
-Filter được lưu (JSON đã chuẩn hóa: hashtag chữ thường, size dạng `"<byte>B"`, ngày UTC ISO, giá trị mặc định bỏ đi; `{}` là không lọc) trong `jobs.filters_json`, nạp lại được (có test round-trip).
+Filter được lưu (JSON đã chuẩn hóa: hashtag chữ thường, size dạng `"<byte>B"`, ngày UTC ISO, giá trị mặc định bỏ đi; `{}` là không lọc) trong `mirrors.filters_json` (và ghi lại ở `runs.filters_json` của mỗi lần chạy), nạp lại được (có test round-trip).
 
 ## Xem trước
 
-`tgmirror new` đọc thử 100 tin đầu của khoảng đã chọn (chỉ áp cận `id`/`date`, **không** thu hẹp theo nội dung để mẫu không bị lệch) và cho matcher thật đánh giá: "X trong 100 tin đầu sẽ được sao chép" kèm vài dòng caption mẫu. Mặc định hiện khi có terminal, có filter và không có `--yes`; `--preview`/`--no-preview` ép bật/tắt. Trên terminal có thêm câu "Lưu job này?"; trả lời không thì thoát mã 1 và chưa tạo kênh nào (xem trước chạy trước khi tạo đích).
+`tgmirror clone` đọc thử 100 tin đầu của khoảng đã chọn (chỉ áp cận `id`/`date`, **không** thu hẹp theo nội dung để mẫu không bị lệch) và cho matcher thật đánh giá: "X trong 100 tin đầu sẽ được sao chép" kèm vài dòng caption mẫu. Mặc định hiện khi có terminal, có filter và không có `--yes`; `--preview`/`--no-preview` ép bật/tắt. Trên terminal, sau bản xem trước là câu hỏi duy nhất "Sao chép … ngay bây giờ?"; trả lời không thì thoát mã 1 và chưa tạo kênh nào, chưa ghi gì (xem trước chạy trước khi tạo đích). Không xem trước khi giữ nguyên filter cũ (không có gì mới để xem).
 
-## Đổi filter của job đã có
+## Filter khi chạy lại cùng cặp nguồn/đích
 
-Mỗi cặp nguồn/đích chỉ có một job nên "tạo job mới" không dùng được; cách đổi là **`tgmirror run <job> --refilter <cờ lọc | --filter-file>`**: thay `filters_json`, đặt `cursor_src_id` về 0, đếm lại `skipped_filter`, rồi chạy. Tin đã `done` được bỏ qua nhờ `msg_map` (không sao chép hai lần); tin mới khớp nhưng chưa sao chép được **thêm vào cuối kênh đích**, nên thứ tự ở đích không còn theo thời gian. Cờ lọc mà không có `--refilter` bị từ chối (mã 2), `--refilter` mà không có filter cũng vậy; muốn bỏ hết filter thì dùng `--filter-file` với file `{}`. Job đang chạy (heartbeat còn mới) thì từ chối. Chi tiết trạng thái: `04-state-checkpoint.md`.
+Filter được **nhớ** theo cặp nguồn/đích (`mirrors.filters_json`). Chạy lại `tgmirror clone --src ... --dst ...` (hoặc `tgmirror run`):
+
+- **Không có cờ lọc** → dùng lại filter của lần trước và chỉ lấy tin mới hơn con trỏ (delta). Một dòng thông báo nói rõ ("Dùng lại filter của lần chạy trước").
+- **Có cờ lọc hoặc `--filter-file` khác** → thay filter, đặt `cursor_src_id` về 0 và quét lại nguồn từ đầu (thay cho `--refilter` cũ). Tin đã `done` được bỏ qua nhờ `msg_map` (không sao chép hai lần); tin mới khớp nhưng chưa sao chép được **thêm vào cuối kênh đích**, nên thứ tự ở đích không còn theo thời gian. Bộ đếm `skipped_filter` là của từng lần chạy nên tự bắt đầu lại. Cùng filter nhập lại (giống hệt bản đã nhớ) vẫn là delta.
+- **`--no-filter`** → bỏ filter đã nhớ (cũng là quét lại từ đầu, không sao chép trùng). Không dùng chung với cờ lọc (mã 2).
+
+Wizard: với cặp đã từng clone, bước filter có thêm lựa chọn đầu tiên "Giữ filter của lần chạy trước" (tương đương không đưa cờ lọc). Chỉ có logic này ở `Store.start_run`; đây là chỗ **duy nhất** con trỏ được lùi (xem `04-state-checkpoint.md`). Nếu tiến trình khác đang chạy cặp đó (heartbeat còn mới) thì từ chối, không đổi gì.

@@ -25,7 +25,7 @@ def test_create_destination_with_flags(make_runtime: MakeRuntime, gateway: FakeG
 
     result = runner.invoke(
         app,
-        ["new", "--src", "@source", "--dst-new", "Source (copy)", "--about", "mirror", "--yes"],
+        ["clone", "--src", "@source", "--dst-new", "Source (copy)", "--about", "mirror", "--yes"],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -41,7 +41,7 @@ def test_existing_destination_creates_nothing(
     src, dst = gateway.add_channel("Source"), gateway.add_channel("Target")
 
     result = runner.invoke(
-        app, ["new", "--src", str(src.id), "--dst", "Target"], obj=make_runtime(gateway=gateway)
+        app, ["clone", "--src", str(src.id), "--dst", "Target"], obj=make_runtime(gateway=gateway)
     )
 
     assert result.exit_code == 0, result.output
@@ -55,7 +55,7 @@ def test_creating_a_channel_without_yes_or_terminal_is_a_usage_error(
     gateway.add_channel("Source")
 
     result = runner.invoke(
-        app, ["new", "--src", "Source", "--dst-new", "Copy"], obj=make_runtime(gateway=gateway)
+        app, ["clone", "--src", "Source", "--dst-new", "Copy"], obj=make_runtime(gateway=gateway)
     )
 
     assert result.exit_code == 2
@@ -69,8 +69,8 @@ def test_missing_flags_without_terminal_name_the_flag(
     gateway.add_channel("Source")
     rt = make_runtime(gateway=gateway)
 
-    no_src = runner.invoke(app, ["new", "--dst-new", "Copy", "--yes"], obj=rt)
-    no_dst = runner.invoke(app, ["new", "--src", "Source"], obj=rt)
+    no_src = runner.invoke(app, ["clone", "--dst-new", "Copy", "--yes"], obj=rt)
+    no_dst = runner.invoke(app, ["clone", "--src", "Source"], obj=rt)
 
     assert (no_src.exit_code, no_dst.exit_code) == (2, 2)
     assert "--src" in no_src.output and "--dst" in no_dst.output
@@ -85,7 +85,7 @@ def test_dst_and_dst_new_are_mutually_exclusive(
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst", "Target", "--dst-new", "Copy", "--yes"],
+        ["clone", "--src", "Source", "--dst", "Target", "--dst-new", "Copy", "--yes"],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -99,8 +99,8 @@ def test_unknown_and_ambiguous_references_exit_2(
     gateway.add_channel("Twin")
     rt = make_runtime(gateway=gateway)
 
-    unknown = runner.invoke(app, ["new", "--src", "@nobody", "--dst-new", "C", "--yes"], obj=rt)
-    ambiguous = runner.invoke(app, ["new", "--src", "Twin", "--dst-new", "C", "--yes"], obj=rt)
+    unknown = runner.invoke(app, ["clone", "--src", "@nobody", "--dst-new", "C", "--yes"], obj=rt)
+    ambiguous = runner.invoke(app, ["clone", "--src", "Twin", "--dst-new", "C", "--yes"], obj=rt)
 
     assert unknown.exit_code == 2 and "@nobody" in unknown.output
     assert ambiguous.exit_code == 2 and "several" in ambiguous.output
@@ -114,7 +114,7 @@ def test_restricted_source_without_admin_is_refused_and_nothing_is_created(
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Locked", "--dst-new", "Copy", "--yes"],
+        ["clone", "--src", "Locked", "--dst-new", "Copy", "--yes"],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -130,7 +130,7 @@ def test_restricted_source_as_admin_warns_but_goes_on(
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Mine", "--dst-new", "Copy", "--yes"],
+        ["clone", "--src", "Mine", "--dst-new", "Copy", "--yes"],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -145,9 +145,9 @@ def test_destination_rules_exit_codes(make_runtime: MakeRuntime, gateway: FakeGa
     gateway.add_channel("Group", kind=ChatKind.SUPERGROUP)
     rt = make_runtime(gateway=gateway)
 
-    read_only = runner.invoke(app, ["new", "--src", "Source", "--dst", "Read only"], obj=rt)
-    group = runner.invoke(app, ["new", "--src", "Source", "--dst", "Group"], obj=rt)
-    same = runner.invoke(app, ["new", "--src", "Source", "--dst", "Source"], obj=rt)
+    read_only = runner.invoke(app, ["clone", "--src", "Source", "--dst", "Read only"], obj=rt)
+    group = runner.invoke(app, ["clone", "--src", "Source", "--dst", "Group"], obj=rt)
+    same = runner.invoke(app, ["clone", "--src", "Source", "--dst", "Source"], obj=rt)
 
     assert (read_only.exit_code, group.exit_code, same.exit_code) == (4, 2, 2)
 
@@ -159,7 +159,7 @@ def test_new_destination_for_a_group_source_is_not_available_yet(
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Chat", "--dst-new", "Copy", "--yes"],
+        ["clone", "--src", "Chat", "--dst-new", "Copy", "--yes"],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -172,7 +172,7 @@ def test_invalid_title_exits_2(make_runtime: MakeRuntime, gateway: FakeGateway) 
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst-new", "  ", "--yes"],
+        ["clone", "--src", "Source", "--dst-new", "  ", "--yes"],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -186,7 +186,7 @@ def test_flood_wait_while_creating_exits_3(make_runtime: MakeRuntime, gateway: F
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst-new", "Copy", "--yes"],
+        ["clone", "--src", "Source", "--dst-new", "Copy", "--yes"],
         obj=make_runtime(gateway=gateway),
     )
 
@@ -195,7 +195,7 @@ def test_flood_wait_while_creating_exits_3(make_runtime: MakeRuntime, gateway: F
 
 def test_no_joined_chats(make_runtime: MakeRuntime) -> None:
     result = runner.invoke(
-        app, ["new", "--src", "x", "--dst-new", "y", "--yes"], obj=make_runtime()
+        app, ["clone", "--src", "x", "--dst-new", "y", "--yes"], obj=make_runtime()
     )
 
     assert result.exit_code == 1 and "No matching channels" in result.output
@@ -211,7 +211,7 @@ def test_wizard_creates_the_same_channel_as_the_flags(
     gateway.add_channel("Source")
     flags = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst-new", "Copy", "--about", "about", "--yes"],
+        ["clone", "--src", "Source", "--dst-new", "Copy", "--about", "about", "--yes"],
         obj=make_runtime(gateway=gateway),
     )
     via_flags = creations(gateway)
@@ -223,7 +223,7 @@ def test_wizard_creates_the_same_channel_as_the_flags(
     )
     wizard = runner.invoke(
         app,
-        ["new"],
+        ["clone"],
         obj=make_runtime(
             gateway=wizard_gateway,
             prompter=prompter,
@@ -247,7 +247,7 @@ def test_wizard_offers_only_eligible_destinations(
     prompter = ScriptedPrompter(select=["Source", "Good target", "No filter"])
 
     result = runner.invoke(
-        app, ["new"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+        app, ["clone"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
     )
 
     assert result.exit_code == 0, result.output
@@ -267,7 +267,7 @@ def test_wizard_with_no_eligible_destination_goes_straight_to_creating(
     prompter = ScriptedPrompter(select=["Only one", "No filter"], text=["Copy", ""], confirm=[True])
 
     result = runner.invoke(
-        app, ["new"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+        app, ["clone"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
     )
 
     assert result.exit_code == 0, result.output
@@ -282,7 +282,7 @@ def test_wizard_declining_the_confirmation_creates_nothing(
     prompter = ScriptedPrompter(select=["Source", "No filter"], text=["Copy", ""], confirm=[False])
 
     result = runner.invoke(
-        app, ["new"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+        app, ["clone"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
     )
 
     assert result.exit_code == 1
@@ -300,7 +300,7 @@ def test_wizard_asks_again_after_an_empty_title(
     )
 
     result = runner.invoke(
-        app, ["new"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+        app, ["clone"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
     )
 
     assert result.exit_code == 0, result.output
@@ -316,12 +316,13 @@ def test_flags_given_on_a_terminal_still_ask_to_confirm_creation(
 
     result = runner.invoke(
         app,
-        ["new", "--src", "Source", "--dst-new", "Copy"],
+        ["clone", "--src", "Source", "--dst-new", "Copy"],
         obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True),
     )
 
     assert result.exit_code == 1 and creations(gateway) == []
-    assert prompter.asked == [("confirm", "Create channel «Copy»?")]
+    ((kind, question),) = prompter.asked
+    assert kind == "confirm" and "'Copy' (a new channel will be created)" in question
 
 
 def test_wizard_ctrl_c_exits_130(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
@@ -332,7 +333,7 @@ def test_wizard_ctrl_c_exits_130(make_runtime: MakeRuntime, gateway: FakeGateway
             raise KeyboardInterrupt
 
     result = runner.invoke(
-        app, ["new"], obj=make_runtime(gateway=gateway, prompter=Interrupting(), interactive=True)
+        app, ["clone"], obj=make_runtime(gateway=gateway, prompter=Interrupting(), interactive=True)
     )
 
     assert result.exit_code == 130 and creations(gateway) == []

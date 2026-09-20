@@ -1,128 +1,95 @@
-"""``tgmirror run <job>``: run or continue a job in the foreground.
+"""``tgmirror run [n]``: run a clone again (delta), or let a paused one carry on.
 
-``execute`` is shared with ``tgmirror new --run``, so both paths run a job the same way.
+``execute`` is shared with ``tgmirror clone``, so both paths run a clone the same way, in the
+foreground of this terminal.
 """
 
 from typing import Annotated
 
 import typer
 
-from tgmirror.cli.errors import UsageProblem, run
-from tgmirror.cli.filter_options import (
-    AlbumOption,
-    ContainsOption,
-    ExcludeMediaOption,
-    ExcludeRegexOption,
-    FilterFileOption,
-    HashtagOption,
-    MaxSizeOption,
-    MediaOption,
-    MinSizeOption,
-    RegexOption,
-    SinceOption,
-    UntilOption,
-    collect,
-)
+from tgmirror.cli.errors import run
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
-from tgmirror.core.gateway import TelegramGateway
-from tgmirror.engine.jobs import check_runnable, resolve_job
-from tgmirror.engine.runner import Runner, StopSignal
+from tgmirror.core.gateway import ChannelInfo, TelegramGateway
+from tgmirror.engine.runner import RunControl, Runner
+from tgmirror.engine.runs import RunRequest, begin_run, check_runnable, resolve_run
 from tgmirror.store.db import Store, utc_now
-from tgmirror.store.jobs import Job
+from tgmirror.store.runs import Control, FilterChange, RunStatus, StartedRun
 from tgmirror.ui.messages import t
 from tgmirror.ui.progress import LineReporter
 
 EXIT_INTERRUPTED = 130
 
 
-def run_job(
+def run_clone(
     ctx: typer.Context,
-    job: Annotated[str, typer.Argument(help="Job id or exact name.")],
+    number: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="[RUN]",
+            help="Run number from `tgmirror history` (default: the latest run). "
+            "The same source and destination are cloned again.",
+        ),
+    ] = None,
     force_takeover: Annotated[
         bool,
         typer.Option(
             "--force-takeover",
-            help="Run even if another process seems to hold the job (only if it is dead).",
+            help="Run even if another process seems to hold this clone (only if it is dead).",
         ),
     ] = False,
     wait: Annotated[
         bool,
         typer.Option(
             "--wait",
-            help="Sit out a FloodWait of any length instead of saving the job and exiting "
-            "(waits longer than [limits] max_auto_wait normally stop the job). "
+            help="Sit out a FloodWait of any length instead of saving progress and exiting "
+            "(waits longer than [limits] max_auto_wait normally end the run). "
             "Does not apply to the daily cap.",
         ),
     ] = False,
-    refilter: Annotated[
-        bool,
-        typer.Option(
-            "--refilter",
-            help="Replace the job's filter with the one given by the filter flags or "
-            "--filter-file and scan the source again from the start; messages already "
-            "copied are skipped.",
-        ),
-    ] = False,
-    media: MediaOption = None,
-    hashtag: HashtagOption = None,
-    contains: ContainsOption = None,
-    regex: RegexOption = None,
-    exclude_regex: ExcludeRegexOption = None,
-    exclude_media: ExcludeMediaOption = None,
-    since: SinceOption = None,
-    until: UntilOption = None,
-    min_size: MinSizeOption = None,
-    max_size: MaxSizeOption = None,
-    album: AlbumOption = None,
-    filter_file: FilterFileOption = None,
 ) -> None:
-    """Run a job, or continue it after a pause, stop, crash or flood wait.
+    """Clone the same source and destination again: only what is newer, or where a stop left off.
 
-    Ctrl+C finishes the current batch, saves and exits; a second Ctrl+C exits at once.
-    From another terminal, `tgmirror pause <job>` / `tgmirror stop <job>` do the same.
-
-    Example: tgmirror run 3
+    Uses the filter and options of that run. If that clone is paused in another terminal, this
+    resumes it there instead. Ctrl+C stops it, saving progress; keys: p pause, r resume, q stop.
 
     A FloodWait up to [limits] max_auto_wait seconds is waited out and the same batch is sent
-    again. A longer one saves the job as waiting (exit code 3) unless --wait is given. The daily
-    cap ([limits] daily_cap) always saves the job until the next midnight.
+    again. A longer one ends the run as waiting (exit code 3) unless --wait is given. The daily
+    cap ([limits] daily_cap) always ends it until the next midnight.
 
-    To change what a job copies: tgmirror run 3 --refilter --media video --since 2024-01-01.
-    Messages that now match are appended at the end of the destination.
+    To change the filter, use `tgmirror clone` with the same --src/--dst and the new filter.
+
+    Example: tgmirror run        (or: tgmirror run 3)
     """
     rt: Runtime = ctx.obj
 
     async def command() -> None:
-        filters = collect(
-            media=media,
-            hashtag=hashtag,
-            contains=contains,
-            regex=regex,
-            exclude_regex=exclude_regex,
-            exclude_media=exclude_media,
-            since=since,
-            until=until,
-            min_size=min_size,
-            max_size=max_size,
-            album=album,
-            filter_file=filter_file,
-        )
-        if refilter and filters is None:
-            raise UsageProblem("err.refilter_needs_filter")
-        if filters is not None and not refilter:
-            raise UsageProblem("err.filter_needs_refilter")
-
         async with opened_store(rt) as store:
-            found = await resolve_job(store, job)
-            check_runnable(found, utc_now())  # before connecting: refuse what Telegram will refuse
+            target = await resolve_run(store, number)
+            live = await store.active_run()
+            if (
+                live is not None
+                and live.mirror_id == target.mirror_id
+                and live.status is RunStatus.PAUSED
+                and not force_takeover
+            ):  # paused in another terminal: carry on there, do not start a second one
+                await store.set_control(live.id, Control.NONE)
+                typer.echo(t("run.resumed_elsewhere", id=live.id))
+                return
+            if (last := await store.latest_run(target.src_id, target.dst_id)) is not None:
+                check_runnable(last, utc_now())  # before connecting: refuse what Telegram refuses
+            request = RunRequest(
+                mode=target.mode,
+                batch_size=target.options.batch_size,
+                pushdown=target.options.pushdown,
+                force=force_takeover,
+            )
             async with authorized(rt) as conn:
-                if filters is not None:
-                    found = await store.replace_filters(found.id, filters.to_json())
-                    typer.echo(t("run.refiltered", id=found.id))
-                await execute(
-                    rt, store, conn.gateway, found, force_takeover=force_takeover, wait=wait
-                )
+                src = ChannelInfo(target.src_id, target.src_title, target.src_kind)
+                dst = ChannelInfo(target.dst_id, target.dst_title, target.src_kind)
+                started = await begin_run(store, conn.gateway, src, dst, request)
+                await execute(rt, store, conn.gateway, started, wait=wait)
 
     run(rt, command())
 
@@ -131,24 +98,45 @@ async def execute(
     rt: Runtime,
     store: Store,
     gateway: TelegramGateway,
-    job: Job,
+    started: StartedRun,
     *,
-    force_takeover: bool = False,
     wait: bool = False,
 ) -> None:
-    """Run ``job`` until it rests; print progress and the result. Errors propagate to ``run``."""
-    stop = StopSignal()
+    """Carry out a started run in the foreground; print progress and the result.
+
+    Errors propagate to ``run`` (which prints them). Ctrl+C saves and exits with 130; ``q`` and
+    ``tgmirror stop`` end the run as ``stopped`` and exit 0.
+    """
+    current = started.run
+    control = RunControl()
     runner = Runner(
         store,
         gateway,
         rt.config().limits,
         reporter=LineReporter(typer.echo),
-        stop=stop,
+        control=control,
         wait=wait,
     )
-    typer.echo(t("run.start", id=job.id, name=job.name, cursor=job.cursor_src_id))
-    with stop_on_interrupt(stop, lambda: typer.echo(t("run.stopping"), err=True)):
-        final = await runner.run(job.id, force_takeover=force_takeover)
+    typer.echo(
+        t(
+            "run.start",
+            id=current.id,
+            src=current.src_title,
+            dst=current.dst_title,
+            cursor=current.cursor_from,
+        )
+    )
+    if started.filters is FilterChange.CHANGED:
+        typer.echo(t("run.filter_changed"))
+    elif started.filters is FilterChange.SAME and current.filters_json != "{}":
+        typer.echo(t("run.filter_reused"))
+    with (
+        stop_on_interrupt(control, lambda: typer.echo(t("run.stopping"), err=True)) as interrupt,
+        rt.keys(control) as listening,
+    ):
+        if listening:
+            typer.echo(t("run.keys_hint"))
+        final = await runner.run(current)
     typer.echo(
         t(
             "run.result",
@@ -160,5 +148,7 @@ async def execute(
     )
     if final.skipped_filter:
         typer.echo(t("run.skipped", count=final.skipped_filter))
-    if stop.requested:  # Ctrl+C: saved cleanly, but the job is not finished
+    if final.status is RunStatus.STOPPED:
+        typer.echo(t("run.continue_hint", id=final.id))
+    if interrupt.hit:  # Ctrl+C: saved cleanly, but the clone is not finished
         raise typer.Exit(EXIT_INTERRUPTED)

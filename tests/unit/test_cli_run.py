@@ -1,4 +1,4 @@
-"""``new`` (saving the job), ``run``, ``pause`` and ``stop`` through the real Typer app.
+"""``clone``, ``run``, ``pause``, ``stop`` and ``history`` through the real Typer app.
 
 No terminal and no network: ``FakeGateway``, a scripted prompter, and a SQLite file under tmp_path.
 Sources stay below the default batch size, so the runs never sleep between batches.
@@ -6,8 +6,10 @@ Sources stay below the default batch size, so the runs never sleep between batch
 
 import asyncio
 import functools
+import json
 import signal
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -16,37 +18,52 @@ from typer.testing import CliRunner
 import tgmirror.cli.commands.run as run_command
 from tests.fakes import FakeAuth, FakeGateway, ScriptedPrompter
 from tgmirror.cli.app import app
+from tgmirror.cli.keys import KeyProvider, apply_key
 from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.core.errors import FloodWait
-from tgmirror.engine.runner import Runner
-from tgmirror.store.jobs import Control, Job, JobStatus
+from tgmirror.engine.runner import RunControl, Runner
+from tgmirror.store.runs import Control, Run, RunSpec, RunStatus
 
 runner = CliRunner()
 MakeRuntime = Callable[..., Runtime]
 
+CLONE = ["clone", "--src", "Source", "--dst", "Copy", "--yes"]
 
-def saved_jobs(rt: Runtime) -> list[Job]:
-    async def read() -> list[Job]:
+
+def saved_runs(rt: Runtime) -> list[Run]:
+    """Every run, the first one first."""
+
+    async def read() -> list[Run]:
         async with opened_store(rt) as store:
-            return await store.list_jobs()
+            return list(reversed(await store.list_runs(100)))
 
     return asyncio.run(read())
 
 
-def claim(rt: Runtime, job_id: int) -> None:
-    """Pretend another process runs the job."""
+def start_elsewhere(rt: Runtime, gateway: FakeGateway) -> Run:
+    """Pretend another process runs the clone: a run that is live and beating."""
+    by_title = {c.title: c for c in gateway.channels.values()}
+    src, dst = by_title["Source"], by_title["Copy"]
 
+    async def do() -> Run:
+        async with opened_store(rt) as store:
+            return (await store.start_run(RunSpec(src, dst))).run
+
+    return asyncio.run(do())
+
+
+def set_status(rt: Runtime, run_id: int, status: RunStatus) -> None:
     async def do() -> None:
         async with opened_store(rt) as store:
-            await store.claim(job_id)
+            await store.set_status(run_id, status)
 
     asyncio.run(do())
 
 
-def control_of(rt: Runtime, job_id: int) -> Control:
+def control_of(rt: Runtime, run_id: int) -> Control:
     async def read() -> Control:
         async with opened_store(rt) as store:
-            return await store.read_control(job_id)
+            return await store.read_control(run_id)
 
     return asyncio.run(read())
 
@@ -63,31 +80,75 @@ def texts(gateway: FakeGateway, channel: int) -> list[str]:
     return [m.text for m in gateway.messages[channel]]
 
 
-# ---- new: saving the job --------------------------------------------------------------------
+def keys_pressed(*keys: str) -> KeyProvider:
+    """Hotkeys as if the person pressed ``keys`` the moment the clone starts."""
+
+    @contextmanager
+    def provider(control: RunControl) -> Iterator[bool]:
+        for key in keys:
+            apply_key(control, key)
+        yield True
+
+    return provider
 
 
-def test_new_saves_the_job_without_running_it(
+# ---- clone: it copies right away ------------------------------------------------------------
+
+
+def test_clone_copies_the_messages_and_reports(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
-    src, dst = source_with_messages(gateway)
+    src, dst = source_with_messages(gateway, 5)
     rt = make_runtime(gateway=gateway)
 
-    result = runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+    result = runner.invoke(app, CLONE, obj=rt)
 
     assert result.exit_code == 0, result.output
-    (job,) = saved_jobs(rt)
-    assert (job.src_id, job.dst_id, job.status, job.cursor_src_id) == (
+    assert texts(gateway, dst) == ["m1", "m2", "m3", "m4", "m5"]
+    (run,) = saved_runs(rt)
+    assert (run.src_id, run.dst_id, run.status, run.cursor_src_id, run.stats) == (
         src,
         dst,
-        JobStatus.CREATED,
-        0,
+        RunStatus.DONE,
+        5,
+        {"done": 5, "failed": 0},
     )
-    assert (job.name, job.mode, job.options.batch_size) == ("Source → Copy", "auto", 20)
-    assert "Saved job 1" in result.output and "tgmirror run 1" in result.output
-    assert gateway.calls_to("copy_messages") == [] and texts(gateway, dst) == []
+    assert "Run 1: Source → Copy, continuing after source message 0." in result.output
+    assert "Run 1: done. 5 messages copied, 0 failed." in result.output
+    assert (
+        "Saved" not in result.output and "tgmirror run" not in result.output
+    )  # nothing to do next
 
 
-def test_new_records_where_the_destination_stood(
+def test_clone_into_a_new_channel_creates_it_then_copies(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src = gateway.add_channel("Source")
+    gateway.add_message(src.id, "hello")
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, ["clone", "--src", "Source", "--dst-new", "Copy", "--yes"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    (run,) = saved_runs(rt)
+    assert texts(gateway, run.dst_id) == ["hello"]
+    assert "just created" in result.output
+
+
+def test_clone_into_an_existing_destination_needs_no_yes_and_no_terminal(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+
+    result = runner.invoke(
+        app, ["clone", "--src", "Source", "--dst", "Copy"], obj=make_runtime(gateway=gateway)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"]  # explicit flags are the go-ahead
+
+
+def test_clone_records_where_the_destination_stood(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     """Reconcile later reads the destination only after this point."""
@@ -96,41 +157,22 @@ def test_new_records_where_the_destination_stood(
         gateway.add_message(dst, text)
     rt = make_runtime(gateway=gateway)
 
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy"], obj=rt)
+    runner.invoke(app, CLONE, obj=rt)
 
-    (job,) = saved_jobs(rt)
-    assert job.options.dst_base_id == 2
+    (run,) = saved_runs(rt)
+    assert run.options.dst_base_id == 2
 
 
-def test_new_options_name_mode_and_batch_size(
-    make_runtime: MakeRuntime, gateway: FakeGateway
-) -> None:
+def test_clone_options_mode_and_batch_size(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
     source_with_messages(gateway)
     rt = make_runtime(gateway=gateway)
 
-    result = runner.invoke(
-        app,
-        ["new", "--src", "Source", "--dst", "Copy", "--name", "mine", "--mode", "copy",
-         "--batch-size", "5"],
-        obj=rt,
-    )  # fmt: skip
+    result = runner.invoke(app, [*CLONE, "--mode", "copy", "--batch-size", "2"], obj=rt)
 
     assert result.exit_code == 0, result.output
-    (job,) = saved_jobs(rt)
-    assert (job.name, job.mode, job.options.batch_size) == ("mine", "copy", 5)
-
-
-def test_new_refuses_a_second_job_for_the_same_pair(
-    make_runtime: MakeRuntime, gateway: FakeGateway
-) -> None:
-    source_with_messages(gateway)
-    rt = make_runtime(gateway=gateway)
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy"], obj=rt)
-
-    again = runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy"], obj=rt)
-
-    assert again.exit_code == 2 and "Job 1 already" in again.output
-    assert len(saved_jobs(rt)) == 1
+    (run,) = saved_runs(rt)
+    assert (run.mode, run.options.batch_size) == ("copy", 2)
+    assert [c.args[2] for c in gateway.calls_to("copy_messages")] == [[1, 2], [3]]
 
 
 def test_an_unavailable_mode_is_refused_before_anything_is_created(
@@ -140,67 +182,65 @@ def test_an_unavailable_mode_is_refused_before_anything_is_created(
     rt = make_runtime(gateway=gateway)
 
     result = runner.invoke(
-        app, ["new", "--src", "Source", "--dst-new", "Copy", "--mode", "reupload", "--yes"], obj=rt
+        app,
+        ["clone", "--src", "Source", "--dst-new", "Copy", "--mode", "reupload", "--yes"],
+        obj=rt,
     )
 
     assert result.exit_code == 2 and "phase 6" in result.output
-    assert gateway.calls_to("create_channel") == [] and saved_jobs(rt) == []
+    assert gateway.calls_to("create_channel") == [] and saved_runs(rt) == []
 
 
 def test_batch_size_is_bounded(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
     source_with_messages(gateway)
 
-    result = runner.invoke(
-        app,
-        ["new", "--src", "Source", "--dst", "Copy", "--batch-size", "101"],
-        obj=make_runtime(gateway=gateway),
-    )
+    result = runner.invoke(app, [*CLONE, "--batch-size", "101"], obj=make_runtime(gateway=gateway))
 
     assert result.exit_code == 2
 
 
-def test_new_run_copies_the_messages_and_reports(
+# ---- clone again: delta ---------------------------------------------------------------------
+
+
+def test_cloning_the_same_pair_again_copies_only_what_is_new(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
-    src, dst = source_with_messages(gateway, 5)
+    src, dst = source_with_messages(gateway, 2)
     rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    gateway.add_message(src, "m3")
 
-    result = runner.invoke(
-        app, ["new", "--src", "Source", "--dst", "Copy", "--run", "--yes"], obj=rt
-    )
+    again = runner.invoke(app, CLONE, obj=rt)
 
-    assert result.exit_code == 0, result.output
-    assert texts(gateway, dst) == ["m1", "m2", "m3", "m4", "m5"]
-    (job,) = saved_jobs(rt)
-    assert (job.status, job.cursor_src_id, job.stats) == (
-        JobStatus.DONE,
-        5,
-        {"done": 5, "failed": 0},
-    )
-    assert "Running job 1" in result.output
-    assert "Job 1: done. 5 messages copied, 0 failed." in result.output
+    assert again.exit_code == 0, again.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"]
+    assert [c.args[2] for c in gateway.calls_to("copy_messages")] == [[1, 2], [3]]
+    first, second = saved_runs(rt)
+    assert (first.stats, second.stats) == ({"done": 2, "failed": 0}, {"done": 1, "failed": 0})
+    assert (second.cursor_from, second.cursor_src_id) == (2, 3)
+    assert "continuing after source message 2" in again.output
 
 
-def test_new_dst_new_run_creates_then_copies(
+def test_cloning_the_same_pair_with_nothing_new_is_quick_and_says_done(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
-    src = gateway.add_channel("Source")
-    gateway.add_message(src.id, "hello")
+    source_with_messages(gateway)
     rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
 
-    result = runner.invoke(
-        app, ["new", "--src", "Source", "--dst-new", "Copy", "--yes", "--run"], obj=rt
-    )
+    again = runner.invoke(app, CLONE, obj=rt)
 
-    assert result.exit_code == 0, result.output
-    (job,) = saved_jobs(rt)
-    assert texts(gateway, job.dst_id) == ["hello"]
+    assert again.exit_code == 0 and "0 messages copied" in again.output
+    assert len(gateway.calls_to("copy_messages")) == 1
 
 
-def test_wizard_and_flags_end_in_the_same_job_and_the_same_copy(
+# ---- clone: the one question, and parity with the wizard ------------------------------------
+
+
+def test_wizard_and_flags_end_in_the_same_run_and_the_same_copy(
     make_runtime: MakeRuntime, tmp_path: Path
 ) -> None:
-    """Parity rule: the terminal path and the flags call the same create_job and run."""
+    """Parity rule: the terminal path and the flags call the same begin_run and copy."""
 
     def prepared() -> FakeGateway:
         gw = FakeGateway()
@@ -209,147 +249,199 @@ def test_wizard_and_flags_end_in_the_same_job_and_the_same_copy(
 
     flags_gw, wizard_gw = prepared(), prepared()
     flags_rt = make_runtime(gateway=flags_gw, root=tmp_path / "flags")
-    flags = runner.invoke(
-        app, ["new", "--src", "Source", "--dst", "Copy", "--run", "--yes"], obj=flags_rt
-    )
-    prompter = ScriptedPrompter(
-        select=["Source", "Copy", "No filter"], confirm=[True]
-    )  # ... run it now: yes
+    flags = runner.invoke(app, CLONE, obj=flags_rt)
+    prompter = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[True])
     wizard_rt = make_runtime(
         gateway=wizard_gw, prompter=prompter, interactive=True, root=tmp_path / "wizard"
     )
-    wizard = runner.invoke(app, ["new"], obj=wizard_rt)
+    wizard = runner.invoke(app, ["clone"], obj=wizard_rt)
 
     assert flags.exit_code == wizard.exit_code == 0, wizard.output
-    (a,), (b,) = saved_jobs(flags_rt), saved_jobs(wizard_rt)
-    assert (a.name, a.src_id, a.dst_id, a.mode, a.options, a.status, a.stats) == (
-        b.name, b.src_id, b.dst_id, b.mode, b.options, b.status, b.stats,
+    (a,), (b,) = saved_runs(flags_rt), saved_runs(wizard_rt)
+    assert (a.src_id, a.dst_id, a.mode, a.options, a.status, a.stats, a.filters_json) == (
+        b.src_id, b.dst_id, b.mode, b.options, b.status, b.stats, b.filters_json,
     )  # fmt: skip
     assert texts(flags_gw, a.dst_id) == texts(wizard_gw, b.dst_id) == ["m1", "m2", "m3", "m4"]
     assert flags.output == wizard.output
-    assert ("confirm", "Run it now?") in prompter.asked
+    (question,) = [m for kind, m in prompter.asked if kind == "confirm"]  # one, not three
+    assert question.startswith("Clone ") and question.endswith(" now?")
 
 
-def test_the_wizard_does_not_run_unless_told_to(
+def test_declining_the_question_creates_and_copies_nothing(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     _, dst = source_with_messages(gateway)
     prompter = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[False])
     rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
 
-    result = runner.invoke(app, ["new"], obj=rt)
+    result = runner.invoke(app, ["clone"], obj=rt)
 
-    assert result.exit_code == 0, result.output
-    assert texts(gateway, dst) == [] and saved_jobs(rt)[0].status is JobStatus.CREATED
-    assert "tgmirror run 1" in result.output
+    assert result.exit_code == 1
+    assert texts(gateway, dst) == [] and saved_runs(rt) == []
+    assert gateway.calls_to("copy_messages") == []
 
 
-def test_yes_on_a_terminal_saves_without_asking_to_run(
+def test_yes_on_a_terminal_asks_nothing_and_copies(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
-    source_with_messages(gateway)
+    _, dst = source_with_messages(gateway)
     prompter = ScriptedPrompter()
 
     result = runner.invoke(
-        app,
-        ["new", "--src", "Source", "--dst", "Copy", "--yes"],
-        obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True),
+        app, CLONE, obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
     )
 
     assert result.exit_code == 0 and prompter.asked == []
+    assert texts(gateway, dst) == ["m1", "m2", "m3"]
 
 
-# ---- run ------------------------------------------------------------------------------------
+# ---- run: the same clone again --------------------------------------------------------------
 
 
-def make_job(make_runtime: MakeRuntime, gateway: FakeGateway, **kw: object) -> Runtime:
-    rt = make_runtime(gateway=gateway, **kw)  # type: ignore[arg-type]
-    made = runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
-    assert made.exit_code == 0, made.output
-    return rt
-
-
-def test_run_by_id_and_by_name(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
+def test_run_continues_the_latest_clone_and_run_n_picks_a_pair_from_history(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
     src, dst = source_with_messages(gateway, 2)
-    rt = make_job(make_runtime, gateway)
-
-    by_id = runner.invoke(app, ["run", "1"], obj=rt)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
     gateway.add_message(src, "m3")
-    by_name = runner.invoke(app, ["run", "Source → Copy"], obj=rt)
 
-    assert by_id.exit_code == by_name.exit_code == 0, by_name.output
-    assert texts(gateway, dst) == ["m1", "m2", "m3"]  # the second run copied only the new one
-    assert [c.args[2] for c in gateway.calls_to("copy_messages")] == [[1, 2], [3]]
+    latest = runner.invoke(app, ["run"], obj=rt)
+    gateway.add_message(src, "m4")
+    by_number = runner.invoke(app, ["run", "1"], obj=rt)
+
+    assert latest.exit_code == by_number.exit_code == 0, by_number.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3", "m4"]  # each later run copied only the new one
+    assert [c.args[2] for c in gateway.calls_to("copy_messages")] == [[1, 2], [3], [4]]
+    assert [r.id for r in saved_runs(rt)] == [1, 2, 3]
 
 
-def test_run_unknown_job_exits_2(make_runtime: MakeRuntime) -> None:
-    result = runner.invoke(app, ["run", "42"], obj=make_runtime())
+def test_run_keeps_the_filter_and_the_options_of_that_run(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, dst = source_with_messages(gateway, 2)
+    gateway.add_message(src, "m3 #k", hashtags=("#k",))
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, [*CLONE, "--hashtag", "#k", "--batch-size", "7", "--mode", "copy"], obj=rt)
+    gateway.add_message(src, "m4 #k", hashtags=("#k",))
+    gateway.add_message(src, "m5")
 
-    assert result.exit_code == 2 and "No job '42'" in result.output
+    again = runner.invoke(app, ["run"], obj=rt)
+
+    assert again.exit_code == 0, again.output
+    assert texts(gateway, dst) == ["m3 #k", "m4 #k"]
+    first, second = saved_runs(rt)
+    assert (second.filters_json, second.options.batch_size, second.mode) == (
+        first.filters_json,
+        7,
+        "copy",
+    )
+    assert "Using the filter of the previous run" in again.output
+
+
+def test_run_with_no_history_or_an_unknown_number_exits_2(make_runtime: MakeRuntime) -> None:
+    rt = make_runtime()
+
+    nothing = runner.invoke(app, ["run"], obj=rt)
+    unknown = runner.invoke(app, ["run", "42"], obj=rt)
+
+    assert nothing.exit_code == 2 and "Nothing has been cloned yet" in nothing.output
+    assert unknown.exit_code == 2 and "No run '42'" in unknown.output
 
 
 def test_run_needs_a_login_and_touches_nothing_otherwise(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     source_with_messages(gateway)
-    rt = make_job(make_runtime, gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    calls = len(gateway.calls_to("copy_messages"))
     logged_out = make_runtime(gateway=gateway, auth=FakeAuth(), root=rt.paths.data_dir.parent)
 
-    result = runner.invoke(app, ["run", "1"], obj=logged_out)
+    result = runner.invoke(app, ["run"], obj=logged_out)
 
     assert result.exit_code == 1 and "tgmirror login" in result.output
-    assert gateway.calls_to("copy_messages") == []
+    assert len(gateway.calls_to("copy_messages")) == calls
 
 
-def test_a_flood_wait_saves_the_job_and_exits_3_then_refuses_to_rerun_at_once(
+def test_a_flood_wait_ends_the_run_with_exit_3_and_the_next_run_is_refused_at_once(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     source_with_messages(gateway)
-    rt = make_job(make_runtime, gateway)
+    rt = make_runtime(gateway=gateway)
     gateway.fail_next("copy_messages", FloodWait(3600))
 
-    first = runner.invoke(app, ["run", "1"], obj=rt)
-    second = runner.invoke(app, ["run", "1"], obj=rt)
+    first = runner.invoke(app, CLONE, obj=rt)
+    second = runner.invoke(app, ["run"], obj=rt)
+    third = runner.invoke(app, CLONE, obj=rt)
 
     assert first.exit_code == 3 and "3600s" in first.output
-    assert saved_jobs(rt)[0].status is JobStatus.WAITING_FLOOD
-    assert second.exit_code == 3 and "must not run again before" in second.output
-    assert len(gateway.calls_to("copy_messages")) == 1  # the second run never got to Telegram
+    assert saved_runs(rt)[0].status is RunStatus.WAITING_FLOOD
+    for refused in (second, third):
+        assert refused.exit_code == 3 and "must not run again before" in refused.output
+    assert len(gateway.calls_to("copy_messages")) == 1  # the others never got to Telegram
+    assert len(saved_runs(rt)) == 1  # a refused run is not logged as a run
 
 
 def test_a_restricted_source_exits_4_with_advice(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     source_with_messages(gateway, noforwards=True, is_admin=True)
-    rt = make_job(make_runtime, gateway)
+    rt = make_runtime(gateway=gateway)
 
-    result = runner.invoke(app, ["run", "1"], obj=rt)
+    result = runner.invoke(app, CLONE, obj=rt)
 
     assert result.exit_code == 4
     assert "Restrict saving content" in result.output and "phase 6" in result.output
-    assert saved_jobs(rt)[0].status is JobStatus.FAILED
+    assert saved_runs(rt)[0].status is RunStatus.FAILED
 
 
-def test_a_job_held_by_another_process_is_refused_unless_taken_over(
+def test_a_clone_held_by_another_process_is_refused_unless_taken_over(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     _, dst = source_with_messages(gateway)
-    rt = make_job(make_runtime, gateway)
-    claim(rt, 1)
+    rt = make_runtime(gateway=gateway)
+    held = start_elsewhere(rt, gateway)
 
-    refused = runner.invoke(app, ["run", "1"], obj=rt)
-    forced = runner.invoke(app, ["run", "1", "--force-takeover"], obj=rt)
+    refused = runner.invoke(app, CLONE, obj=rt)
+    refused_run = runner.invoke(app, ["run"], obj=rt)
+    forced = runner.invoke(app, [*CLONE, "--force-takeover"], obj=rt)
 
-    assert refused.exit_code == 1 and "--force-takeover" in refused.output
+    assert refused.exit_code == refused_run.exit_code == 1
+    assert "--force-takeover" in refused.output and "--force-takeover" in refused_run.output
     assert forced.exit_code == 0, forced.output
     assert texts(gateway, dst) == ["m1", "m2", "m3"]
+    assert saved_runs(rt)[0].id == held.id and saved_runs(rt)[0].fail_reason == "taken_over"
 
 
-def test_ctrl_c_saves_and_exits_130(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
+def test_run_resumes_a_clone_paused_in_another_terminal_instead_of_starting_a_second(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    held = start_elsewhere(rt, gateway)
+    set_status(rt, held.id, RunStatus.PAUSED)
+    runner.invoke(app, ["pause"], obj=rt)
+    assert control_of(rt, held.id) is Control.PAUSE
+
+    result = runner.invoke(app, ["run"], obj=rt)
+
+    assert (
+        result.exit_code == 0 and f"Run {held.id} was paused in another terminal" in result.output
+    )
+    assert control_of(rt, held.id) is Control.NONE  # the other process carries on
+    assert gateway.calls_to("copy_messages") == [] and len(saved_runs(rt)) == 1
+
+
+# ---- Ctrl+C and the hotkeys -----------------------------------------------------------------
+
+
+def test_ctrl_c_saves_and_exits_130_then_run_finishes_without_duplicates(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
     """The first Ctrl+C finishes the batch in flight, saves, and leaves with 130."""
     _, dst = source_with_messages(gateway, 4)
     rt = make_runtime(gateway=gateway)
-    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--batch-size", "2"], obj=rt)
     original = gateway.copy_messages
 
     async def interrupt_then_copy(s: int, d: int, ids: list[int]) -> list[int | None]:
@@ -357,49 +449,166 @@ def test_ctrl_c_saves_and_exits_130(make_runtime: MakeRuntime, gateway: FakeGate
         return await original(s, d, ids)
 
     gateway.copy_messages = interrupt_then_copy  # type: ignore[method-assign]
-
-    result = runner.invoke(app, ["run", "1"], obj=rt)
+    result = runner.invoke(app, [*CLONE, "--batch-size", "2"], obj=rt)
 
     assert result.exit_code == 130, result.output
     assert texts(gateway, dst) == ["m1", "m2"]  # the batch in flight was finished
-    (job,) = saved_jobs(rt)
-    assert (job.status, job.cursor_src_id) == (JobStatus.STOPPED, 2)
+    (run,) = saved_runs(rt)
+    assert (run.status, run.cursor_src_id) == (RunStatus.STOPPED, 2)
     assert "Stopping after the current batch" in result.output
+    assert "Continue with: tgmirror run 1" in result.output
+
+    gateway.copy_messages = original  # type: ignore[method-assign]
+    resumed = runner.invoke(app, ["run"], obj=rt)
+
+    assert resumed.exit_code == 0, resumed.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3", "m4"]  # no duplicate, no gap
+    assert [r.status for r in saved_runs(rt)] == [RunStatus.STOPPED, RunStatus.DONE]
+
+
+def test_the_key_q_stops_the_clone_and_exits_0(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway, keys=keys_pressed("q"))
+
+    result = runner.invoke(app, CLONE, obj=rt)
+
+    assert result.exit_code == 0, result.output  # a deliberate stop is not an interruption
+    assert texts(gateway, dst) == [] and saved_runs(rt)[0].status is RunStatus.STOPPED
+    assert "Continue with: tgmirror run 1" in result.output
+
+
+def test_the_keys_are_announced_and_p_then_r_changes_nothing_for_a_finished_clone(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    _, dst = source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway, keys=keys_pressed("p", "r"))
+
+    result = runner.invoke(app, CLONE, obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Keys: [p] pause  [r] resume  [q] stop" in result.output
+    assert texts(gateway, dst) == ["m1", "m2", "m3"]
+
+
+def test_no_keys_line_without_a_terminal(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
+    source_with_messages(gateway)
+
+    result = runner.invoke(app, CLONE, obj=make_runtime(gateway=gateway))
+
+    assert "Keys:" not in result.output
 
 
 # ---- pause / stop ---------------------------------------------------------------------------
 
 
-def test_pause_and_stop_a_running_job(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
+def test_pause_and_stop_the_running_clone(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
     source_with_messages(gateway)
-    rt = make_job(make_runtime, gateway)
-    claim(rt, 1)
+    rt = make_runtime(gateway=gateway)
+    held = start_elsewhere(rt, gateway)
 
-    paused = runner.invoke(app, ["pause", "1"], obj=rt)
-    assert paused.exit_code == 0 and "pause" in paused.output
-    assert control_of(rt, 1) is Control.PAUSE
+    paused = runner.invoke(app, ["pause"], obj=rt)
+    assert paused.exit_code == 0 and f"run {held.id} to pause" in paused.output
+    assert control_of(rt, held.id) is Control.PAUSE
 
-    stopped = runner.invoke(app, ["stop", "Source → Copy"], obj=rt)
-    assert stopped.exit_code == 0 and "stop" in stopped.output
-    assert control_of(rt, 1) is Control.STOP
+    stopped = runner.invoke(app, ["stop"], obj=rt)
+    assert stopped.exit_code == 0 and f"run {held.id} to stop" in stopped.output
+    assert control_of(rt, held.id) is Control.STOP
 
 
-def test_pause_and_stop_a_job_that_is_not_running_change_nothing(
+def test_pause_and_stop_with_nothing_running_change_nothing(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     source_with_messages(gateway)
-    rt = make_job(make_runtime, gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)  # finished: nothing is running
 
-    paused = runner.invoke(app, ["pause", "1"], obj=rt)
-    stopped = runner.invoke(app, ["stop", "1"], obj=rt)
+    paused = runner.invoke(app, ["pause"], obj=rt)
+    stopped = runner.invoke(app, ["stop"], obj=rt)
 
     assert paused.exit_code == stopped.exit_code == 1
-    assert "not running" in paused.output and "created" in paused.output
+    assert "No clone is running" in paused.output
     assert control_of(rt, 1) is Control.NONE
 
 
-def test_pause_unknown_job_exits_2(make_runtime: MakeRuntime) -> None:
-    assert runner.invoke(app, ["pause", "9"], obj=make_runtime()).exit_code == 2
+def test_pause_with_no_history_at_all_says_nothing_is_running(make_runtime: MakeRuntime) -> None:
+    result = runner.invoke(app, ["pause"], obj=make_runtime())
+
+    assert result.exit_code == 1 and "No clone is running" in result.output
+
+
+# ---- history --------------------------------------------------------------------------------
+
+
+def test_history_lists_the_runs_newest_first(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, _ = source_with_messages(gateway, 2)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    gateway.add_message(src, "m3")
+    runner.invoke(app, CLONE, obj=rt)
+
+    result = runner.invoke(app, ["history"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.splitlines() if "Source → Copy" in line]
+    assert len(lines) == 2 and lines[0].split()[0] == "2" and lines[1].split()[0] == "1"
+    assert "done" in lines[0] and "Recent runs" in result.output
+
+
+def test_history_of_an_empty_log(make_runtime: MakeRuntime) -> None:
+    result = runner.invoke(app, ["history"], obj=make_runtime())
+
+    assert result.exit_code == 0 and "No runs yet" in result.output
+
+
+def test_history_json_is_machine_readable(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
+    source_with_messages(gateway, 2)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+
+    listing = json.loads(runner.invoke(app, ["history", "--json"], obj=rt).output)
+    detail = json.loads(runner.invoke(app, ["history", "1", "--json"], obj=rt).output)
+
+    assert [r["run"] for r in listing] == [1]
+    assert (detail["status"], detail["copied"], detail["failed"]) == ("done", 2, 0)
+    assert detail["source"]["title"] == "Source" and detail["failed_messages"] == []
+
+
+def test_history_detail_lists_what_failed_and_why(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, _ = source_with_messages(gateway, 3)
+    gateway.poison(src, 2, "MESSAGE_ID_INVALID")
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+
+    result = runner.invoke(app, ["history", "1"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Run 1: Source → Copy" in result.output
+    assert "2 copied, 1 failed" in result.output
+    assert "source message 2: MESSAGE_ID_INVALID" in result.output
+
+
+def test_history_detail_shows_the_limits_telegram_set(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    source_with_messages(gateway)
+    rt = make_runtime(gateway=gateway)
+    gateway.fail_next("copy_messages", FloodWait(3600))
+    runner.invoke(app, CLONE, obj=rt)
+
+    result = runner.invoke(app, ["history", "1"], obj=rt)
+
+    assert "Limits from Telegram" in result.output and "flood_wait 3600s" in result.output
+    assert "waiting (flood)" in result.output
+
+
+def test_history_of_an_unknown_run_exits_2(make_runtime: MakeRuntime) -> None:
+    assert runner.invoke(app, ["history", "9"], obj=make_runtime()).exit_code == 2
 
 
 # ---- flood handling (phase 4) ---------------------------------------------------------------
@@ -421,37 +630,37 @@ def instant_runner(monkeypatch: pytest.MonkeyPatch) -> Slept:
     return slept
 
 
-def test_a_short_flood_wait_is_sat_out_and_the_job_finishes(
+def test_a_short_flood_wait_is_sat_out_and_the_run_finishes(
     make_runtime: MakeRuntime, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, dst = source_with_messages(gateway)
-    rt = make_job(make_runtime, gateway)
+    rt = make_runtime(gateway=gateway)
     slept = instant_runner(monkeypatch)
     gateway.fail_next("copy_messages", FloodWait(30))
 
-    result = runner.invoke(app, ["run", "1"], obj=rt)
+    result = runner.invoke(app, CLONE, obj=rt)
 
     assert result.exit_code == 0, result.output
     assert "Telegram asks to wait 30s" in result.output and "same batch" in result.output
     assert texts(gateway, dst) == ["m1", "m2", "m3"] and slept.total >= 31
-    assert saved_jobs(rt)[0].status is JobStatus.DONE
+    assert saved_runs(rt)[0].status is RunStatus.DONE
 
 
-def test_wait_sits_out_a_flood_the_job_would_otherwise_stop_for(
+def test_wait_sits_out_a_flood_the_run_would_otherwise_stop_for(
     make_runtime: MakeRuntime, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, dst = source_with_messages(gateway)
-    rt = make_job(make_runtime, gateway)
+    rt = make_runtime(gateway=gateway)
     slept = instant_runner(monkeypatch)
     gateway.fail_next("copy_messages", FloodWait(3600))
 
-    result = runner.invoke(app, ["run", "1", "--wait"], obj=rt)
+    result = runner.invoke(app, [*CLONE, "--wait"], obj=rt)
 
     assert result.exit_code == 0, result.output
     assert texts(gateway, dst) == ["m1", "m2", "m3"] and slept.total >= 3601
 
 
-def test_the_daily_cap_saves_the_job_and_exits_3_until_the_next_day(
+def test_the_daily_cap_ends_the_run_with_exit_3_until_the_next_day(
     make_runtime: MakeRuntime, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, dst = source_with_messages(gateway, count=6)
@@ -461,18 +670,16 @@ def test_the_daily_cap_saves_the_job_and_exits_3_until_the_next_day(
         "[limits]\nbatch_size = 2\ndaily_cap = 4\nmin_delay = 0.01\nlong_pause_range = [0, 0]\n",
         encoding="utf-8",
     )
-    made = runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
-    assert made.exit_code == 0, made.output
     instant_runner(monkeypatch)
 
-    first = runner.invoke(app, ["run", "1"], obj=rt)
-    second = runner.invoke(app, ["run", "1"], obj=rt)
+    first = runner.invoke(app, CLONE, obj=rt)
+    second = runner.invoke(app, ["run"], obj=rt)
 
     assert first.exit_code == 3
     assert "4 messages sent today" in first.output and "daily cap (4)" in first.output
-    (job,) = saved_jobs(rt)
-    assert (job.status, job.fail_reason, job.cursor_src_id) == (
-        JobStatus.WAITING_FLOOD,
+    (run,) = saved_runs(rt)
+    assert (run.status, run.fail_reason, run.cursor_src_id) == (
+        RunStatus.WAITING_FLOOD,
         "daily_cap",
         4,
     )

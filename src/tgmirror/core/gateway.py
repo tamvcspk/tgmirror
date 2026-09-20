@@ -164,7 +164,7 @@ class TelegramGateway(Protocol):
     async def last_message_id(self, chat: int) -> int:
         """Id of the newest message in ``chat`` (0 when it has none). One cheap read.
 
-        A job records it for the destination at creation, so a later reconcile only reads what
+        The first run of a pair records it for the destination, so a later reconcile only reads what
         was posted after that point (docs/04-state-checkpoint.md, "Resume").
         """
         ...

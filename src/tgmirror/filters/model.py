@@ -1,8 +1,8 @@
-"""The filter model: what a job clones (docs/03-filters.md).
+"""The filter model: what a clone copies (docs/03-filters.md).
 
 Pydantic models that validate and *normalise* on the way in (hashtags lower-cased with ``#``,
 sizes in bytes, dates in UTC, regexes compiled once to prove they are valid), so what ``to_json``
-stores in ``jobs.filters_json`` is canonical and the matcher never has to second-guess it. Stored
+stores in ``mirrors.filters_json`` is canonical and the matcher never has to second-guess it. Stored
 JSON must keep loading: add fields with defaults, never rename (skill ``filter-dsl``).
 """
 
@@ -253,7 +253,7 @@ class FilterSpec(_Model):
         return not (self.include or self.exclude or self.when or self.ids)
 
     def to_json(self) -> str:
-        """The canonical form stored in ``jobs.filters_json`` (``{}`` for no filter)."""
+        """The canonical form stored in ``mirrors.filters_json`` (``{}`` for no filter)."""
         data = self.model_dump(mode="json", by_alias=True, exclude_defaults=True)
         return json.dumps(data, sort_keys=True, ensure_ascii=False)
 

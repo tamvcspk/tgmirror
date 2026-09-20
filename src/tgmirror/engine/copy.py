@@ -13,7 +13,7 @@ async def copy_batch(
     """One ``copy_messages`` call for the whole batch; one result per source message.
 
     ``PerMessage`` (Telegram refused the ids, nothing created) and every other gateway error
-    propagate: the runner decides what they mean for the job.
+    propagate: the runner decides what they mean for the run.
     """
     ids = batch.ids
     copied = await gateway.copy_messages(src, dst, ids)

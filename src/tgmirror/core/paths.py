@@ -42,7 +42,7 @@ class Paths:
 
     @property
     def tmp_dir(self) -> Path:
-        """Scratch space for strategy B downloads (``tmp/<job>/<msg_id>``)."""
+        """Scratch space for strategy B downloads (``tmp/<run>/<msg_id>``)."""
         return self.data_dir / "tmp"
 
     def session_path(self, name: str = "default") -> Path:

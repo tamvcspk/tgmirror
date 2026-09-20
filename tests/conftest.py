@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.fakes import ACCOUNT, FakeAuth, FakeGateway, ScriptedPrompter
+from tgmirror.cli.keys import KeyProvider, no_keys
 from tgmirror.cli.runtime import Connection, Runtime
 from tgmirror.core.config import Config
 from tgmirror.core.paths import Paths
@@ -35,6 +36,7 @@ def make_runtime(tmp_path: Path) -> Callable[..., Runtime]:
         interactive: bool = False,
         env: Mapping[str, str] | None = None,
         root: Path | None = None,  # own config/data dirs (a second runtime in one test)
+        keys: KeyProvider = no_keys,  # hotkeys while a clone runs
     ) -> Runtime:
         gw = gateway if gateway is not None else FakeGateway()
         au = auth if auth is not None else FakeAuth(logged_in=ACCOUNT)
@@ -49,6 +51,7 @@ def make_runtime(tmp_path: Path) -> Callable[..., Runtime]:
             prompter=prompter if prompter is not None else ScriptedPrompter(),
             interactive=interactive,
             env=API_ENV if env is None else env,
+            keys=keys,
         )
 
     return factory

@@ -11,6 +11,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from os import environ
 
+from tgmirror.cli.keys import KeyProvider, no_keys, terminal_keys
 from tgmirror.core.auth import TelegramAuth
 from tgmirror.core.config import Config, load_config
 from tgmirror.core.errors import NotLoggedIn
@@ -38,6 +39,7 @@ class Runtime:
     interactive: bool  # a terminal is attached, so prompting is possible
     env: Mapping[str, str]
     debug: bool = False  # show tracebacks instead of one-line errors
+    keys: KeyProvider = no_keys  # hotkeys (p/r/q) while a clone runs
 
     def config(self) -> Config:
         return load_config(self.paths, self.env)
@@ -75,4 +77,5 @@ def default_runtime() -> Runtime:
         prompter=QuestionaryPrompter(),
         interactive=sys.stdin.isatty() and sys.stdout.isatty(),
         env=environ,
+        keys=terminal_keys,
     )

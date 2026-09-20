@@ -17,11 +17,11 @@ from tgmirror.core.errors import (
     DailyCapReached,
     FloodWait,
     ForwardsRestricted,
-    JobBusy,
     MissingCredentials,
     NoPermission,
     NotLoggedIn,
     PeerFlood,
+    RunBusy,
     SchemaTooNew,
     SessionBusy,
     StoreError,
@@ -41,14 +41,7 @@ from tgmirror.engine.endpoints import (
     SameChannel,
     SourceRestricted,
 )
-from tgmirror.engine.jobs import (
-    AmbiguousJob,
-    JobError,
-    JobExists,
-    JobNotFound,
-    JobWaiting,
-    ModeUnsupported,
-)
+from tgmirror.engine.runs import ModeUnsupported, RunError, RunNotFound, RunWaiting
 from tgmirror.filters.model import FilterError
 from tgmirror.filters.parser import FilterMix
 from tgmirror.ui.messages import t
@@ -118,23 +111,15 @@ def describe(exc: TgMirrorError) -> str:
             return t(f"err.{exc.reason}")
         case NewChannelUnsupported():
             return t("err.new_unsupported", kind=t(f"kind.{exc.kind}"))
-        case JobNotFound():
-            return t("err.job_not_found", ref=exc.ref)
-        case AmbiguousJob():
-            return t(
-                "err.job_ambiguous",
-                ref=exc.ref,
-                matches=", ".join(f"{j.id} ({j.name})" for j in exc.matches),
-            )
-        case JobExists():
-            return t("err.job_exists_refilter" if exc.refilter else "err.job_exists", id=exc.job.id)
+        case RunNotFound():
+            return t("err.run_none") if exc.ref is None else t("err.run_not_found", ref=exc.ref)
         case ModeUnsupported():
             return t("err.mode_unsupported", mode=exc.mode)
-        case JobWaiting():
+        case RunWaiting():
             until = exc.until.astimezone().strftime("%Y-%m-%d %H:%M")
-            return t(f"err.job_waiting_{exc.reason}", until=until)
-        case JobBusy():
-            return t("err.job_busy", id=exc.job_id)
+            return t(f"err.run_waiting_{exc.reason}", until=until)
+        case RunBusy():
+            return t("err.run_busy", id=exc.run_id)
         case FilterMix():
             return t("err.filter_mix")
         case FilterError():
@@ -147,14 +132,14 @@ def describe(exc: TgMirrorError) -> str:
 
 
 def exit_code(exc: TgMirrorError) -> int:
-    if isinstance(exc, FloodWait | PeerFlood | DailyCapReached | JobWaiting):
+    if isinstance(exc, FloodWait | PeerFlood | DailyCapReached | RunWaiting):
         return 3
     if isinstance(
         exc, NoPermission | ForwardsRestricted | SourceRestricted | DestinationNotWritable
     ):
         return 4
     if isinstance(
-        exc, UsageError | ConfigError | BadApiCredentials | EndpointError | JobError | FilterError
+        exc, UsageError | ConfigError | BadApiCredentials | EndpointError | RunError | FilterError
     ):
         return 2
     return 1

@@ -1,4 +1,4 @@
-"""Wizard steps for ``tgmirror new`` (docs/02-cli-ux.md, steps 1-3).
+"""Wizard steps for ``tgmirror clone`` (docs/02-cli-ux.md, steps 1-3).
 
 Prompts only: these functions receive channels that were already fetched, ask, and return the
 same values the ``--src``/``--dst``/``--dst-new``/filter flags produce. Validation and every rule
@@ -29,7 +29,7 @@ MAX_FILTER_ATTEMPTS = 3
 
 async def pick_source(prompter: Prompter, channels: Sequence[ChannelInfo]) -> ChannelInfo:
     choices = [Choice(channel_label(c) + (" 🔒" if c.noforwards else ""), c) for c in channels]
-    return await prompter.select(t("new.pick_source"), choices)
+    return await prompter.select(t("clone.pick_source"), choices)
 
 
 async def pick_destination(
@@ -38,19 +38,19 @@ async def pick_destination(
     """An eligible existing chat, or a new channel described by a ``NewChannelSpec``."""
     candidates = eligible_destinations(src, channels)
     if not candidates:
-        prompter.say(t("new.no_candidates"))
+        prompter.say(t("clone.no_candidates"))
         return await ask_new_channel(prompter)
 
-    choices: list[Choice[ChannelInfo | None]] = [Choice(t("new.create_new"), None)]
+    choices: list[Choice[ChannelInfo | None]] = [Choice(t("clone.create_new"), None)]
     choices += [Choice(channel_label(c), c) for c in candidates]
-    picked = await prompter.select(t("new.pick_destination"), choices)
+    picked = await prompter.select(t("clone.pick_destination"), choices)
     return picked if picked is not None else await ask_new_channel(prompter)
 
 
 async def ask_new_channel(prompter: Prompter) -> NewChannelSpec:
     for attempt in range(1, MAX_TITLE_ATTEMPTS + 1):
-        title = await prompter.text(t("new.prompt_title"))
-        about = await prompter.text(t("new.prompt_about"))
+        title = await prompter.text(t("clone.prompt_title"))
+        about = await prompter.text(t("clone.prompt_about"))
         try:
             return validate_new_channel(NewChannelSpec(title, about))
         except InvalidChannelTitle as exc:
@@ -60,16 +60,22 @@ async def ask_new_channel(prompter: Prompter) -> NewChannelSpec:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-async def pick_filters(prompter: Prompter) -> FilterSpec:
-    """Step 3: no filter, a few criteria, or a YAML file. A rejected answer asks again."""
-    how = await prompter.select(
-        t("filter.pick"),
-        [
-            Choice(t("filter.none"), "none"),
-            Choice(t("filter.criteria"), "criteria"),
-            Choice(t("filter.file"), "file"),
-        ],
-    )
+async def pick_filters(prompter: Prompter, *, can_keep: bool = False) -> FilterSpec | None:
+    """Step 3: no filter, a few criteria, or a YAML file. A rejected answer asks again.
+
+    ``can_keep`` (the pair was cloned before) adds the first choice, "keep the filter of the
+    previous run", answered with ``None`` like giving no filter flag at all.
+    """
+    choices = [
+        Choice(t("filter.none"), "none"),
+        Choice(t("filter.criteria"), "criteria"),
+        Choice(t("filter.file"), "file"),
+    ]
+    if can_keep:
+        choices.insert(0, Choice(t("filter.keep"), "keep"))
+    how = await prompter.select(t("filter.pick"), choices)
+    if how == "keep":
+        return None
     if how == "none":
         return FilterSpec()
     for attempt in range(1, MAX_FILTER_ATTEMPTS + 1):

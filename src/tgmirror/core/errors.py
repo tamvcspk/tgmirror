@@ -40,7 +40,7 @@ class PeerFlood(GatewayError):
 
 
 class DailyCapReached(TgMirrorError):
-    """The account sent ``daily_cap`` messages today: not a failure, the job rests to ``resume_at``.
+    """Today's ``daily_cap`` is used up: not a failure, the run rests until ``resume_at``.
 
     It is our own budget (docs/05-chong-flood.md), not something Telegram said, so it is not a
     ``GatewayError``.
@@ -93,12 +93,12 @@ class SchemaTooNew(StoreError):
     """The database was written by a newer tgmirror than this one."""
 
 
-class JobBusy(StoreError):
-    """Another runner holds the job (fresh heartbeat). ``--force-takeover`` overrides it."""
+class RunBusy(StoreError):
+    """Another process is running this clone (fresh heartbeat); ``--force-takeover`` overrides."""
 
-    def __init__(self, job_id: int) -> None:
-        super().__init__(f"job {job_id} is being run by another process")
-        self.job_id = job_id
+    def __init__(self, run_id: int) -> None:
+        super().__init__(f"run {run_id} is being run by another process")
+        self.run_id = run_id
 
 
 class UsageError(TgMirrorError):

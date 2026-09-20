@@ -79,7 +79,7 @@ sent = await client.forward_messages(dst, ids, from_peer=src, drop_author=True)
 
 - `ids` = all message ids of the batch, ascending, **whole albums only**.
 - The result is a list aligned with `ids`. After a call that returned normally, a `None` entry means Telegram created nothing for that id (deleted at the source) → `failed('not_copied')`. `MessageIdInvalidError` (every id gone) maps to `PerMessage` and the runner retries unit by unit. Only a cut-off call (`Transient`) leaves the outcome unknown → reconcile (`docs/04-state-checkpoint.md`). Read from the Telethon 1.45 source, still unverified on a real account (`docs/06-lo-trinh.md`).
-- `last_message_id(chat)` (`get_messages(limit=1)`) is how a job records where the destination stood at creation.
+- `last_message_id(chat)` (`get_messages(limit=1)`) is how the first run of a pair records where the destination stood (`dst_base_id`).
 - `drop_author` (and `drop_media_captions`) exist in `forward_messages` since the Telethon version we require (`>=1.45`, checked in the spike); no raw `ForwardMessagesRequest` needed for broadcast/supergroup targets.
 - Forum targets: `forward_messages` has no topic parameter, so the gateway calls `ForwardMessagesRequest(..., top_msg_id=<dst topic>)` itself (still inside the gateway + limiter). One call = one destination topic; the batcher cuts a batch when the topic changes. Topic mapping rules: `docs/01-kien-truc.md`. Unverified until the phase 8 spike.
 - Batch size defaults to 20, hard max 100.
@@ -87,7 +87,7 @@ sent = await client.forward_messages(dst, ids, from_peer=src, drop_author=True)
 
 ## noforwards (decision D3)
 
-At job creation: `src.noforwards` true →
+Before a clone starts: `src.noforwards` true →
 - user is not creator/admin of the source: refuse with a clear message. No reupload fallback.
 - user is admin: tell them they can turn off "Restrict saving content" temporarily; offer `--mode reupload` only after an explicit confirmation prompt (or `--yes-i-administer-this-channel` non-interactively).
 
