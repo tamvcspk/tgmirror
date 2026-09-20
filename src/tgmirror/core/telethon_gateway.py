@@ -9,23 +9,29 @@ adds reading and copying messages. The limiter is wired in at phase 4 (docs/06-l
 import asyncio
 import contextlib
 import copy
+import itertools
+import math
 import os
 import re
 import sqlite3
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from telethon import TelegramClient, errors, types, utils
+from telethon import TelegramClient, errors, helpers, types, utils
+from telethon.errors.common import InvalidBufferError
+from telethon.network import MTProtoSender
 from telethon.tl import custom
 from telethon.tl.functions.channels import CreateChannelRequest
 from telethon.tl.functions.messages import SearchRequest
+from telethon.tl.functions.upload import GetFileRequest, SaveBigFilePartRequest
 
 from tgmirror.core.auth import AccountInfo
-from tgmirror.core.config import Config
+from tgmirror.core.config import Config, Limits
 from tgmirror.core.errors import (
     BadApiCredentials,
     CodeExpired,
@@ -45,6 +51,7 @@ from tgmirror.core.errors import (
     SessionBusy,
     TooManyChannels,
     Transient,
+    TransportPressure,
 )
 from tgmirror.core.gateway import (
     ALBUM_MARGIN,
@@ -62,8 +69,35 @@ from tgmirror.core.gateway import (
     Unit,
 )
 from tgmirror.core.paths import Paths
+from tgmirror.core.pool import RequestBudget, run_parts
+
+# The Telethon version this module was last checked against. ``pyproject.toml`` pins the same one
+# and ``tests/unit/test_telethon_pin.py`` fails on any other, because the request pool and the
+# reupload reach into Telethon internals with no compatibility promise. Bump it only after the
+# checklist in docs/06-lo-trinh.md ("Nâng cấp Telethon").
+TELETHON_CHECKED = "1.45.0"
+
+
+def _quiet_hachoir() -> None:
+    """Telethon reads a video's details with hachoir, which prints ``[warn] [<NdsFile>] ...``
+    whenever one of its many parsers fails on a big file. It is noise: the details we need are
+    passed explicitly."""
+    try:
+        from hachoir.core import config
+    except ImportError:
+        return
+    config.quiet = True
+
+
+_quiet_hachoir()
 
 READ_WAIT = 1.0  # seconds between history pages: reads are rate-limited too (docs/05)
+
+DOWN_PART = 1024 * 1024  # a download request: at most 1 MiB, never across a 1 MiB boundary
+UP_PART = 512 * 1024  # an upload part: at most 512 KiB
+BIG_FILE = 10 * 1024 * 1024  # from here Telegram wants the big-file upload
+MAX_UP_PARTS = 4000  # parts of a big file (2 GB; more only for Premium: not pooled)
+START_REQUESTS = 2  # requests in flight a budget starts with
 
 # ``media`` pushdown (docs/03-filters.md): only kinds whose Telegram filter is a superset of ours.
 # ``filters.pushdown.PUSHABLE_MEDIA`` lists the same kinds; a test keeps the two in step.
@@ -424,6 +458,7 @@ class _Item:
     message: custom.Message
     path: Path | None = None  # its media, when it has a file
     thumb: Path | None = None
+    uploaded: Any = None  # the ``InputFileBig`` its bytes were uploaded as, ahead of the post
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,6 +530,41 @@ def _album_share(items: Sequence[_Item]) -> int:
     return sum(i.message.file.size or 0 for i in items if i.message.file is not None)
 
 
+class _FileAt:
+    """A file read or written at offsets from several tasks: one handle, one lock, and the
+    seek and the transfer of each part done under it (the calls run in threads)."""
+
+    def __init__(self, path: Path, size: int, *, mode: str = "new") -> None:
+        """``mode``: ``new`` makes the whole file at once, ``resume`` reopens one that a cut-off
+        transfer left, ``read`` opens one for reading."""
+        self._path = path
+        self._size = size
+        self._mode = mode
+        self._lock = threading.Lock()
+        self._file: Any = None
+
+    def open(self) -> None:
+        if self._mode == "new":  # the whole file is made at once so every part has its place
+            with open(self._path, "wb") as fresh:
+                fresh.truncate(self._size)
+        self._file = open(self._path, "rb" if self._mode == "read" else "r+b")  # noqa: SIM115
+
+    def write(self, offset: int, data: bytes) -> None:
+        with self._lock:
+            self._file.seek(offset)
+            self._file.write(data)
+
+    def read(self, offset: int, length: int) -> bytes:
+        with self._lock:
+            self._file.seek(offset)
+            return bytes(self._file.read(length))
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+
 def _make_room(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
@@ -552,11 +622,53 @@ class TelethonAuth:
             await self._client.log_out()
 
 
-class TelethonGateway:
-    """``TelegramGateway`` on a connected Telethon client (reupload arrives in phase 6)."""
+@dataclass(frozen=True, slots=True)
+class TransferSettings:
+    """How files of strategy B move (``[limits]`` ``max_requests``, ``upload_connections``,
+    ``pool_min_mb``). ``max_requests = 0`` (the default here, so tests and one-shot commands
+    are unaffected) leaves them to Telethon: one request at a time."""
 
-    def __init__(self, client: TelegramClient) -> None:
+    max_requests: int = 0
+    upload_connections: int = 2
+    min_bytes: int = BIG_FILE
+    request_timeout: float = 30.0  # a request that gets no answer counts as pushback
+
+    @classmethod
+    def of(cls, limits: Limits) -> "TransferSettings":
+        return cls(limits.max_requests, limits.upload_connections, limits.pool_min_mb * 1024 * 1024)
+
+
+class _NoPool(Exception):
+    """This file cannot go through the pool (a CDN redirect, ...): Telethon's way instead."""
+
+
+class TelethonGateway:
+    """``TelegramGateway`` on a connected Telethon client."""
+
+    def __init__(
+        self,
+        client: TelegramClient,
+        transfer: TransferSettings | None = None,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._client = client
+        self._transfer = transfer or TransferSettings()
+        self._sleep = sleep
+        top = self._transfer.max_requests
+        self._budget = (
+            RequestBudget(start=min(START_REQUESTS, top), maximum=top) if top > 0 else None
+        )
+        # Bulk data never shares the main connection with the calls that read and post: the first
+        # real run drew a 429 with downloads and uploads on it. Uploads spread over extra
+        # connections, a download over one of its own (both to this account's data centre).
+        self._extra_senders: list[MTProtoSender] | None = None
+        self._down_sender: Any = None
+        self._owned: list[MTProtoSender] = []  # what ``aclose`` must disconnect
+        # a download cut off by a flood or a lost connection keeps what it has:
+        # path -> (size, the parts already written)
+        self._partial: dict[Path, tuple[int, set[int]]] = {}
+        self._rotation = itertools.count()
 
     async def list_channels(self) -> list[ChannelInfo]:
         channels: list[ChannelInfo] = []
@@ -778,6 +890,178 @@ class TelethonGateway:
         files = tuple(f for item in items for f in (item.path, item.thumb) if f is not None)
         return Prepared(unit, files, _Fetched(tuple(items)))
 
+    # ---- file transfers through the request budget ---------------------------------------
+
+    def _pooled(self, message: custom.Message) -> bool:
+        """A document big enough to be worth many requests in flight."""
+        return (
+            self._budget is not None
+            and message.document is not None
+            and (message.file.size or 0) >= self._transfer.min_bytes
+        )
+
+    async def _request(self, sender: object, request: object) -> Any:
+        """One request of a transfer, its transport errors as ``TransportPressure``."""
+        try:
+            with mapped_errors():
+                return await asyncio.wait_for(
+                    self._client._call(sender, request),  # noqa: SLF001
+                    self._transfer.request_timeout,
+                )
+        except InvalidBufferError as exc:  # code 429: Telegram's flood at the transport level
+            raise TransportPressure(f"transport error {exc.code}", flood=exc.code == 429) from exc
+        except Transient as exc:  # closed connection, no answer in time
+            raise TransportPressure(str(exc)) from exc
+
+    async def _download_parallel(
+        self, message: custom.Message, part: Path, on_transfer: OnTransfer | None
+    ) -> str:
+        """The document of ``message`` into ``part``, many 1 MiB requests in flight on the
+        connection of the file's data centre (one connection is enough: spike 12). Each part
+        is written where it belongs, so the order they arrive in does not matter. Raises
+        ``_NoPool`` for a file this cannot fetch."""
+        assert self._budget is not None
+        size = int(message.file.size)
+        dc_id, location = utils.get_input_location(message.media)
+        home = self._client.session.dc_id
+        borrowed = dc_id is not None and dc_id != home
+        sender = (
+            await self._client._borrow_exported_sender(dc_id)  # noqa: SLF001
+            if borrowed
+            else await self._download_sender()
+        )
+        report = _reporting(on_transfer, TransferPhase.DOWNLOAD, message.id)
+        known = self._partial.get(part)
+        resuming = known is not None and known[0] == size and await asyncio.to_thread(part.exists)
+        have: set[int] = known[1] if resuming and known is not None else set()
+        self._partial[part] = (size, have)
+        done = sum(min(DOWN_PART, size - i * DOWN_PART) for i in have)
+        handle = _FileAt(part, size, mode="resume" if resuming else "new")
+        try:
+
+            async def work(index: int) -> None:
+                nonlocal done
+                if index in have:  # fetched before the transfer was cut off
+                    return
+                offset = index * DOWN_PART
+                got = await self._request(
+                    sender, GetFileRequest(location, offset=offset, limit=DOWN_PART)
+                )
+                if isinstance(got, types.upload.FileCdnRedirect):
+                    raise _NoPool
+                if len(got.bytes) != min(DOWN_PART, size - offset):
+                    raise TransportPressure("a part came back with the wrong length")
+                await asyncio.to_thread(handle.write, offset, got.bytes)
+                have.add(index)
+                done += len(got.bytes)
+                if report is not None:
+                    report(done, size)
+
+            await asyncio.to_thread(handle.open)
+            if report is not None:
+                report(done, size)
+            await run_parts(
+                math.ceil(size / DOWN_PART), work, self._budget, priority=1, sleep=self._sleep
+            )
+            self._partial.pop(part, None)
+        finally:
+            await asyncio.to_thread(handle.close)
+            if borrowed:
+                await self._client._return_exported_sender(sender)  # noqa: SLF001
+        return str(part)
+
+    async def _download_sender(self) -> Any:
+        """The connection downloads use: one of their own, made once and kept. If it cannot be
+        made the main one is used, which works but shares it with everything else."""
+        if self._down_sender is None:
+            try:
+                self._down_sender = await self._new_sender()
+                self._owned.append(self._down_sender)
+            except Exception:  # noqa: BLE001 - the main connection is the fallback
+                self._down_sender = self._client._sender  # noqa: SLF001
+        return self._down_sender
+
+    async def _upload_senders(self) -> list[object]:
+        """The connections an upload is spread over: ``upload_connections`` of their own to the
+        account's data centre (they share its auth key), made once and kept for the next file.
+        One that cannot be made is left out; with none, the main connection is used, which works
+        but shares it with everything else."""
+        if self._extra_senders is None:
+            self._extra_senders = []
+            for _ in range(self._transfer.upload_connections):
+                try:
+                    sender = await self._new_sender()
+                except Exception:  # noqa: BLE001 - fewer connections is the fallback
+                    break
+                self._extra_senders.append(sender)
+                self._owned.append(sender)
+        return list(self._extra_senders) or [self._client._sender]  # noqa: SLF001
+
+    async def _new_sender(self) -> MTProtoSender:
+        """A connection of its own to this account's data centre, on the same auth key."""
+        client = self._client
+        dc = await client._get_dc(client.session.dc_id)  # noqa: SLF001
+        sender = MTProtoSender(client.session.auth_key, loggers=client._log)  # noqa: SLF001
+        await sender.connect(
+            client._connection(  # noqa: SLF001
+                dc.ip_address,
+                dc.port,
+                dc.id,
+                loggers=client._log,  # noqa: SLF001
+                proxy=client._proxy,  # noqa: SLF001
+                local_addr=client._local_addr,  # noqa: SLF001
+            )
+        )
+        return sender
+
+    async def aclose(self) -> None:
+        """Close the connections of file transfers (the client itself is the caller's)."""
+        for sender in self._owned:
+            with contextlib.suppress(Exception):
+                await sender.disconnect()
+        self._owned = []
+        self._extra_senders = None
+        self._down_sender = None
+        self._partial.clear()
+
+    async def _upload_parallel(
+        self, path: Path, msg_id: int, on_transfer: OnTransfer | None
+    ) -> types.InputFileBig:
+        """``path`` as a big file uploaded in 512 KiB parts, many in flight at once over several
+        connections; the result is what ``send_file`` takes instead of the path. Parts may
+        arrive in any order, and a file that is uploaded but never posted is discarded by
+        Telegram, so a failure part-way leaves nothing behind."""
+        assert self._budget is not None
+        size = (await asyncio.to_thread(path.stat)).st_size
+        parts = math.ceil(size / UP_PART)
+        senders = await self._upload_senders()
+        file_id = helpers.generate_random_long()
+        report = _reporting(on_transfer, TransferPhase.UPLOAD, msg_id)
+        done = 0
+        handle = _FileAt(path, size, mode="read")
+        try:
+
+            async def work(index: int) -> None:
+                nonlocal done
+                data = await asyncio.to_thread(handle.read, index * UP_PART, UP_PART)
+                sender = senders[next(self._rotation) % len(senders)]  # a retry may change
+                sent = await self._request(
+                    sender, SaveBigFilePartRequest(file_id, index, parts, data)
+                )
+                if not sent:
+                    raise PerMessage("upload_failed")
+                done += len(data)
+                if report is not None:
+                    report(done, size)
+
+            await asyncio.to_thread(handle.open)
+            if report is not None:
+                report(0, size)
+            await run_parts(parts, work, self._budget, priority=0, sleep=self._sleep)
+        finally:
+            await asyncio.to_thread(handle.close)
+        return types.InputFileBig(id=file_id, parts=parts, name=path.name)
+
     async def _download(
         self, message: custom.Message, tmp: Path, on_transfer: OnTransfer | None = None
     ) -> Path:
@@ -787,11 +1071,28 @@ class TelethonGateway:
         if await asyncio.to_thread(final.exists):
             return final
         part = tmp / f"{message.id}.part"
-        await asyncio.to_thread(_make_room, part)
-        progress = _reporting(on_transfer, TransferPhase.DOWNLOAD, message.id)
-        got = await self._client.download_media(
-            message, file=str(part), **({"progress_callback": progress} if progress else {})
-        )
+        if part not in self._partial:  # what a cut-off transfer left is picked up again
+            await asyncio.to_thread(_make_room, part)
+        got: str | None = None
+        if self._pooled(message):
+            try:
+                got = await self._download_parallel(message, part, on_transfer)
+            except _NoPool:
+                self._partial.pop(part, None)
+                await asyncio.to_thread(_make_room, part)
+            except (FloodWait, Transient):
+                raise  # the guard repeats the call: keep the file and the parts it has
+            except BaseException:  # never leave a big half-made file on the disk
+                self._partial.pop(part, None)
+                await asyncio.to_thread(_make_room, part)
+                raise
+        if got is None:
+            progress = _reporting(on_transfer, TransferPhase.DOWNLOAD, message.id)
+            got = await self._client.download_media(
+                message,
+                file=str(part),
+                **({"progress_callback": progress} if progress else {}),
+            )
         if got is None:
             raise PerMessage("download_failed")
         await asyncio.to_thread(_publish, got, final)
@@ -819,6 +1120,36 @@ class TelethonGateway:
             return None  # a missing cover is not worth failing the video for
         await asyncio.to_thread(_publish, got, final)
         return final
+
+    async def _pooled_upload(self, item: _Item) -> bool:
+        """A single document big enough for the big-file API and the request pool."""
+        if self._budget is None or item.path is None or item.message.document is None:
+            return False
+        size = (await asyncio.to_thread(item.path.stat)).st_size
+        return (
+            size >= BIG_FILE
+            and size >= self._transfer.min_bytes
+            and math.ceil(size / UP_PART) <= MAX_UP_PARTS
+        )
+
+    async def upload_prepared(
+        self, prepared: Prepared, on_transfer: OnTransfer | None = None
+    ) -> Prepared:
+        fetched = prepared.handle
+        assert isinstance(fetched, _Fetched)
+        if prepared.uploaded or len(fetched.items) != 1:
+            return prepared  # an album is uploaded by the post itself
+        item = fetched.items[0]
+        if item.path is None or not await self._pooled_upload(item):
+            return prepared
+        with mapped_errors():
+            handle = await self._upload_parallel(item.path, item.message.id, on_transfer)
+        return Prepared(
+            prepared.unit,
+            prepared.files,
+            _Fetched((replace(item, uploaded=handle),)),
+            uploaded=True,
+        )
 
     async def send_prepared(
         self,
@@ -864,11 +1195,17 @@ class TelethonGateway:
                 if kind is MediaKind.VIDEO:
                     # without it Telegram turns a video with no sound track into a GIF
                     extra["nosound_video"] = True
-            if progress := _reporting(on_transfer, TransferPhase.UPLOAD, message.id):
+            source: Any = str(item.path)
+            if item.uploaded is not None:  # the bytes went up before: only post them
+                source = item.uploaded
+            elif await self._pooled_upload(item):
+                # the bytes go up in parallel, then the message is posted with what was uploaded
+                source = await self._upload_parallel(item.path, message.id, on_transfer)
+            elif progress := _reporting(on_transfer, TransferPhase.UPLOAD, message.id):
                 extra["progress_callback"] = progress
             sent = await self._client.send_file(
                 peer,
-                str(item.path),
+                source,
                 caption=text,
                 formatting_entities=entities or None,
                 parse_mode=None,  # the entities are the formatting: nothing to parse as markdown
@@ -954,7 +1291,9 @@ async def telethon_session(
             await client.connect()
     except sqlite3.OperationalError as exc:
         raise SessionBusy("session file is locked by another process") from exc
+    gateway = TelethonGateway(client, TransferSettings.of(config.limits))
     try:
-        yield TelethonAuth(client), TelethonGateway(client)
+        yield TelethonAuth(client), gateway
     finally:
+        await gateway.aclose()
         await client.disconnect()

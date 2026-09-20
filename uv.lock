@@ -646,7 +646,7 @@ requires-dist = [
     { name = "questionary", specifier = ">=2.0" },
     { name = "regex", specifier = ">=2024.11" },
     { name = "rich", specifier = ">=13.7" },
-    { name = "telethon", specifier = ">=1.45" },
+    { name = "telethon", specifier = "==1.45.0" },
     { name = "tenacity", specifier = ">=8.3" },
     { name = "typer", specifier = ">=0.12" },
 ]

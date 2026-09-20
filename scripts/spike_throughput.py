@@ -65,6 +65,7 @@ async def pool(
     inflight: int,
     connections: int,
     request: Callable[[int], Any],
+    ticks: list[float] | None = None,
 ) -> tuple[float, str]:
     """Run ``parts`` requests (``request(index)``), ``inflight`` at a time spread over
     ``connections`` connections. Returns the seconds it took and a note (a FloodWait, a
@@ -80,6 +81,8 @@ async def pool(
         for index in todo:  # a shared iterator: whoever is free takes the next part
             try:
                 await client._call(sender, request(index))  # noqa: SLF001
+                if ticks is not None:
+                    ticks.append(time.monotonic())  # one part is through
             except errors.FloodWaitError as exc:
                 note = f"FLOOD_WAIT {exc.seconds}s"
                 return
@@ -164,6 +167,20 @@ async def download(args: argparse.Namespace) -> None:
                 row(f"{inflight} in flight on {connections} conn", parts * DOWN_PART, runs)
 
 
+def timeline(ticks: list[float], began: float, window: int) -> None:
+    """Speed per ``window`` seconds from when each part went through."""
+    if not ticks:
+        return
+    first = min(ticks)
+    buckets: dict[int, int] = {}
+    for tick in ticks:
+        buckets[int((tick - first) // window)] = buckets.get(int((tick - first) // window), 0) + 1
+    line = " ".join(
+        f"{n * UP_PART / window / (1024 * 1024):.1f}" for _, n in sorted(buckets.items())
+    )
+    print(f"  MB/s per {window}s: {line}")
+
+
 async def upload(args: argparse.Namespace) -> None:
     async with session() as (client, _):
         size = args.mb * 1024 * 1024
@@ -178,6 +195,8 @@ async def upload(args: argparse.Namespace) -> None:
                 runs = []
                 for _ in range(args.repeat):
                     file_id = random.getrandbits(62)  # every repeat is a file of its own
+                    ticks: list[float] = []
+                    began = time.monotonic()
                     runs.append(
                         await pool(
                             client,
@@ -188,8 +207,11 @@ async def upload(args: argparse.Namespace) -> None:
                             lambda i, file_id=file_id: SaveBigFilePartRequest(
                                 file_id, i, parts, blob
                             ),
+                            ticks,
                         )
                     )
+                    if args.timeline:
+                        timeline(ticks, began, args.timeline)
                 row(f"{inflight} in flight on {connections} conn", parts * UP_PART, runs)
 
 
@@ -249,6 +271,14 @@ def main() -> None:
             one.add_argument("src", help="-100... id or @username")
             one.add_argument("message", type=int, help="id of a message that has a file")
         one.add_argument("--mb", type=int, default=64)
+        one.add_argument(
+            "--timeline",
+            type=int,
+            default=0,
+            metavar="SECONDS",
+            help="also print the speed in windows of this many seconds (a long transfer"
+            " that starts fast and slows down shows up here)",
+        )
         one.add_argument("--repeat", type=int, default=3, help="runs per setting (median)")
         one.add_argument("--inflight", type=counts, default=[1, 2, 4, 8], help="e.g. 1,2,4,8")
         one.add_argument("--connections", type=counts, default=[1, 2, 4], help="e.g. 1,2,4")

@@ -36,6 +36,14 @@ class Limits(BaseModel):
     max_auto_wait: float = Field(900.0, ge=0)
     prefetch: int = Field(1, ge=0, le=3)  # units downloaded ahead while one uploads (0 = none)
     tmp_budget_mb: int = Field(2048, ge=1)  # disk the downloaded-ahead files may take together
+    # File transfers of strategy B (docs/05): requests in flight at once for the whole process,
+    # shared by downloads and uploads (0 = one request at a time, Telethon's own way). The
+    # budget starts at 2 and grows to this while things go well. 16 in flight over 3 connections
+    # drew a transport-level 429 in the spike and 8 drew one in the first real run, while 4 in
+    # flight already gave ~30 MB/s of download: so this stays low.
+    max_requests: int = Field(4, ge=0, le=16)
+    upload_connections: int = Field(2, ge=1, le=3)  # connections uploads are spread over
+    pool_min_mb: int = Field(10, ge=1)  # smaller files keep Telethon's own transfer
 
     @model_validator(mode="after")
     def _check_ranges(self) -> Self:

@@ -71,6 +71,8 @@ class Rig:
         self.delays: list[float] = []
         self.recorder = Recorder()
         self.batch_size = 3
+        self.uploading = 0.0  # seconds the fake clock moves while bytes are uploaded
+        self._now = 0.0
         self.pushdown = True
         self._stores: list[Store] = []
 
@@ -81,6 +83,10 @@ class Rig:
 
     async def sleep(self, seconds: float) -> None:
         self.delays.append(seconds)
+
+    def mono(self) -> float:
+        """A clock that stands still, so no test earns credit against the pace by accident."""
+        return self._now
 
     def runner(
         self,
@@ -104,6 +110,7 @@ class Rig:
             rng=random.Random(0),
             timing=timing or RunnerTiming(poll_interval=0.5, heartbeat_interval=3600),
             wait=wait,
+            mono=self.mono,
             **extra,
         )
 

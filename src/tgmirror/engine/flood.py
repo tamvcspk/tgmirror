@@ -77,9 +77,14 @@ class FloodGuard:
 
     # ---- writes -----------------------------------------------------------------------------
 
-    async def pace(self, cost: int) -> None:
-        """Wait until a write of ``cost`` messages may go out. Raises ``DailyCapReached``."""
-        await self._limiter.acquire(cost, "write")
+    async def pace(self, cost: int, credit: float = 0.0) -> None:
+        """Wait until a write of ``cost`` messages may go out, ``credit`` seconds of the delay
+        having been spent already (uploading its bytes). Raises ``DailyCapReached``."""
+        await self._limiter.acquire(cost, "write", credit)
+
+    def check_cap(self, cost: int) -> None:
+        """Raise ``DailyCapReached`` now if a write of ``cost`` messages would pass the cap."""
+        self._limiter.check_cap(cost)
 
     async def pace_read(self, requests: int) -> None:
         """Wait until ``requests`` read requests may go out (their own, lighter bucket)."""
@@ -87,19 +92,24 @@ class FloodGuard:
 
     async def write(self, method: str, cost: int, call: Callable[[], Awaitable[T]]) -> T:
         """Run ``call`` (a write of ``cost`` messages), repeating it after each FloodWait."""
+        result = await self.transfer(method, call)
+        self._limiter.on_success(cost)
+        return result
+
+    async def transfer(self, method: str, call: Callable[[], Awaitable[T]]) -> T:
+        """Run ``call`` that moves bytes but creates no message (uploading a file before it is
+        posted), repeating it after each FloodWait. It is neither paced nor counted: only the
+        post that follows is a write."""
         floods = 0
         while True:
             try:
-                result = await call()
+                return await call()
             except FloodWait as exc:
                 floods += 1
                 await self.flooded(method, exc, give_up=floods >= MAX_FLOODS_PER_CALL)
-                continue
             except PeerFlood:
                 await self.peer_flood(method)
                 raise
-            self._limiter.on_success(cost)
-            return result
 
     # ---- reads ------------------------------------------------------------------------------
 
@@ -114,7 +124,8 @@ class FloodGuard:
 
         Returning means the wait is over and the call may be repeated.
         """
-        await self._log(method, "slow_mode" if exc.slow_mode else "flood_wait", exc.seconds)
+        kind = "transport_429" if exc.transport else "slow_mode" if exc.slow_mode else "flood_wait"
+        await self._log(method, kind, exc.seconds)
         throttled = self._limiter.throttle
         self._limiter.on_flood()
         await self._store.save_limiter_state(self._run.account, self._limiter.state)

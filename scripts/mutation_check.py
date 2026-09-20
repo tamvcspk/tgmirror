@@ -35,6 +35,14 @@ TESTS = [
     "tests/unit/test_cli_reupload.py",
     "tests/unit/test_telethon_reupload.py",
     "tests/unit/test_architecture.py",
+    "tests/integration/test_runner_analysis.py",
+    "tests/unit/test_pool.py",
+    "tests/unit/test_telethon_pool.py",
+    "tests/unit/test_telethon_transfer.py",
+    "tests/unit/test_transfer.py",
+    "tests/unit/test_status.py",
+    "tests/unit/test_limiter.py",
+    "tests/integration/test_runner_split.py",
 ]
 
 
@@ -87,8 +95,8 @@ MUTATIONS = [
     Mutation(
         "D3: a run does not read the source again",
         "src/tgmirror/engine/runs.py",
-        "    if may_reupload(request.mode, request.caption):\n        await check_source(",
-        "    if False:\n        await check_source(",
+        "    if may_reupload(request.mode, request.caption):\n        protected = await check_source(",
+        "    if False:\n        protected = await check_source(",
     ),
     Mutation(
         "D3: a protected source is copied without the user's word",
@@ -111,8 +119,8 @@ MUTATIONS = [
     Mutation(
         "D3: the statement is ignored when the pair runs again",
         "src/tgmirror/engine/runs.py",
-        "    if not current.noforwards or request.protected_ack:\n        return",
-        "    if not current.noforwards:\n        return",
+        "    if request.protected_ack:\n        return True\n",
+        "",
     ),
     Mutation(
         "D3: run forgets the confirmation",
@@ -129,7 +137,7 @@ MUTATIONS = [
     Mutation(
         "a reuploaded unit may share a batch",
         "src/tgmirror/engine/batcher.py",
-        "        if strategy is Strategy.REUPLOAD:  # nothing can join it\n"
+        "        if strategy is not Strategy.COPY:  # nothing can join it\n"
         "            yield emit()\n"
         "            current, count, skipped, upto = [], 0, 0, 0\n"
         "            strategy = Strategy.COPY",
@@ -228,6 +236,136 @@ MUTATIONS = [
         "src/tgmirror/engine/reupload.py",
         "        return left_out(unit, action, await gateway.send_text(dst, action.text))",
         "        await gateway.send_text(dst, action.text)\n        return left_out(unit, action)",
+    ),
+    Mutation(
+        "D3: a protected source is sent by file id",
+        "src/tgmirror/engine/runner.py",
+        "by_reference=not run.options.src_protected",
+        "by_reference=True",
+    ),
+    Mutation(
+        "a stale reference is not refreshed",
+        "src/tgmirror/engine/reupload.py",
+        "            if attempt == 0:\n                prepared = await reader.fetch(src, unit)",
+        "            pass",
+    ),
+    Mutation(
+        "media Telegram refuses by id is not sent the long way",
+        "src/tgmirror/engine/reupload.py",
+        "    on_fallback()\n",
+        "    raise FileRefExpired('no way out')\n    on_fallback()\n",
+    ),
+    Mutation(
+        "a bigger file than Telegram said is not booked",
+        "src/tgmirror/engine/runner.py",
+        "                await window.grow(actual - size)",
+        "                pass",
+    ),
+    Mutation(
+        "a file without a size counts for nothing",
+        "src/tgmirror/engine/reupload.py",
+        "UNKNOWN_SIZE = 1 << 20",
+        "UNKNOWN_SIZE = 0",
+    ),
+    Mutation(
+        "a range is counted as the whole chat",
+        "src/tgmirror/core/telethon_gateway.py",
+        "        return max(from_low - above_high, 0)",
+        "        return total",
+    ),
+    Mutation(
+        "the count is not capped by the id span",
+        "src/tgmirror/engine/runner.py",
+        "            total = min(total, max(head - plan.min_id, 0))",
+        "            pass",
+    ),
+    Mutation(
+        "an error of the analysis fails the run",
+        "src/tgmirror/engine/runner.py",
+        "        except GatewayError:\n            return run",
+        "        except GatewayError:\n            raise",
+    ),
+    Mutation(
+        "messages the pair already has are not counted as handled",
+        "src/tgmirror/engine/runner.py",
+        "already=batch.already + passed)",
+        "already=batch.already)",
+    ),
+    Mutation(
+        "pool: pushback does not shrink the budget",
+        "src/tgmirror/core/pool.py",
+        "        self._limit = max(1, self._limit // 2)",
+        "        pass",
+    ),
+    Mutation(
+        "pool: a FloodWait is swallowed and the part repeated",
+        "src/tgmirror/core/pool.py",
+        "                    budget.pressure()\n                    raise\n                else:",
+        "                    budget.pressure()\n                else:",
+    ),
+    Mutation(
+        "pool: the other workers are not cancelled when one fails",
+        "src/tgmirror/core/pool.py",
+        "        for task in tasks:\n            task.cancel()",
+        "        for task in tasks:\n            pass",
+    ),
+    Mutation(
+        "pool: a half-made download is left on the disk",
+        "src/tgmirror/core/telethon_gateway.py",
+        "            except BaseException:  # never leave a big half-made file on the disk\n"
+        "                self._partial.pop(part, None)\n"
+        "                await asyncio.to_thread(_make_room, part)\n"
+        "                raise",
+        "            except BaseException:\n                raise",
+    ),
+    Mutation(
+        "the time the bytes took is not credited against the pace",
+        "src/tgmirror/engine/runner.py",
+        "            credit = self._mono() - started",
+        "            credit = 0.0",
+    ),
+    Mutation(
+        "the daily cap is not checked before the bytes go up",
+        "src/tgmirror/engine/runner.py",
+        "            self._guard.check_cap(todo.size)  # do not upload what cannot be posted today",
+        "            pass",
+    ),
+    Mutation(
+        "a credit shortens the long pause too",
+        "src/tgmirror/core/limiter.py",
+        "                wait += self._rng.uniform(*lim.long_pause_range)",
+        "                wait += max(self._rng.uniform(*lim.long_pause_range) - credit, 0.0)",
+    ),
+    Mutation(
+        "the post uploads the file again",
+        "src/tgmirror/core/telethon_gateway.py",
+        "            if item.uploaded is not None:  # the bytes went up before: only post them",
+        "            if False:",
+    ),
+    Mutation(
+        "a FloodWait while the bytes go up is not sat out",
+        "src/tgmirror/engine/flood.py",
+        "                await self.flooded(method, exc, give_up=floods >= MAX_FLOODS_PER_CALL)\n"
+        "            except PeerFlood:\n",
+        "                raise\n            except PeerFlood:\n",
+    ),
+    Mutation(
+        "a transport 429 is retried in place instead of sat out",
+        "src/tgmirror/core/pool.py",
+        "                    if exc.flood:\n                        raise FloodWait(TRANSPORT_WAIT, transport=True) from exc\n",
+        "",
+    ),
+    Mutation(
+        "a cut-off download starts again from the beginning",
+        "src/tgmirror/core/telethon_gateway.py",
+        "        have: set[int] = known[1] if resuming and known is not None else set()",
+        "        have: set[int] = set()",
+    ),
+    Mutation(
+        "downloads share the main connection",
+        "src/tgmirror/core/telethon_gateway.py",
+        "            else await self._download_sender()\n",
+        "            else self._client._sender  # noqa: SLF001\n",
     ),
 ]
 

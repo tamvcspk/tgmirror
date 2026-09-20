@@ -26,13 +26,18 @@ class GatewayError(TgMirrorError):
 class FloodWait(GatewayError):
     """FLOOD_WAIT_x (or SLOWMODE_WAIT_x): Telegram asks us to wait ``seconds`` before the next call.
 
-    Both are handled the same way; ``slow_mode`` only tells them apart in ``flood_log``.
+    All three kinds are handled the same way; ``slow_mode`` and ``transport`` only tell them
+    apart in ``flood_log``. ``transport`` is not a wait Telegram named: it is the HTTP 429 the
+    server sent on the connection while files were moving (spike 12, and the first real run),
+    and ``seconds`` is how long we choose to rest.
     """
 
-    def __init__(self, seconds: int, *, slow_mode: bool = False) -> None:
-        super().__init__(f"{'SLOWMODE_WAIT' if slow_mode else 'FLOOD_WAIT'} {seconds}s")
+    def __init__(self, seconds: int, *, slow_mode: bool = False, transport: bool = False) -> None:
+        label = "TRANSPORT_429" if transport else ("SLOWMODE_WAIT" if slow_mode else "FLOOD_WAIT")
+        super().__init__(f"{label} {seconds}s")
         self.seconds = seconds
         self.slow_mode = slow_mode
+        self.transport = transport
 
 
 class PeerFlood(GatewayError):
@@ -68,6 +73,19 @@ class FileRefExpired(GatewayError):
 
 class Transient(GatewayError):
     """Connection-level problem that is expected to go away; retried with backoff."""
+
+
+class TransportPressure(GatewayError):
+    """The server pushed back on the connection, below the level of a FloodWait: HTTP 429, a
+    closed connection, a request that never got an answer. The part of a transfer that met it is
+    repeated after a wait and the number of requests in flight is halved (``core/pool.py``).
+
+    ``flood`` is set for HTTP 429: that one is not retried in place, it becomes a ``FloodWait``
+    the run sits out."""
+
+    def __init__(self, message: str, *, flood: bool = False) -> None:
+        super().__init__(message)
+        self.flood = flood
 
 
 class TooManyChannels(GatewayError):

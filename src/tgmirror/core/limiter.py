@@ -97,12 +97,27 @@ class Limiter:
 
     # ---- pacing -----------------------------------------------------------------------------
 
-    async def acquire(self, cost: int, kind: Kind = "write") -> None:
+    def check_cap(self, cost: int) -> None:
+        """Raise ``DailyCapReached`` if a write of ``cost`` messages would pass the daily cap.
+
+        It consumes nothing: it lets the runner refuse *before* it spends time uploading what
+        could not be posted today."""
+        self._rollover()
+        lim = self._limits
+        # ``and self._sent_today``: a first batch bigger than the cap must not block forever
+        if self._sent_today and self._sent_today + cost > lim.daily_cap:
+            raise DailyCapReached(self._next_midnight(), self._sent_today, lim.daily_cap)
+
+    async def acquire(self, cost: int, kind: Kind = "write", credit: float = 0.0) -> None:
         """Wait until the next call may go out.
 
         ``cost`` is the number of messages of a write, or the number of requests of a read. Raises
         ``DailyCapReached`` for a write that would pass the daily cap. ``sleep`` may raise (the
         runner's does when a pause/stop is requested); nothing has been recorded then.
+
+        ``credit`` is time the caller already spent between two writes (uploading the bytes of
+        the next message): it counts towards the delay, never towards a long pause, so what
+        Telegram limits, the gap between two posts, stays at least ``delay``.
         """
         self._relax()
         lim = self._limits
@@ -113,16 +128,14 @@ class Limiter:
             self._reads += 1
             return
 
-        self._rollover()
-        # ``and self._sent_today``: a first batch bigger than the cap must not block forever
-        if self._sent_today and self._sent_today + cost > lim.daily_cap:
-            raise DailyCapReached(self._next_midnight(), self._sent_today, lim.daily_cap)
+        self.check_cap(cost)
         if self._writes:
-            wait = self._delay * self._jitter()
+            wait = max(self._delay * self._jitter() - credit, 0.0)
             if self._since_long_pause >= lim.long_pause_every:
                 wait += self._rng.uniform(*lim.long_pause_range)
                 self._since_long_pause = 0
-            await self._sleep(wait)
+            if wait > 0:
+                await self._sleep(wait)
         self._writes += 1
 
     def on_success(self, cost: int) -> None:

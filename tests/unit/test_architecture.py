@@ -66,6 +66,6 @@ def test_the_runner_reaches_telegram_only_through_the_flood_guard() -> None:
     for number, line in enumerate(lines):
         if "self._gateway" in line and "def " not in line and "self._gateway = " not in line:
             nearby = " ".join(lines[max(number - 6, 0) : number + 1])
-            assert "guard.reader(" in nearby or "guard.write(" in nearby, (
+            assert any(f"guard.{how}(" in nearby for how in ("reader", "write", "transfer")), (
                 f"runner.py line {number + 1} uses the gateway outside the flood guard"
             )

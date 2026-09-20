@@ -1,5 +1,6 @@
 """Typer entry point for the ``tgmirror`` command. Commands are added phase by phase."""
 
+import logging
 import sys
 from dataclasses import replace
 from typing import Annotated
@@ -56,7 +57,31 @@ def main(
     else:
         _use_utf8_output()
         rt = default_runtime()
+    _show_warnings()
     ctx.obj = replace(rt, debug=rt.debug or debug)
+
+
+class _Warnings(logging.Handler):
+    """Prints a warning to the *current* stderr (so it follows a redirect or a re-encoded stream),
+    and never fails on a console that cannot show Vietnamese: it falls back to ASCII."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        line = f"[cảnh báo] {record.getMessage()}"
+        try:
+            print(line, file=sys.stderr, flush=True)
+        except UnicodeEncodeError:
+            print(line.encode("ascii", "replace").decode("ascii"), file=sys.stderr, flush=True)
+
+
+def _show_warnings() -> None:
+    """Print what the library warns about (the transfer pool backing off, ...) as it happens.
+
+    Nothing else in the program configures logging, so without this a warning would come out
+    bare from Python's last-resort handler, or not at all under a test runner."""
+    logger = logging.getLogger("tgmirror")
+    if not any(isinstance(h, _Warnings) for h in logger.handlers):
+        logger.addHandler(_Warnings())
+    logger.setLevel(logging.WARNING)
 
 
 app.command("login")(auth.login)

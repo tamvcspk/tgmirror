@@ -15,6 +15,8 @@ from tgmirror.engine.transfer import Transfer
 from tgmirror.store.runs import Run
 from tgmirror.ui.messages import t
 
+STEP = 5  # percent a transfer must have advanced before its next line...
+HEARTBEAT = 30.0  # ...unless this many seconds have passed (a crawling one still says so)
 BIG_TRANSFER = 8 * 1024 * 1024  # a file smaller than this is over before a line about it would help
 
 
@@ -46,7 +48,7 @@ class LineReporter:
         self._interval = interval
         self._clock = clock
         self._last: float | None = None
-        self._last_transfer: dict[tuple[TransferPhase, int], float] = {}
+        self._last_transfer: dict[tuple[TransferPhase, int], tuple[float, int]] = {}
 
     def notice(self, code: str, **params: object) -> None:
         self._emit(t(f"run.{code}", **{k: _plain(v) for k, v in params.items()}))
@@ -78,26 +80,34 @@ class LineReporter:
         )
 
     def transfer(self, transfer: Transfer) -> None:
-        """A line when a big file starts, every ``interval`` seconds, and when it is done. Small
-        files say nothing: the batch line covers them."""
+        """A line when a big file starts, when it has advanced ``STEP`` percent (and at least
+        ``interval`` seconds have passed) or ``HEARTBEAT`` seconds have gone by, and when it is
+        done. A 2 GB upload is a few dozen lines, not hundreds. Small files say nothing: the
+        batch line covers them."""
         if transfer.total < BIG_TRANSFER:
             return
         key = (transfer.phase, transfer.msg_id)
         now = self._clock()
+        percent = 100 if transfer.finished else min(round(transfer.fraction * 100), 99)
         last = self._last_transfer.get(key)
         if transfer.finished:
             if self._last_transfer.pop(key, None) is None:
                 return  # never announced: it went by too fast to matter
-        elif last is not None and now - last < self._interval:
-            return
+        elif last is not None:
+            since, shown = last
+            quiet = now - since < self._interval
+            small = percent - shown < STEP and now - since < HEARTBEAT
+            if quiet or small:
+                return
+            self._last_transfer[key] = (now, percent)
         else:
-            self._last_transfer[key] = now
+            self._last_transfer[key] = (now, percent)
         speed = f", {size(transfer.speed)}/s" if transfer.speed else ""
         self._emit(
             t(
                 f"run.transfer_{transfer.phase}",
                 id=transfer.msg_id,
-                percent=round(transfer.fraction * 100),
+                percent=percent,
                 done=size(transfer.done),
                 total=size(transfer.total),
                 speed=speed,

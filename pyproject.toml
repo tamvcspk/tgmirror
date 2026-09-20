@@ -5,7 +5,7 @@ description = "Clone a Telegram channel you joined into another channel (MTProto
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "telethon>=1.45",
+    "telethon==1.45.0",  # pinned: private APIs; see docs/06-lo-trinh.md, "Nâng cấp Telethon"
     "cryptg>=0.4",
     "typer>=0.12",
     "questionary>=2.0",

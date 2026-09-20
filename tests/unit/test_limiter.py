@@ -315,3 +315,67 @@ async def test_an_interrupted_sleep_records_nothing() -> None:
         await limiter.acquire(5)
 
     assert limiter.state.sent_today == 3
+
+
+# ---- credit: time already spent between two writes -------------------------------------------
+
+
+async def test_time_already_spent_counts_towards_the_delay() -> None:
+    limiter, sleeps, _ = make()
+    await write(limiter)
+
+    await limiter.acquire(1, "write", credit=0.5)
+
+    assert sleeps.calls == [1.5]
+
+
+async def test_a_credit_as_long_as_the_delay_means_no_wait_at_all() -> None:
+    limiter, sleeps, _ = make()
+    await write(limiter)
+
+    await limiter.acquire(1, "write", credit=5.0)  # more than the 2 s: still no negative wait
+
+    assert sleeps.calls == []
+    limiter.on_success(1)
+    await limiter.acquire(1, "write")  # the next one, without credit, waits the whole delay
+    assert sleeps.calls == [2.0]
+
+
+async def test_a_credit_never_shortens_a_long_pause() -> None:
+    limits = Limits(min_delay=2.0, jitter=0.0, long_pause_every=2, long_pause_range=(10.0, 10.0))
+    limiter, sleeps, _ = make(limits)
+    await write(limiter, cost=2)  # a long pause is due before the next write
+
+    await limiter.acquire(1, "write", credit=99.0)
+
+    assert sleeps.calls == [10.0]
+
+
+async def test_the_first_write_ignores_credit_and_still_goes_at_once() -> None:
+    limiter, sleeps, _ = make()
+
+    await limiter.acquire(1, "write", credit=1.0)
+
+    assert sleeps.calls == []
+
+
+# ---- checking the cap without spending anything -------------------------------------------------
+
+
+async def test_the_cap_can_be_checked_before_the_work_and_costs_nothing() -> None:
+    limits = Limits(min_delay=2.0, jitter=0.0, daily_cap=5, long_pause_every=10_000)
+    limiter, sleeps, _ = make(limits)
+    await write(limiter, cost=4)
+
+    limiter.check_cap(1)  # 4 + 1 fits
+    with pytest.raises(DailyCapReached):
+        limiter.check_cap(2)  # 4 + 2 does not
+
+    assert limiter.state.sent_today == 4 and sleeps.calls == []  # nothing was recorded or slept
+
+
+async def test_a_first_batch_bigger_than_the_cap_passes_the_check_too() -> None:
+    limits = Limits(min_delay=2.0, jitter=0.0, daily_cap=5, long_pause_every=10_000)
+    limiter, _, _ = make(limits)
+
+    limiter.check_cap(9)  # nothing sent today: never blocked for ever

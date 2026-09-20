@@ -29,7 +29,8 @@ import random
 import shutil
 import tempfile
 import threading
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -169,6 +170,7 @@ class Runner:
         timing: RunnerTiming | None = None,
         wait: bool = False,
         tmp_dir: Path | None = None,
+        mono: Callable[[], float] = time.monotonic,
     ) -> None:
         self._store = store
         self._gateway = gateway
@@ -180,6 +182,7 @@ class Runner:
         self._clock = clock
         self._timing = timing or RunnerTiming()
         self._wait = wait  # sit out FloodWaits of any length instead of parking the run
+        self._mono = mono  # how long the bytes of a unit took to go up (credit against the pace)
         self._tmp_dir = tmp_dir or Path(tempfile.gettempdir()) / "tgmirror"  # strategy B downloads
         self._pipeline: Pipeline | None = None
         self._tracker = TransferTracker(self._reporter.transfer)
@@ -408,7 +411,18 @@ class Runner:
             self._reporter.notice("skipped_unsupported", id=todo.ids[0], reason=ready.action.reason)
             await self._settle(run, todo, left_out(todo.units[0], ready.action))
             return True
-        await self._guard.pace(todo.size)
+        credit = 0.0
+        if ready.prepared is not None and todo.strategy is Strategy.REUPLOAD:
+            # The bytes go up first: no message is created, so nothing is pending yet and the
+            # time they take counts towards the gap before the post (docs/04, docs/05).
+            self._guard.check_cap(todo.size)  # do not upload what cannot be posted today
+            prepared, started = ready.prepared, self._mono()
+            ready.prepared = await self._guard.transfer(
+                "upload_prepared",
+                lambda: self._gateway.upload_prepared(prepared, self._tracker.update),
+            )
+            credit = self._mono() - started
+        await self._guard.pace(todo.size, credit)
         if not await self._gate(run):  # arrived while sleeping
             return False
         await self._send(run, todo, ready)

@@ -162,6 +162,7 @@ class Prepared:
     unit: Unit
     files: tuple[Path, ...] = ()
     handle: object = None
+    uploaded: bool = False  # the bytes are already up: ``send_prepared`` only posts
 
 
 class TransferPhase(StrEnum):
@@ -287,6 +288,16 @@ class TelegramGateway(Protocol):
         sent this way (the reference expired, or Telegram will not reuse it)."""
         ...
 
+    async def upload_prepared(
+        self, prepared: Prepared, on_transfer: OnTransfer | None = None
+    ) -> Prepared:
+        """Strategy B, the bytes: upload what can be uploaded before the unit is posted, and
+        return the unit marked ``uploaded``. No message is created, so it can be repeated or
+        abandoned (Telegram discards an upload that is never posted). A unit that cannot be
+        uploaded ahead of its post (an album, a small file, nothing to upload) is returned
+        as it is, and ``send_prepared`` does everything."""
+        ...
+
     async def send_prepared(
         self,
         dst: int,
@@ -297,7 +308,8 @@ class TelegramGateway(Protocol):
         """Strategy B, the write half: send the unit as new messages (one album for an album, text
         for text, the poll/location/contact itself for those) and return their ids in the
         destination, aligned with ``prepared.unit``. ``caption`` rewrites the captions of media;
-        ``on_transfer`` hears how far the upload is."""
+        ``on_transfer`` hears how far the upload is. A unit already ``uploaded`` is only
+        posted."""
         ...
 
     async def send_text(self, dst: int, text: str) -> int:

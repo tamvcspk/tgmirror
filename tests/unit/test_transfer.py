@@ -111,6 +111,35 @@ def test_a_big_file_is_announced_then_repeated_every_interval_and_closed_when_do
     ]
 
 
+def test_a_long_transfer_speaks_when_it_advances_a_few_percent_or_now_and_then() -> None:
+    lines: list[str] = []
+    clock = Clock()
+    reporter = LineReporter(lines.append, interval=5.0, clock=clock)
+
+    reporter.transfer(big(0))  # announced
+    for step in range(1, 4):  # 1.25%, 2.5%, 3.75%: less than the 5% that is worth a line
+        clock.now += 6
+        reporter.transfer(big(step * MB // 4))
+    assert len(lines) == 1
+    clock.now += 6
+    reporter.transfer(big(2 * MB))  # 10% since the first line
+    assert len(lines) == 2
+    clock.now += 31
+    reporter.transfer(big(2 * MB + 1))  # hardly moved, but it is 31 s: it still says so
+    assert len(lines) == 3
+
+
+def test_a_transfer_is_never_shown_as_finished_before_it_is() -> None:
+    lines: list[str] = []
+    reporter = LineReporter(lines.append)
+
+    reporter.transfer(big(0))
+    reporter.transfer(Transfer(DOWN, 7, 20 * MB - 100, 20 * MB, 2.0 * MB))  # 99.999%
+    reporter.transfer(big(20 * MB))
+
+    assert [line.split(":")[1].split("%")[0].strip() for line in lines] == ["0", "100"]
+
+
 def test_an_upload_is_worded_as_one_and_a_small_file_says_nothing() -> None:
     lines: list[str] = []
     reporter = LineReporter(lines.append)

@@ -9,7 +9,7 @@ Python >= 3.11, `uv`, Telethon + `cryptg`, Typer (CLI), questionary (prompts), R
 ## Layout (`src/tgmirror/`; packages are added phase by phase, see `docs/06-lo-trinh.md`)
 
 ```
-core/     gateway (Telegram wrapper), auth (login flow), telethon_gateway (only Telethon importer), limiter (AIMD, daily cap, `limiter_state`), errors, config, paths
+core/     gateway (Telegram wrapper), auth (login flow), telethon_gateway (only Telethon importer), limiter (AIMD, daily cap, `limiter_state`), pool (`RequestBudget` and `run_parts`: file parts in parallel under one request budget), errors, config, paths
 engine/   endpoints (source/destination rules), runs (`begin_run`, resolve, vet), planner (`units`, and `failed_units` for `retry`), batcher, strategy (`Strategy`, `router`: which unit is forwarded, sent again by its file ids, or downloaded and uploaded again), preview, copy (A), reupload (B: `plan_unit`, `send_unit`, `Window`/`Pipeline` that download ahead; `Window` is the hard ceiling on how far downloading runs ahead of uploading), transfer (`TransferTracker`: speed and progress of the file in flight), flood (`FloodGuard`: pacing + FloodWait handling for reads and writes), reconcile, runner, status (progress/ETA estimates for `status`)
 filters/  model, parser (YAML + flags), pushdown (`plan_read`), matcher (pure, client side)
 store/    schema.sql (+ numbered migrations after release), db (`Store`: the only place with SQL), runs (`Run`, `Mirror`), msgmap, floodlog, limiterstate
@@ -40,6 +40,7 @@ ui/       messages (all user strings), prompts, tables, progress (plain-line rep
 
 ## Conventions
 
+- **Telethon is pinned to one exact version** (`telethon==1.45.0`, `TELETHON_CHECKED` in `core/telethon_gateway.py`) because the request pool and reupload use private internals. Upgrading is a procedure, not a `uv lock --upgrade`: see `docs/06-lo-trinh.md`, "Nâng cấp Telethon"; `tests/unit/test_telethon_pin.py` fails until it is followed.
 - Code, identifiers, comments, commit messages: English. Design docs in `docs/`: Vietnamese.
 - Type hints everywhere; `ruff` clean; async all the way down (no blocking calls in the event loop).
 - Telegram does not publish exact rate limits. Numeric defaults in `docs/05-chong-flood.md` are conservative starting points, tuned from `flood_log` data — do not present them as documented limits.

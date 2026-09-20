@@ -276,6 +276,21 @@ class FakeGateway:
                 on_transfer(TransferPhase.DOWNLOAD, msg.id, total, total)
         return Prepared(unit, tuple(files))
 
+    async def upload_prepared(
+        self, prepared: Prepared, on_transfer: OnTransfer | None = None
+    ) -> Prepared:
+        """Uploads the bytes ahead of the post: no message is created. A unit with nothing to
+        upload is returned as it is."""
+        self._enter("upload_prepared", prepared.unit.ids)
+        if not prepared.files or prepared.uploaded:
+            return prepared
+        if on_transfer is not None:
+            size = sum(m.size or 1 for m in prepared.unit.messages)
+            first = prepared.unit.messages[0].id
+            on_transfer(TransferPhase.UPLOAD, first, 0, size)
+            on_transfer(TransferPhase.UPLOAD, first, size, size)
+        return Prepared(prepared.unit, prepared.files, prepared.handle, uploaded=True)
+
     async def send_prepared(
         self,
         dst: int,
@@ -291,7 +306,7 @@ class FakeGateway:
         assert not missing, f"the engine removed downloads before the unit was sent: {missing}"
         gid = self._alloc_group() if prepared.unit.is_album else None
         new_ids: list[int] = []
-        if on_transfer is not None and prepared.files:
+        if on_transfer is not None and prepared.files and not prepared.uploaded:
             size = sum(m.size or 1 for m in prepared.unit.messages)
             first = prepared.unit.messages[0].id
             on_transfer(TransferPhase.UPLOAD, first, 0, size)

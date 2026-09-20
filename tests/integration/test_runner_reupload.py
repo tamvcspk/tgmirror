@@ -55,6 +55,7 @@ def runner(
         rng=random.Random(0),
         timing=RunnerTiming(poll_interval=0.2, heartbeat_interval=3600),
         tmp_dir=rig.tmp,  # type: ignore[attr-defined]
+        mono=rig.mono,
     )
 
 

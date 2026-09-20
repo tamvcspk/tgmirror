@@ -146,6 +146,9 @@ daily_cap = 5000
 max_auto_wait = 900
 prefetch = 1
 tmp_budget_mb = 2048
+max_requests = 4        # request đang bay khi tải file (0 = tắt pool, cách cũ của Telethon)
+upload_connections = 2  # số kết nối chia cho phần tải lên
+pool_min_mb = 10        # file nhỏ hơn giữ cách tải của Telethon
 ```
 
 ## Thử lại tin lỗi (`retry`)
@@ -184,7 +187,7 @@ Mọi số là **ước lượng**: `status` chỉ đọc DB (clone đang chạy
 
 ### Trong lúc chạy (`clone`/`run`)
 
-Đầu lần chạy có một dòng "Ước tính: tối đa N tin cần xem xét" (và một dòng về cap ngày nếu tốn hơn một ngày). Dòng tiến độ theo batch là `Lần chạy 7: 1200/9800 tin (~12%): 1150 đã sao chép, 50 bị filter loại, 0 lỗi.` (không có tổng thì dạng cũ). Với file ≥ 8 MB (chiến lược B) có thêm dòng riêng: `Tải xuống tin 42: 45% (12.3 MB / 27.4 MB, 3.2 MB/s).` và `Tải lên tin 42: ...`, in lúc bắt đầu, mỗi 5 giây và khi xong. Giao diện Rich (phase 7) dùng cùng dữ liệu (`Reporter.progress`, `Reporter.transfer`) cho thanh tiến độ và hai dòng tải xuống / tải lên.
+Đầu lần chạy có một dòng "Ước tính: tối đa N tin cần xem xét" (và một dòng về cap ngày nếu tốn hơn một ngày). Dòng tiến độ theo batch là `Lần chạy 7: 1200/9800 tin (~12%): 1150 đã sao chép, 50 bị filter loại, 0 lỗi.` (không có tổng thì dạng cũ). Với file ≥ 8 MB (chiến lược B) có thêm dòng riêng: `Tải xuống tin 42: 45% (12.3 MB / 27.4 MB, 3.2 MB/s).` và `Tải lên tin 42: ...`, in lúc bắt đầu, khi tiến thêm 5% (cách nhau ít nhất 5 giây), hoặc sau 30 giây dù chưa tiến nhiều, và khi xong (chưa xong thì không hiện 100%). Giao diện Rich (phase 7) dùng cùng dữ liệu (`Reporter.progress`, `Reporter.transfer`) cho thanh tiến độ và hai dòng tải xuống / tải lên.
 
 ## Làm lại từ đầu (`--fresh`)
 
