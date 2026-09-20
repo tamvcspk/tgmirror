@@ -392,14 +392,22 @@ class Store:
         ts = self._ts()
         async with self._tx() as db:
             mirror_id = await self._mirror_id(db, run_id)
-            done, failed = await msgmap.finish_batch(db, mirror_id, run_id, batch_id, results, ts)
+            done, failed, skipped = await msgmap.finish_batch(
+                db, mirror_id, run_id, batch_id, results, ts
+            )
             if await msgmap.pending_rows(db, mirror_id):
                 # The cursor may only pass a batch with nothing pending (rule 3).
                 raise StoreError("another batch is still pending; refusing to move the cursor")
             await self._bump(
-                db, run_id, mirror_id, {"done": done, "failed": failed, **(extra_stats or {})},
-                cursor, ts,
-            )  # fmt: skip
+                db,
+                run_id,
+                mirror_id,
+                {"done": done, "failed": failed}
+                | ({"skipped_unsupported": skipped} if skipped else {})
+                | dict(extra_stats or {}),
+                cursor,
+                ts,
+            )
             if limiter is not None:
                 await limiterstate.save(db, await self._account(db, mirror_id), limiter, ts)
         return await self._require(run_id)

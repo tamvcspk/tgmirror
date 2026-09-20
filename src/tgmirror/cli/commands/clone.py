@@ -1,11 +1,12 @@
 """``tgmirror clone``: choose the source, the destination and the filter, then copy, right now.
 
-Wizard steps 1-3 (source, destination, filter), the preview of step 5 and one confirmation, then
-the clone runs in the foreground like any other command: no background process, no schedule, and
-Ctrl+C ends it with the progress saved. Cloning the same pair again copies only what is newer
-(delta) with the filter of the previous run; the options step (4) arrives with later phases.
+Wizard steps 1-4 (source, destination, filter, how to copy), the preview of step 5 and one
+confirmation, then the clone runs in the foreground like any other command: no background process,
+no schedule, and Ctrl+C ends it with the progress saved. Cloning the same pair again copies only
+what is newer (delta) with the filter of the previous run.
 """
 
+from dataclasses import replace
 from typing import Annotated
 
 import typer
@@ -43,8 +44,10 @@ from tgmirror.engine.runs import (
     ModeUnsupported,
     RunRequest,
     begin_run,
+    check_options,
     check_runnable,
 )
+from tgmirror.engine.strategy import may_reupload
 from tgmirror.filters.model import FilterSpec
 from tgmirror.store.db import utc_now
 from tgmirror.ui.messages import t
@@ -68,9 +71,59 @@ def clone(
     ] = None,
     about: Annotated[str, typer.Option("--about", help="Description of the new channel.")] = "",
     mode: Annotated[
-        str,
-        typer.Option("--mode", help="auto or copy (server-side copy); reupload comes in phase 6."),
-    ] = "auto",
+        str | None,
+        typer.Option(
+            "--mode",
+            help="auto (default): server-side copy, and re-upload only what needs a new caption. "
+            "copy: server-side copy only. reupload: download and send again (slow); the only "
+            "way to copy a source that restricts saving content and that you administer.",
+        ),
+    ] = None,
+    caption: Annotated[
+        str | None,
+        typer.Option(
+            "--caption",
+            help="keep (default), strip-links (drop links/mentions that point at the source), "
+            "append (add --caption-text) or none. Only the captions of media messages change; "
+            "each message with a caption is downloaded and sent again.",
+        ),
+    ] = None,
+    caption_text: Annotated[
+        str | None, typer.Option("--caption-text", help="Text for --caption append.")
+    ] = None,
+    reset_polls: Annotated[
+        bool,
+        typer.Option(
+            "--reset-polls",
+            help="With --mode reupload: re-create polls and quizzes (they lose all votes). "
+            "Without it they are left out, with a warning.",
+        ),
+    ] = False,
+    ignore_unsupported: Annotated[
+        bool,
+        typer.Option(
+            "--ignore-unsupported",
+            help="With --mode reupload: leave out what cannot be copied (games, invoices, "
+            "unanswered quizzes) instead of stopping at the first one.",
+        ),
+    ] = False,
+    placeholder: Annotated[
+        bool,
+        typer.Option(
+            "--placeholder",
+            help="With --mode reupload: like --ignore-unsupported, and post a short note "
+            "where each such message was.",
+        ),
+    ] = False,
+    admin_ack: Annotated[
+        bool,
+        typer.Option(
+            "--yes-i-administer-this-channel",
+            help="With --mode reupload on a source that restricts saving content: say that you "
+            "own it (also through another account) and may copy it. You take full "
+            "responsibility for that: tgmirror cannot check it. --yes does not stand in for it.",
+        ),
+    ] = False,
     batch_size: Annotated[
         int | None,
         typer.Option(
@@ -157,6 +210,11 @@ def clone(
 
     Example: tgmirror clone --src "@my_channel" --dst-new "My channel (copy)" --yes
 
+    A source that restricts saving content can only be copied with --mode reupload and your own
+    statement, --yes-i-administer-this-channel, for which you take full responsibility (an
+    admin account can answer the question instead; any other account needs the flag).
+    To change captions: --caption strip-links (or append/none).
+
     With a filter: tgmirror clone --src "@my_channel" --dst-new "Videos" --media video
     --hashtag "#news" --since 2024-01-01 --yes
 
@@ -167,7 +225,7 @@ def clone(
     async def command() -> None:
         if dst is not None and dst_new is not None:
             raise UsageProblem("err.conflicting_flags", flags="--dst / --dst-new")
-        if mode not in SUPPORTED_MODES:  # before anything is created on the account
+        if mode is not None and mode not in SUPPORTED_MODES:  # before anything is created
             raise ModeUnsupported(mode)
         filters = collect(
             media=media,
@@ -210,9 +268,50 @@ def clone(
             else:
                 raise UsageProblem("err.missing_flag", flag="--dst or --dst-new")
 
-            plan = plan_endpoints(source, destination)  # every refusal happens before any write
+            # every refusal happens before any write
+            plan = plan_endpoints(source, destination, take_responsibility=admin_ack)
+
+            # the wizard asks the rest only if it also asked for source and destination
+            asked = rt.interactive and not yes and (src is None or (dst is None and not dst_new))
+            given = (
+                mode is not None
+                or caption is not None
+                or caption_text is not None
+                or reset_polls
+                or ignore_unsupported
+                or placeholder
+            )
+            choice = wizard.StrategyChoice(
+                mode or "auto",
+                caption or "keep",
+                caption_text or "",
+                reset_polls,
+                ignore_unsupported,
+                placeholder,
+            )
+            if asked and not given:
+                choice = await wizard.pick_strategy(rt.prompter, protected=plan.protected)
+
+            base = RunRequest(
+                mode=choice.mode,
+                batch_size=batch_size or rt.config().limits.batch_size,
+                pushdown=pushdown,
+                force=force_takeover,
+                caption=choice.caption,
+                caption_text=choice.caption_text,
+                reset_polls=choice.reset_polls,
+                ignore_unsupported=choice.ignore_unsupported,
+                placeholder=choice.placeholder,
+            )
+            check_options(base)  # options that contradict each other: exit 2 before any write
+
+            downloads = may_reupload(choice.mode, choice.caption)
             for code in plan.warnings:
-                typer.echo(t(f"warn.{code}"), err=True)
+                if not (code == "noforwards_admin" and downloads):  # the confirmation says it
+                    typer.echo(t(f"warn.{code}"), err=True)
+            if plan.protected and downloads:
+                await _confirm_protected(rt, plan, admin_ack)
+                base = replace(base, protected_ack=True)  # a refusal above never gets here
 
             seen_before, copied = False, 0
             async with opened_store(rt) as store:
@@ -222,10 +321,6 @@ def clone(
                     seen_before = await store.find_mirror(plan.src.id, plan.dst.id) is not None
                     copied = await store.count_copied(plan.src.id, plan.dst.id)
 
-                # the wizard asks about filter and restart only if it also asked for the rest
-                asked = (
-                    rt.interactive and not yes and (src is None or (dst is None and not dst_new))
-                )
                 start_fresh = fresh
                 if asked and not fresh and copied > 0:
                     start_fresh = await wizard.pick_resume(rt.prompter, copied)
@@ -240,12 +335,9 @@ def clone(
                 key = "clone.dst_created" if endpoints.created else "clone.dst"
                 typer.echo(t(key, channel=channel_label(endpoints.dst)))
 
-                request = RunRequest(
-                    mode=mode,
-                    batch_size=batch_size or rt.config().limits.batch_size,
-                    pushdown=pushdown,
+                request = replace(
+                    base,
                     filters_json=None if filters is None else filters.to_json(),
-                    force=force_takeover,
                     fresh=start_fresh,
                 )
                 started = await begin_run(
@@ -281,6 +373,20 @@ async def _preview(
         typer.echo(t("clone.preview", matched=result.matched, scanned=result.scanned))
         for text in result.examples:
             typer.echo(t("clone.preview_example", text=text))
+
+
+async def _confirm_protected(rt: Runtime, plan: Plan, acknowledged: bool) -> None:
+    """Decision D3: a source that restricts saving content is copied by download and upload only
+    if the user says they may. The flag or the question; ``--yes`` is not enough, because this
+    is not about skipping a prompt: it is the user's own statement, and a script must make it
+    with the flag that names it."""
+    if acknowledged:
+        return
+    if not rt.interactive:
+        raise UsageProblem("err.needs_admin_ack", title=plan.src.title)
+    if not await rt.prompter.confirm(t("clone.confirm_protected", title=plan.src.title), False):
+        typer.echo(t("err.aborted"), err=True)
+        raise typer.Exit(1)
 
 
 async def _confirm_start(rt: Runtime, plan: Plan, yes: bool, forget: int = 0) -> None:

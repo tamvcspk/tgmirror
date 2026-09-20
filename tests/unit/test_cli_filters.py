@@ -288,17 +288,18 @@ def test_the_wizard_stores_the_same_filter_as_the_flags(
         make_runtime,
         wizard_gw,
         tmp_path / "wizard",
-        select=["Source", "Copy", CRITERIA],
+        select=["Source", "Copy", "Automatic", CRITERIA],
         checkbox=[["video"]],
         text=["#News", "", "2024-01-01", "", "", ""],  # hashtags, keywords, since, until, sizes
-        confirm=[True],  # the one question, after the preview
+        confirm=[False, True],  # the one question, after the preview
     )
     result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 0, result.output
     assert filters_of(rt) == filters_of(flags_rt) == NEWS_SINCE_2024
     assert "Preview" in result.output
-    assert [k for k, _ in prompter.asked if k == "confirm"] == ["confirm"]
+    # "customise how to copy?" (no), then the one question before copying
+    assert [k for k, _ in prompter.asked if k == "confirm"] == ["confirm", "confirm"]
 
 
 def test_choosing_no_filter_in_the_wizard_stores_an_empty_one_and_shows_no_preview(
@@ -309,8 +310,8 @@ def test_choosing_no_filter_in_the_wizard_stores_an_empty_one_and_shows_no_previ
         make_runtime,
         gateway,
         tmp_path / "w",
-        select=["Source", "Copy", "No filter"],
-        confirm=[True],
+        select=["Source", "Copy", "Automatic", "No filter"],
+        confirm=[False, True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -332,9 +333,9 @@ def test_the_wizard_loads_a_yaml_file(
         make_runtime,
         gateway,
         tmp_path / "w",
-        select=["Source", "Copy", "Load from a YAML file"],
+        select=["Source", "Copy", "Automatic", "Load from a YAML file"],
         text=[f'"{path}"'],  # pasted with quotes, as "Copy as path" gives it
-        confirm=[True],
+        confirm=[False, True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -351,10 +352,10 @@ def test_the_wizard_asks_again_after_an_invalid_answer(
         make_runtime,
         gateway,
         tmp_path / "w",
-        select=["Source", "Copy", CRITERIA],
+        select=["Source", "Copy", "Automatic", CRITERIA],
         checkbox=[["video"], ["video"]],
         text=["", "", "last week", "", "", "", "", "", "2024-01-01", "", "", ""],
-        confirm=[True],
+        confirm=[False, True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -376,10 +377,10 @@ def test_declining_after_the_preview_leaves_nothing_behind(
         make_runtime,
         gateway,
         tmp_path / "w",
-        select=["Source", CRITERIA],  # no existing destination: it asks for a new one
+        select=["Source", "Automatic", CRITERIA],  # no existing destination: it asks for a new one
         checkbox=[[]],
         text=["Copy", "", "#k", "", "", "", "", ""],
-        confirm=[False],  # the one question, after the preview: no
+        confirm=[False, False],  # the one question, after the preview: no
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -392,7 +393,7 @@ def test_flags_given_on_a_terminal_do_not_start_the_filter_wizard(
     make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
 ) -> None:
     source_and_target(gateway)
-    rt, prompter = wizard_rt(make_runtime, gateway, tmp_path / "w", confirm=[False])
+    rt, prompter = wizard_rt(make_runtime, gateway, tmp_path / "w", confirm=[False, False])
 
     runner.invoke(app, ["clone", "--src", "Source", "--dst", "Copy"], obj=rt)
 
@@ -490,14 +491,14 @@ def test_the_wizard_offers_to_keep_the_filter_of_a_pair_it_has_seen(
         make_runtime,
         gateway,
         tmp_path / "w",
-        select=["Source", "Copy", "Continue", "Keep the filter of the previous run"],
-        confirm=[True],
+        select=["Source", "Copy", "Automatic", "Continue", "Keep the filter of the previous run"],
+        confirm=[False, True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 0, result.output
-    assert prompter.select_labels[3][0].startswith("Keep the filter")  # the first choice
+    assert prompter.select_labels[4][0].startswith("Keep the filter")  # the first choice
     assert "Preview" not in result.output  # nothing new was chosen to preview
     first, second = saved_runs(rt)
     assert second.filters_json == first.filters_json != "{}"
@@ -512,13 +513,13 @@ def test_the_wizard_does_not_offer_to_keep_a_filter_for_a_new_pair(
         make_runtime,
         gateway,
         tmp_path / "w",
-        select=["Source", "Copy", "No filter"],
-        confirm=[True],
+        select=["Source", "Copy", "Automatic", "No filter"],
+        confirm=[False, True],
     )
 
     runner.invoke(app, ["clone"], obj=rt)
 
-    assert not any("Keep the filter" in label for label in prompter.select_labels[2])
+    assert not any("Keep the filter" in label for label in prompter.select_labels[3])
 
 
 # ---- a fresh start keeps the remembered filter unless told otherwise ------------------------

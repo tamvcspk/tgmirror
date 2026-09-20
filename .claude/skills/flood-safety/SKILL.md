@@ -43,6 +43,7 @@ When adding or changing a code path that can raise flood errors:
 - Batch to reduce call count (forward up to `batch_size` ids per call).
 - One account ⇒ one run at a time. Never parallelise sends across runs or pairs on the same session.
 - Read calls are limited too: set `wait_time`, cache entities. Filters add reads (date-to-id lookups, one unfiltered window per album after content pushdown): they are counted as read requests (`requests` in `_GuardedReader`), so a new read path must add its request count there. `get_messages` (reading the failed messages by id for `retry`) is one paced read request per call (`_GuardedReader.get_messages`).
+- Strategy B (phase 6): `prepare` (re-read + download) is one paced read request through `guard.reader`; the send goes through `guard.write` (`send_prepared`, `send_text`) like any write and counts against `daily_cap` per message. Only the *read* half runs ahead (`Pipeline`, `[limits] prefetch`), never the sends: still one write at a time. There is no size-based extra delay yet (no data; revisit with `flood_log`). A FloodWait while sending repeats the same `send_prepared` with the files already on disk.
 - Default order is chronological (D4). Any reordering option must be opt-in.
 - `tgmirror doctor` and README must say: risk is reduced, not eliminated; use an established account.
 

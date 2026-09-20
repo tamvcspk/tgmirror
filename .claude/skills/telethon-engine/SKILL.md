@@ -88,21 +88,29 @@ sent = await client.forward_messages(dst, ids, from_peer=src, drop_author=True)
 
 ## noforwards (decision D3)
 
-Before a clone starts: `src.noforwards` true →
-- user is not creator/admin of the source: refuse with a clear message. No reupload fallback.
-- user is admin: tell them they can turn off "Restrict saving content" temporarily; offer `--mode reupload` only after an explicit confirmation prompt (or `--yes-i-administer-this-channel` non-interactively).
+Before a clone starts (`engine/endpoints.py::plan_endpoints`, then `cli/commands/clone.py::_confirm_protected`): `src.noforwards` true →
+- this account is not creator/admin of the source: refuse with a clear message that names `--yes-i-administer-this-channel` (exit 4). With that flag it goes on, with `warn.noforwards_unadministered`: the user says they own the channel through another account and takes full responsibility (decision D3 as changed 2026-09-20; tgmirror cannot check the claim). The prompt does not do it: only the flag.
+- user is admin: tell them they can turn off "Restrict saving content" temporarily; `--mode reupload` is allowed only after the user's own confirmation: the prompt (default no) or `--yes-i-administer-this-channel`. `--yes` does **not** count, and without a terminal and without the flag it is exit 2. It happens before the destination is created or anything is stored.
+- `engine/runs.py::begin_run` re-reads the source before any run that could re-upload (`mode` reupload, or `auto` with `--caption` other than `keep`), so `run`/`retry`, which never go through `plan_endpoints`, cannot copy a source that became protected without the user's statement (`RunOptions.protected_ack`, recorded by `clone`, carried by `run`/`retry`): not an admin → `SourceRestricted`, an admin → `NeedsAcknowledgement`. With the statement the run goes on even if the account has since lost admin rights. Every run that relies on it prints `warn.responsibility` (`cli/commands/run.py::execute`).
 
-Do not add code paths that download/re-send protected content from channels the user does not administer.
+Do not add code paths that download/re-send protected content without that statement: no default, no `--yes`, no config key that supplies it silently.
 
 ## Strategy B — reupload (phase 6)
 
-- `client.download_media(msg, file=tmp_path)` → `client.send_file(dst, tmp_path, caption=msg.raw_text, formatting_entities=msg.entities, ...)`.
-- Preserve video attributes (`duration`, `w`, `h`, `supports_streaming=True`), thumbs when available, voice/video_note flags.
-- Albums: `send_file(dst, [paths...], caption=[...])`.
-- Always delete temp files in `finally`. Cap disk use (`tmp/` budget in config).
-- Upload cost goes through the limiter with `kind="upload"`.
-- Special media (decided 2026-09-19, table in `docs/01-kien-truc.md`): poll/quiz, location/venue, contact are re-sent with `client.send_message(dst, file=message.media)` — Telethon builds the `InputMedia*` itself (`utils.get_input_media`); do **not** hand-assemble `InputMediaPoll` (and `PollAnswerSyntax` does not exist). Polls need `--reset-polls` and lose all votes. Telethon raises `TypeError` for an unanswered quiz and for `MessageMediaInvoice`, so detect those (and `MessageMediaGame`) *before* the call and skip with a warning (`msg_map.status='skipped'`, `reason='unsupported:<kind>'`). With `--placeholder`, post a text stub for each skipped item through the gateway/limiter and store its `dst_msg_id` on the `skipped` row. Never auto-answer a quiz, and never prefix sender names.
-- Telethon has no built-in parallel upload; a custom multi-connection uploader belongs in `core/uploader.py` and must still respect `upload_concurrency`.
+Two gateway calls, so the read can run ahead of the write (`engine/reupload.py::Pipeline`):
+
+- `prepare(src, unit, tmp)`: reads the unit's messages again (`get_messages(ids=...)`; a missing or empty one → `PerMessage('gone_from_source')`) and downloads their media with `download_media` into `<id>.part`, renamed to `<id><ext>` when done (a finished file is reused, so a FloodWait retry does not download twice; `download_media` returns the real path, use it). A video, GIF or round video also gets its cover (`<id>.thumb.jpg`, the largest `PhotoSize`/`PhotoCachedSize`; a stripped preview is too small). Returns `Prepared(unit, files, handle)`; `files` are the engine's to delete.
+- `send_prepared(dst, prepared, caption_policy)`:
+  - a single media message: `send_file(path, caption=..., formatting_entities=..., parse_mode=None, thumb=...)` plus, for a Document, the source's `attributes`, `mime_type` and `supports_streaming`. The attributes are what keep a video a video, a voice note a voice note, a sticker a sticker (Telethon's `get_attributes` merges them over its own guesses). **`force_document=True` only for a plain file** (`media_kind` is `DOCUMENT`): Telethon passes it on as `force_file` in `InputMediaUploadedDocument`, and Telegram then shows the upload as a file whatever the attributes say (a real bug: videos arrived as files). A plain video also gets `nosound_video=True`, or a silent one turns into a GIF. `parse_mode=None` always: the entities are the formatting, and the client's default markdown parser would corrupt a text that contains `**`.
+  - an album: one `send_file([...])` with a caption list and an entity-list list. Telethon's `_send_album` applies **one** set of options to every file and takes video/audio details from the file itself (that needs `hachoir`, now a dependency); per-member attributes are not kept. `force_document` only when every member is a plain file (`DOCUMENT`); a music or video album must not be forced.
+  - text (or a link preview): `send_message(text, formatting_entities=..., parse_mode=None, link_preview=<the original had one>)`.
+  - poll, location/venue, contact, dice: `send_message(text, file=message.media)`; Telethon builds the `InputMedia*` itself. Do **not** hand-assemble `InputMediaPoll` (and `PollAnswerSyntax` does not exist). Anything else → `PerMessage('unsupported_media:<type>')`.
+  - `send_text(dst, text)` posts a placeholder.
+- Caption rewrite (`rewrite_caption`, `strip_source_links`) lives in the gateway module because it works on Telethon entity types; offsets are UTF-16 code units. It applies to captions of messages that have a file only; `append` adds to a caption that exists, never creates one.
+- `MediaCaptionTooLong`/`MessageTooLong` map to `PerMessage` (`append` can cause them).
+- What cannot be copied is decided by `engine/reupload.py::plan_unit` **before** Telegram is called, from `SrcMessage.media`, `quiz_unanswered` and `title` (set by `src_message`; Telethon raises `TypeError` for an unanswered quiz and for `MessageMediaInvoice`, so they are detected up front): poll/quiz without `--reset-polls` → dropped with a warning (`skipped`, `unsupported:poll|quiz`, never a placeholder); game, invoice, unanswered quiz → `--ignore-unsupported` drops, `--placeholder` posts `[Game: <title> — không thể sao chép]` and keeps its id on the `skipped` row, neither → `UnsupportedMedia` stops the run (exit 2). Never auto-answer a quiz, never prefix sender names.
+- Files: `<data>/tmp/run-<id>/`, emptied when a run starts (leftovers of a killed one) and when it ends. `[limits] prefetch` (default 1) and `tmp_budget_mb` bound how much is on disk (`Window`). Sending stays sequential and in order; only the read half looks ahead. No multi-connection uploader (decided 2026-09-20).
+- **Still unverified on a real account** (`docs/06-lo-trinh.md`, "Phase 6 — ghi chú"): all of the above against real Telegram, in particular that downloading protected media as an admin works, that `force_document=True` + the source attributes yields a video/voice/sticker (not a plain file), albums via `hachoir`, the cover upload, `send_message(file=media)` for polls/locations/contacts, and that `message.chat` carries the username `strip-links` looks for.
 
 ## Error mapping
 

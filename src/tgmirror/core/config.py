@@ -34,7 +34,8 @@ class Limits(BaseModel):
     long_pause_range: tuple[float, float] = (30.0, 90.0)
     daily_cap: int = Field(5000, ge=1)
     max_auto_wait: float = Field(900.0, ge=0)
-    upload_concurrency: int = Field(1, ge=1)
+    prefetch: int = Field(1, ge=0, le=3)  # units downloaded ahead while one uploads (0 = none)
+    tmp_budget_mb: int = Field(2048, ge=1)  # disk the downloaded-ahead files may take together
 
     @model_validator(mode="after")
     def _check_ranges(self) -> Self:

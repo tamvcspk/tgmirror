@@ -4,13 +4,13 @@ CLI app (`tgmirror`) that clones a Telegram channel, group or forum (with topic 
 
 ## Stack
 
-Python >= 3.11, `uv`, Telethon + `cryptg`, Typer (CLI), questionary (prompts), Rich (progress/TUI), aiosqlite, pydantic (config/filters), PyYAML (`--filter-file`), `regex` (filter regexes, with a timeout), platformdirs (paths), tenacity (non-Telegram retries), pytest + pytest-asyncio, ruff. Config is read with stdlib `tomllib`. Dev commands: `uv sync`, `uv run pytest`, `uv run ruff check .` / `uv run ruff format .` (ruff ignores `*.md`).
+Python >= 3.11, `uv`, Telethon + `cryptg`, Typer (CLI), questionary (prompts), Rich (progress/TUI), aiosqlite, pydantic (config/filters), PyYAML (`--filter-file`), `regex` (filter regexes, with a timeout), `hachoir` (Telethon reads video/audio details from files it re-uploads in an album), platformdirs (paths), tenacity (non-Telegram retries), pytest + pytest-asyncio + pytest-timeout (60 s per test: a hung test fails instead of blocking the run), ruff. Config is read with stdlib `tomllib`. Dev commands: `uv sync`, `uv run pytest`, `uv run ruff check .` / `uv run ruff format .` (ruff ignores `*.md`). `scripts/mutation_check.py` breaks one mechanism at a time in a temporary copy of `src/`+`tests/` and reports which ones no test notices (manual, a few minutes; never touches the working tree).
 
 ## Layout (`src/tgmirror/`; packages are added phase by phase, see `docs/06-lo-trinh.md`)
 
 ```
 core/     gateway (Telegram wrapper), auth (login flow), telethon_gateway (only Telethon importer), limiter (AIMD, daily cap, `limiter_state`), errors, config, paths
-engine/   endpoints (source/destination rules), runs (`begin_run`, resolve, vet), planner (`units`, and `failed_units` for `retry`), batcher, preview, strategies (copy / reupload), flood (`FloodGuard`: pacing + FloodWait handling for reads and writes), reconcile, runner, status (progress/ETA estimates for `status`)
+engine/   endpoints (source/destination rules), runs (`begin_run`, resolve, vet), planner (`units`, and `failed_units` for `retry`), batcher, strategy (`Strategy`, `router`: which unit is forwarded and which is downloaded and sent again), preview, copy (A), reupload (B: `plan_unit`, `send_unit`, `Window`/`Pipeline` that download ahead), flood (`FloodGuard`: pacing + FloodWait handling for reads and writes), reconcile, runner, status (progress/ETA estimates for `status`)
 filters/  model, parser (YAML + flags), pushdown (`plan_read`), matcher (pure, client side)
 store/    schema.sql (+ numbered migrations after release), db (`Store`: the only place with SQL), runs (`Run`, `Mirror`), msgmap, floodlog, limiterstate
 cli/      app, wizard, filter_options (shared filter flags), runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), keys (hotkeys p/r/q), commands/ (auth, channels, clone, run, retry, status, control = pause/stop, history)
@@ -23,7 +23,7 @@ ui/       messages (all user strings), prompts, tables, progress (plain-line rep
 2. The Telethon client is created with `flood_sleep_threshold=0`, so every FloodWait surfaces to our limiter instead of being slept silently.
 3. Progress is durable: state changes go through `store` in one transaction per batch. See skill `checkpoint-state`.
 4. Never split an album (`grouped_id`) across batches.
-5. Respect `noforwards` sources (decision D3). Do not add code that bypasses content protection on channels the user does not administer.
+5. Respect `noforwards` sources (decision D3, changed 2026-09-20: the user takes full responsibility). Nothing copies a protected source by default. The only way is `--mode reupload` with the user's own statement, `--yes-i-administer-this-channel`, which also lets an account that is not an admin through (the user owns the channel through another account; tgmirror cannot check the claim and says so). An account that does administer the source may answer the prompt instead; `--yes` never stands in for the flag. Every run that could re-upload re-reads the source first (`begin_run`), so `run`/`retry` cannot slip past it.
 6. Never log or print `api_hash`, session strings, phone numbers or login codes. `*.session` files are secrets.
 7. The CLI must work both interactively (wizard) and non-interactively (flags/YAML) — same code path underneath. See skill `cli-wizard`.
 8. Engine code depends on the `TelegramGateway` protocol, not on Telethon types, so it can be tested with `FakeGateway` (no network).

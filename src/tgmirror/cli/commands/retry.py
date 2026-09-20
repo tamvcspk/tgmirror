@@ -66,6 +66,12 @@ def retry(
                 pushdown=target.options.pushdown,
                 force=force_takeover,
                 retry_of=target.id,
+                caption=target.options.caption,
+                caption_text=target.options.caption_text,
+                reset_polls=target.options.reset_polls,
+                ignore_unsupported=target.options.ignore_unsupported,
+                placeholder=target.options.placeholder,
+                protected_ack=target.options.protected_ack,
             )
             src, dst = pair_of(target)
             async with authorized(rt) as conn:

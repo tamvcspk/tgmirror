@@ -69,6 +69,8 @@ class SrcMessage:
     duration: float | None = None  # seconds
     mime: str | None = None
     views: int | None = None
+    quiz_unanswered: bool = False  # a quiz whose right answer this account cannot see yet
+    title: str | None = None  # game/invoice title or poll question, for a placeholder text
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +133,37 @@ class ServerFilter:
 NO_FILTER = ServerFilter()
 
 
+class CaptionMode(StrEnum):
+    """What strategy B does with the caption of a media message (``--caption``)."""
+
+    KEEP = "keep"
+    STRIP_LINKS = "strip-links"  # drop links and mentions that point back at the source
+    APPEND = "append"  # add ``CaptionPolicy.text`` after the caption
+    NONE = "none"  # send the media without its caption
+
+
+@dataclass(frozen=True, slots=True)
+class CaptionPolicy:
+    """How captions are rewritten while re-sending. Only captions of media messages: the text of a
+    message that has no media is the content itself and is always sent as it is."""
+
+    mode: CaptionMode = CaptionMode.KEEP
+    text: str = ""  # what ``APPEND`` adds
+
+
+@dataclass(frozen=True, slots=True)
+class Prepared:
+    """A unit fetched for strategy B: its messages read again and its media downloaded.
+
+    ``files`` are the temporary files the caller must delete once the unit is sent or given up on;
+    ``handle`` is private to the gateway that made it.
+    """
+
+    unit: Unit
+    files: tuple[Path, ...] = ()
+    handle: object = None
+
+
 class MessageReader(Protocol):
     """The read side of the gateway: all that the planner, preview and reconcile need.
 
@@ -148,6 +181,15 @@ class MessageReader(Protocol):
 
         An id whose message no longer exists is simply absent from the result. ``retry`` uses it to
         read what it must send again without scanning the source.
+        """
+        ...
+
+    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+        """Strategy B, the read half: read the unit's messages again and download their media
+        into ``tmp`` (one request to find them, then the downloads).
+
+        A file already downloaded there is reused, so repeating the call after a FloodWait does
+        not fetch it twice. Raises ``PerMessage`` when a message is gone or has nothing to send.
         """
         ...
 
@@ -193,6 +235,18 @@ class TelegramGateway(Protocol):
         """
         ...
 
-    async def reupload(self, src: int, dst: int, unit: Unit, tmp: Path) -> list[int]:
-        """Strategy B: download then send again; returns the new ids in the destination."""
+    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+        """As ``MessageReader.prepare``."""
+        ...
+
+    async def send_prepared(
+        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+    ) -> list[int]:
+        """Strategy B, the write half: send the unit as new messages (one album for an album, text
+        for text, the poll/location/contact itself for those) and return their ids in the
+        destination, aligned with ``prepared.unit``. ``caption`` rewrites the captions of media."""
+        ...
+
+    async def send_text(self, dst: int, text: str) -> int:
+        """Post a plain text message (the stub that stands for what cannot be copied)."""
         ...

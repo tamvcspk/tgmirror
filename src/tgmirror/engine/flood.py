@@ -19,11 +19,19 @@ none of this can hold up Ctrl+C.
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
+from pathlib import Path
 from typing import Protocol, TypeVar
 
 from tgmirror.core.config import Limits
 from tgmirror.core.errors import FloodWait, PeerFlood
-from tgmirror.core.gateway import NO_FILTER, MessageReader, ServerFilter, SrcMessage
+from tgmirror.core.gateway import (
+    NO_FILTER,
+    MessageReader,
+    Prepared,
+    ServerFilter,
+    SrcMessage,
+    Unit,
+)
 from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.store.db import Store
 from tgmirror.store.runs import Run
@@ -177,4 +185,19 @@ class _GuardedReader:
                 )
             except PeerFlood:
                 await self._guard.peer_flood("get_messages")
+                raise
+
+    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+        """One paced read request (strategy B: the messages again, then their downloads). After a
+        FloodWait the call is repeated; the gateway keeps what it already downloaded."""
+        floods = 0
+        while True:
+            await self._guard.pace_read(1)
+            try:
+                return await self._inner.prepare(src, unit, tmp)
+            except FloodWait as exc:
+                floods += 1
+                await self._guard.flooded("prepare", exc, give_up=floods >= MAX_FLOODS_PER_CALL)
+            except PeerFlood:
+                await self._guard.peer_flood("prepare")
                 raise

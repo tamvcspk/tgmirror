@@ -19,7 +19,7 @@ Người dùng đã join một kênh Telegram. Họ muốn tạo bản sao của
 - Chạy nền liên tục (daemon / mirror realtime) hoặc lên lịch. "Chạy tay" nghĩa là người dùng gõ một lệnh như mọi lệnh khác và nó chạy ngay trong terminal của họ; không có process nền, không có lịch. Muốn lấy thêm tin mới thì gõ lại lệnh (delta).
 - Quản lý "job": không có job được đặt tên, liệt kê hay xóa. Mỗi lần chạy chỉ để lại một dòng nhật ký (`tgmirror history`); trạng thái tối thiểu để delta và resume (con trỏ, bảng tin đã sao chép) là chi tiết nội bộ theo cặp nguồn/đích.
 - Chạy nhiều account hoặc chia tải: chỉ dùng đúng một account.
-- Bypass "Restrict saving content" (xem D3).
+- Bypass "Restrict saving content" **theo mặc định**: chỉ khi chính user tuyên bố và chịu trách nhiệm (xem D3).
 - GUI. Chỉ CLI/TUI.
 
 ## Quyết định đã chốt
@@ -28,7 +28,7 @@ Người dùng đã join một kênh Telegram. Họ muốn tạo bản sao của
 |---|---|---|
 | D1 | Dùng **Telethon** (+ `cryptg`) | Còn được duy trì; Pyrogram bản gốc gần như ngừng, chỉ còn fork |
 | D2 | Chiến lược chính: `forward_messages(..., drop_author=True)` (copy phía server) | Không tốn băng thông upload, nhanh, giữ album, không hiện "Forwarded from" |
-| D3 | **Tôn trọng `noforwards`**: nếu nguồn bật "Restrict saving content" và user không phải creator/admin của nguồn → dừng và giải thích. Nếu là admin → hướng dẫn tắt tùy chọn tạm thời, hoặc dùng `--mode reupload` kèm xác nhận | Tính năng này là ý muốn của chủ kênh; tool không nên vô hiệu hóa nó |
+| D3 | **`noforwards`: mặc định tôn trọng, ngoại lệ do user tự chịu trách nhiệm** (đổi 2026-09-20). Nguồn bật "Restrict saving content" thì không sao chép, trừ khi user dùng `--mode reupload` kèm lời tuyên bố của chính mình: cờ `--yes-i-administer-this-channel` (mọi tài khoản, kể cả tài khoản không phải admin của nguồn: user là chủ kênh bằng tài khoản khác), hoặc câu hỏi xác nhận (chỉ tài khoản là admin). `--yes` không thay được cờ. Mỗi lần chạy dựa trên lời tuyên bố in một cảnh báo trách nhiệm. tgmirror không kiểm tra được quyền sở hữu | Tính năng này là ý muốn của chủ kênh nên không bao giờ bị bỏ qua âm thầm; nhưng chủ kênh thường có nhiều tài khoản, và người quyết định cuối cùng là user, người chịu toàn bộ trách nhiệm về việc mình tuyên bố |
 | D4 | Duyệt tin **cũ → mới** | Giữ đúng thứ tự trong kênh đích |
 | D5 | **Một file SQLite** (`tgmirror.db`) cho nhật ký các lần chạy và trạng thái theo cặp nguồn/đích | `tgmirror history` đơn giản, transaction rõ ràng (2026-09-20: đổi lý do từ "`tgmirror jobs`" khi bỏ khái niệm job, xem `06-lo-trinh.md`) |
 | D6 | Client tạo với `flood_sleep_threshold=0`; limiter của mình xử lý mọi FloodWait | Có log, có thích nghi, có thể tự dừng lần chạy |

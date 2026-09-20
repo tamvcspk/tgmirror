@@ -1,5 +1,9 @@
 """Group units into batches: the messages sent in one ``copy_messages`` call.
 
+A batch holds units of one strategy. A unit that is re-uploaded (strategy B) is a batch of its own:
+it is one download and one upload, and a crash while it is sent must leave nothing but that unit to
+reconcile.
+
 A batch also carries the messages the filter dropped just before it (``skipped``), so the runner
 can count them and move the cursor past them in the same commit as the batch itself.
 """
@@ -9,6 +13,7 @@ from dataclasses import dataclass
 
 from tgmirror.core.gateway import Unit
 from tgmirror.engine.planner import Skip
+from tgmirror.engine.strategy import Router, Strategy
 
 # A batch that waits for more units flushes after this many filtered-out messages, so a long
 # stretch with (almost) no matches still saves progress and lets pause/stop through.
@@ -24,6 +29,7 @@ class Batch:
     # Highest source id this batch settles besides its own units: filtered-out messages, and units
     # dropped because they were already ``done``.
     upto: int = 0
+    strategy: Strategy = Strategy.COPY
 
     @property
     def ids(self) -> list[int]:
@@ -45,6 +51,7 @@ async def batches(
     batch_size: int | Callable[[], int],
     *,
     flush_after: int = FLUSH_AFTER,
+    route: Router | None = None,
 ) -> AsyncIterator[Batch]:
     """Fill batches up to ``batch_size`` messages, never splitting a unit.
 
@@ -56,12 +63,16 @@ async def batches(
 
     Skips are credited to the batch that is emitted while they are pending: they all precede the
     unit that did not fit, so the batch's cursor may safely pass them.
+
+    ``route`` picks each unit's strategy (default: copy). A change of strategy ends the batch, and
+    a re-uploaded unit is emitted at once, alone.
     """
     current: list[Unit] = []
     count = skipped = upto = 0
+    strategy = Strategy.COPY
 
     def emit() -> Batch:
-        return Batch(tuple(current), skipped, upto)
+        return Batch(tuple(current), skipped, upto, strategy)
 
     async for item in stream:
         if isinstance(item, Skip):
@@ -71,10 +82,16 @@ async def batches(
                 current, count, skipped, upto = [], 0, 0, 0
             continue
         limit = batch_size() if callable(batch_size) else batch_size
-        if current and count + len(item.messages) > limit:
+        wanted = route(item) if route is not None else Strategy.COPY
+        if current and (wanted is not strategy or count + len(item.messages) > limit):
             yield emit()
             current, count, skipped, upto = [], 0, 0, 0
+        strategy = wanted
         current.append(item)
         count += len(item.messages)
+        if strategy is Strategy.REUPLOAD:  # nothing can join it
+            yield emit()
+            current, count, skipped, upto = [], 0, 0, 0
+            strategy = Strategy.COPY
     if current or skipped:
         yield emit()

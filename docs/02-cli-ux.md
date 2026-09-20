@@ -10,7 +10,7 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 | `tgmirror login` | Nhập `api_id`/`api_hash` (lưu config), đăng nhập (phone, code, 2FA), tạo session. Cần terminal (mã gửi qua Telegram); `--phone` điền sẵn số. Nếu đã đăng nhập thì chỉ báo lại, không cần terminal |
 | `tgmirror logout` / `tgmirror whoami` | Xóa session / xem account hiện tại |
 | `tgmirror channels` | Liệt kê kênh/group/forum đã join (cột: loại, tên + @username, id, số thành viên, noforwards, quyền post). `--search TEXT` lọc theo tên/username, `--writable` chỉ giữ chỗ user là admin và đăng được, `--json` |
-| `tgmirror clone` | Sao chép một nguồn vào một đích **ngay bây giờ**, trong terminal này (foreground): không chạy nền, không lên lịch; Ctrl+C dừng (tiến độ đã lưu). Wizard (bước 1–3 chọn nguồn/đích/filter, bước 5 xem trước, một câu xác nhận) hoặc cờ không tương tác. Chạy lại cho cùng cặp nguồn/đích thì chỉ lấy tin mới hơn con trỏ (delta), dùng lại filter của lần trước; đưa filter khác thì quét lại từ đầu (bỏ qua tin đã sao chép), `--no-filter` bỏ filter cũ (xem `03-filters.md`). Cờ: `--src`, `--dst` \| `--dst-new` (+ `--about`), cờ lọc (`--media`, `--hashtag`, `--contains`, `--regex`, `--exclude-regex`, `--exclude-media`, `--since`, `--until`, `--min-size`, `--max-size`, `--album`, `--filter-file`), `--no-filter`, `--fresh` (làm lại từ đầu, xem dưới), `--pushdown/--no-pushdown`, `--preview/--no-preview`, `--mode auto\|copy` (`reupload` từ phase 6, hiện báo mã 2), `--batch-size 1..100` (mặc định `[limits] batch_size`), `--wait`, `--force-takeover`, `--yes` (bỏ câu xác nhận). Chưa có bước 4 (tùy chọn) và `--caption` |
+| `tgmirror clone` | Sao chép một nguồn vào một đích **ngay bây giờ**, trong terminal này (foreground): không chạy nền, không lên lịch; Ctrl+C dừng (tiến độ đã lưu). Wizard (bước 1–3 chọn nguồn/đích/filter, bước 4 cách sao chép, bước 5 xem trước, một câu xác nhận) hoặc cờ không tương tác. Chạy lại cho cùng cặp nguồn/đích thì chỉ lấy tin mới hơn con trỏ (delta), dùng lại filter của lần trước; đưa filter khác thì quét lại từ đầu (bỏ qua tin đã sao chép), `--no-filter` bỏ filter cũ (xem `03-filters.md`). Cờ: `--src`, `--dst` \| `--dst-new` (+ `--about`), cờ lọc (`--media`, `--hashtag`, `--contains`, `--regex`, `--exclude-regex`, `--exclude-media`, `--since`, `--until`, `--min-size`, `--max-size`, `--album`, `--filter-file`), `--no-filter`, `--fresh` (làm lại từ đầu, xem dưới), `--pushdown/--no-pushdown`, `--preview/--no-preview`, `--mode auto\|copy\|reupload` (xem "Tin đặc thù" và "Caption handling"), `--caption keep\|strip-links\|append\|none` (+ `--caption-text`), `--reset-polls`, `--ignore-unsupported`, `--placeholder`, `--yes-i-administer-this-channel`, `--batch-size 1..100` (mặc định `[limits] batch_size`), `--wait`, `--force-takeover`, `--yes` (bỏ câu xác nhận) |
 | `tgmirror run [n]` | Chạy lại cặp nguồn/đích của lần chạy `n` (mặc định lần gần nhất; số lấy từ `tgmirror history`) với filter và tùy chọn của lần đó: chỉ lấy tin mới hơn, hoặc tiếp tục chỗ Ctrl+C/lỗi đã dừng. Nếu lần chạy đó đang **tạm dừng ở terminal khác** thì cho nó chạy tiếp ở đó thay vì mở lần thứ hai. `--force-takeover`: chạy dù có vẻ tiến trình khác đang giữ (chỉ khi chắc nó đã chết). `--wait`: chờ hết mọi FloodWait thay vì kết thúc khi chờ dài hơn `max_auto_wait` (không áp dụng cho `daily_cap`). FloodWait ngắn hơn `max_auto_wait` luôn được chờ rồi gửi lại đúng batch đó. Từ chối khi lần chạy trước là `waiting_flood` trước `resume_at` (kể cả nghỉ vì `daily_cap`, có câu riêng) hoặc `failed(peer_flood)` trong 24 giờ (mã 3). `--fresh`: quên tiến độ của cặp và sao chép lại từ đầu (kèm `--yes` để không hỏi). Đổi filter: dùng `tgmirror clone` với cùng `--src/--dst` |
 | `tgmirror pause` / `tgmirror stop` | Từ terminal khác: đặt cờ `control` trên lần chạy đang chạy (chỉ có tối đa một mỗi account). `pause` giữ nó **tại chỗ** sau batch hiện tại (tiến trình vẫn sống và giữ terminal của nó) cho tới khi `tgmirror run` hoặc phím `r`; `stop` kết thúc nó (`stopped`) như Ctrl+C. Không có gì đang chạy thì báo "Không có clone nào đang chạy", mã 1 |
 | `tgmirror history [n]` | Nhật ký các lần chạy, mới nhất trước: số lần, lúc bắt đầu, nguồn → đích, trạng thái, số tin đã sao chép/lỗi/bị filter loại (`--limit`, `--json`). `history n`: chi tiết một lần: thời gian, khoảng tin nguồn, filter (lần thử lại: "Thử lại: tin lỗi của lần chạy n" thay cho hai dòng đó), số tin đã xóa ở nguồn, tin lỗi kèm lý do (tối đa 20), các lần Telegram giới hạn (flood) |
@@ -35,7 +35,13 @@ Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, 
                            từ ngày, đến ngày, dung lượng min/max) / "Nạp từ file YAML"; với cặp đã clone còn có
                            lựa chọn đầu "Giữ filter của lần chạy trước". Trả lời sai thì hỏi lại (tối đa 3 lần)
                            Chỉ hỏi khi cần wizard cho cả phần còn lại (thiếu --src hoặc đích) và không có cờ lọc/--yes
-4. Tùy chọn             ← mode (auto/copy/reupload), caption handling, batch_size
+4. Cách sao chép       ← luôn hỏi **mode** (`--mode`): tự động (mặc định) / chỉ forward (`copy`) / tải xuống rồi tải lên lại
+                           (`reupload`). `copy` xong ngay (forward không đổi được caption). Với `auto` và `reupload` còn MỘT câu
+                           có/không (mặc định không): `auto` "Đổi caption của tin media?", `reupload` "Tùy chỉnh caption và cách
+                           xử lý tin không sao chép được?"; trả lời có thì hỏi caption (giữ / bỏ link về nguồn / thêm chữ / bỏ),
+                           và với `reupload` tick `--reset-polls`, `--ignore-unsupported`, `--placeholder`. Nguồn cấm lưu nội dung
+                           mà user là admin: bỏ câu mode (chỉ còn tải lên lại) và hỏi thẳng caption + tick. Chỉ hỏi khi wizard cũng
+                           hỏi nguồn/đích, không có `--yes` và chưa có cờ nào của bước này (giống bước filter)
 5. Xem trước            ← số tin khớp filter trong 100 tin đầu của khoảng đã chọn + vài caption mẫu
                            (phase 3; ước lượng tổng số tin và ETA theo limiter chưa có). Chạy trước khi tạo đích
 6. Xác nhận             ← MỘT câu "Sao chép <nguồn> → <đích> ngay bây giờ?" (đích mới ghi rõ sẽ được tạo), rồi
@@ -57,14 +63,14 @@ Wizard chỉ thu thập giá trị (kể cả filter: cùng `FlagFilters` như c
 Cả hai nhánh đi qua `engine/endpoints.py` (`find_channel` → `plan_endpoints` → `materialize`) rồi `engine/runs.py::begin_run` (kiểm `--mode`; từ chối nếu lần chạy trước của cặp đang chờ flood/`daily_cap`/PeerFlood, kiểm **ngay sau khi chọn nguồn/đích**, trước bước filter, xem trước và mọi câu hỏi; cặp đã clone trước đó thì tiếp tục từ con trỏ, không phải lỗi) và `execute` (dùng chung với `run`). Không tương tác: có `--yes` thì không hỏi; không có `--yes` và đích có sẵn thì vẫn chạy (cờ đầy đủ là sự đồng ý); không có `--yes` mà phải tạo kênh mới thì mã 2. Quy tắc kiểm tra:
 
 - `--src`/`--dst` nhận `@username`, id (`-100...` hoặc số trần) hoặc **tên chính xác** (không phân biệt hoa thường, phải duy nhất; không đoán theo một phần tên); một từ không khớp tên nào thì thử làm username không có `@`. Chỉ khớp trong các chat đã join. **PowerShell**: phải viết `"@ten_kenh"` trong dấu nháy, vì `@ten_kenh` trần bị shell hiểu là splatting và biến mất (khi đó `--src` nuốt cờ kế tiếp và lệnh báo "unexpected extra argument").
-- Nguồn bật `noforwards` và user không phải admin → từ chối (D3), thoát mã 4; là admin → cảnh báo (tắt tạm hoặc `--mode reupload` từ phase 6).
+- Nguồn bật `noforwards` (D3, đổi 2026-09-20: user chịu hoàn toàn trách nhiệm): tài khoản không phải admin và **không có** `--yes-i-administer-this-channel` → từ chối, thoát mã 4, câu lỗi chỉ ra cờ; là admin → cảnh báo (tắt tạm hoặc `--mode reupload`). Có cờ thì tài khoản nào cũng được (user là chủ kênh bằng tài khoản khác): `warn.noforwards_unadministered` nếu không phải admin, và **mỗi lần chạy dựa trên lời tuyên bố** (`clone`, `run`, `retry`) in `warn.responsibility` (trách nhiệm về quyền sao chép, bản quyền, Điều khoản Telegram; tgmirror không kiểm tra được). Với `--mode reupload` (hoặc `--mode auto` cùng `--caption` khác `keep`, vì khi đó tin có caption cũng được tải xuống) mà nguồn cấm lưu nội dung, user phải tự tuyên bố: câu hỏi (mặc định không; chỉ cho tài khoản là admin) hoặc cờ `--yes-i-administer-this-channel` (cho mọi tài khoản); **`--yes` không thay được** (đó là lời của chính user, không phải việc bỏ qua một câu hỏi), nên không có terminal mà thiếu cờ này thì mã 2. Kiểm trước khi tạo đích hay ghi gì. `run`/`retry` đọc lại nguồn trước khi tải lên lại (xem `01-kien-truc.md`, "Kiểm lại nguồn khi chạy lại").
 - Đích có sẵn: cùng loại với nguồn, user là admin và đăng được, khác nguồn (mã 4 nếu thiếu quyền, mã 2 nếu sai loại/trùng nguồn). Wizard chỉ liệt kê các đích thỏa điều kiện.
 - Đích mới (`--dst-new`, tên 1–128 ký tự, `--about` tối đa 255): hiện chỉ tạo được kênh broadcast, nên nguồn supergroup/forum/group phải chọn đích có sẵn cho đến phase 8. Tạo kênh là thao tác ghi: câu xác nhận duy nhất của `clone` nói rõ điều đó, hoặc `--yes` khi không có terminal (thiếu `--yes` thì thoát mã 2).
 - Không có terminal mà thiếu `--src`/`--dst`/`--dst-new` → mã 2, nêu tên cờ thiếu.
 
 ## Tin đặc thù (chỉ áp dụng khi lần chạy dùng chiến lược B)
 
-Chi tiết và lý do ở `01-kien-truc.md` (mục "Tin đặc thù"). Cờ của `clone`:
+Chi tiết và lý do ở `01-kien-truc.md` (mục "Tin đặc thù"). Cờ của `clone` (chỉ dùng được với `--mode reupload`; với mode khác là lỗi mã `2` nêu tên cờ):
 
 ```bash
 tgmirror clone --src ... --dst ... --mode reupload \
@@ -73,10 +79,11 @@ tgmirror clone --src ... --dst ... --mode reupload \
              --placeholder            # thay mỗi tin bị bỏ bằng một tin text "không thể sao chép"
 ```
 
-- Không có `--ignore-unsupported`: bước xem trước của wizard báo số tin không hỗ trợ và hỏi xác nhận; không tương tác thì lỗi mã `2`. Một lần chạy không bao giờ bỏ tin "âm thầm".
-- Không có `--reset-polls`: poll/quiz bị bỏ (kèm warning) thay vì tạo lại với 0 vote, vì đó là thay đổi dữ liệu người dùng nên phải chọn rõ.
+- Không có `--ignore-unsupported`/`--placeholder`: gặp game, invoice hoặc quiz chưa trả lời thì lần chạy **dừng** tại tin đó (mã `2`, nêu id tin và hai cờ), tiến độ đã lưu; chạy lại `tgmirror clone` với cờ thì đi tiếp. Một lần chạy không bao giờ bỏ tin "âm thầm". (Không quét cả nguồn để đếm trước: bước xem trước chỉ là mẫu.)
+- Không có `--reset-polls`: poll/quiz bị bỏ kèm một dòng warning mỗi tin (`Bỏ qua tin N (unsupported:poll)`) và tổng cuối lần chạy, vì tạo lại với 0 vote là thay đổi dữ liệu nên phải chọn rõ. Không dừng lần chạy và không cần `--ignore-unsupported`.
 - `--placeholder` ngầm bao gồm `--ignore-unsupported`. Không áp dụng cho poll bị bỏ do thiếu `--reset-polls` (đó là lựa chọn của người dùng, không phải giới hạn kỹ thuật).
 - Location, contact luôn được giữ. Với chiến lược A không có cờ nào ở đây (Telegram tự giữ loại tin).
+- Tin đã bị bỏ không được delta nhặt lại (con trỏ đã qua): thêm `--reset-polls` sau này không đưa các poll cũ về; muốn vậy dùng `--fresh`.
 
 ## Điều khiển khi đang chạy
 
@@ -105,8 +112,12 @@ done 4,180 · failed 3 · skipped(filter) 27,911 · flood 2 (last 38s ago)
 
 ## Caption handling (`--caption`)
 
-`keep` (mặc định) · `strip-links` (bỏ link/mention trỏ về kênh nguồn) · `append "<text>"` · `none`.
-Chiến lược A (copy) chỉ hỗ trợ `keep` (và `none` qua `drop_media_captions`, Telethon >= 1.45 có tham số này); các chế độ khác buộc dùng chiến lược B cho tin có caption → cảnh báo người dùng về tốc độ.
+`--caption keep` (mặc định) · `strip-links` (bỏ link `t.me/<nguồn>` và `@nguồn`; hyperlink trỏ về nguồn giữ chữ, mất link) · `append` (cộng `--caption-text "<text>"` sau caption, cách hai dòng trống) · `none`.
+
+- Chỉ đổi **caption của tin media** (ảnh, video, tài liệu, ... kể cả tin đầu của album). Văn bản của tin không có media (hay chỉ có link preview) là chính nội dung nên không bao giờ bị đổi. `append` chỉ cộng vào caption **đã có** (thành viên album không caption không thành có caption).
+- Chiến lược A (forward) không sửa được caption, nên `--mode copy` với `--caption` khác `keep` là lỗi mã 2. Với `--mode auto`, chỉ những unit có tin media kèm caption đi đường tải xuống rồi tải lên lại (chậm hơn nhiều), phần còn lại vẫn forward; thứ tự giữ nguyên. Với `--mode reupload`, mọi unit đều tải lên lại.
+- `--caption append` cần `--caption-text` (và ngược lại). Caption dài quá giới hạn của Telegram sau khi cộng: tin đó `failed` với lý do của Telegram, `retry` xử lý sau.
+- Offset của entity theo UTF-16 như Telegram; định dạng (đậm, nghiêng, ...) được giữ và dịch chuyển khi xóa link.
 
 ## Config
 
@@ -133,7 +144,8 @@ long_pause_every = 200
 long_pause_range = [30, 90]
 daily_cap = 5000
 max_auto_wait = 900
-upload_concurrency = 1
+prefetch = 1
+tmp_budget_mb = 2048
 ```
 
 ## Thử lại tin lỗi (`retry`)

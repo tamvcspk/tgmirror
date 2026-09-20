@@ -84,11 +84,18 @@ class NewChannelSpec:
 
 @dataclass(frozen=True, slots=True)
 class Plan:
-    """Validated choice. ``warnings`` are message codes for the UI (``ui/messages.py``)."""
+    """Validated choice. ``warnings`` are message codes for the UI (``ui/messages.py``).
+
+    ``protected``: the source restricts saving content and the user took responsibility for copying
+    it (D3, as changed 2026-09-20): either this account administers it, or the user said so with
+    ``--yes-i-administer-this-channel`` although it does not (they own it through another account).
+    Only ``--mode reupload`` can copy it.
+    """
 
     src: ChannelInfo
     dst: ChannelInfo | NewChannelSpec
     warnings: tuple[str, ...] = ()
+    protected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,18 +152,30 @@ def validate_new_channel(spec: NewChannelSpec) -> NewChannelSpec:
     return NewChannelSpec(title, about)
 
 
-def plan_endpoints(src: ChannelInfo, dst: ChannelInfo | NewChannelSpec) -> Plan:
-    """Check the pair without touching Telegram. Raises an ``EndpointError``."""
+def plan_endpoints(
+    src: ChannelInfo, dst: ChannelInfo | NewChannelSpec, *, take_responsibility: bool = False
+) -> Plan:
+    """Check the pair without touching Telegram. Raises an ``EndpointError``.
+
+    ``take_responsibility`` is ``--yes-i-administer-this-channel``: the user says the source is
+    theirs to copy. It is the only way past a protected source this account does not administer
+    (decision D3); tgmirror cannot check the claim, and the responsibility is entirely theirs.
+    """
     warnings: list[str] = []
+    protected = False
     if src.noforwards:
-        if not src.is_admin:
+        if src.is_admin:
+            warnings.append("noforwards_admin")  # D3: admins may lift the restriction or reupload
+        elif take_responsibility:
+            warnings.append("noforwards_unadministered")
+        else:
             raise SourceRestricted(src)
-        warnings.append("noforwards_admin")  # D3: admins may lift the restriction or reupload
+        protected = True
 
     if isinstance(dst, NewChannelSpec):
         if src.kind is not ChatKind.BROADCAST:
             raise NewChannelUnsupported(src.kind)
-        return Plan(src, validate_new_channel(dst), tuple(warnings))
+        return Plan(src, validate_new_channel(dst), tuple(warnings), protected)
 
     if dst.id == src.id:
         raise SameChannel
@@ -164,7 +183,7 @@ def plan_endpoints(src: ChannelInfo, dst: ChannelInfo | NewChannelSpec) -> Plan:
         raise KindMismatch(src, dst)
     if not (dst.is_admin and dst.can_post):
         raise DestinationNotWritable(dst)
-    return Plan(src, dst, tuple(warnings))
+    return Plan(src, dst, tuple(warnings), protected)
 
 
 async def materialize(gateway: TelegramGateway, plan: Plan) -> Endpoints:

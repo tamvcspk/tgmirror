@@ -11,6 +11,10 @@ messages that run left ``failed``, read by id. Everything after that is the same
 Pause is *in place*: the runner finishes the batch it is on, marks the run ``paused`` and waits,
 keeping the process, the terminal and the heartbeat, until it is resumed or stopped.
 
+A run that may re-upload (``mode`` reupload, or a caption to rewrite) reads its batches through a
+``Pipeline`` (``engine/reupload.py``): the unit after the one being sent is downloaded meanwhile,
+into ``<tmp>/run-<id>``, which is emptied when the run ends. Copy-only runs read inline as before.
+
 Rate limits (docs/05-chong-flood.md) are ``engine/flood.py``'s business: it paces every read and
 write and sits out a FloodWait of up to ``max_auto_wait`` by repeating the same call. What reaches
 this module is what cannot be waited out. A FloodWait that is too long, or repeated too often, is
@@ -22,11 +26,14 @@ with ``resume_at`` and the error is re-raised (exit code 3); the daily cap does 
 import asyncio
 import contextlib
 import random
+import shutil
+import tempfile
 import threading
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass, replace
 from datetime import timedelta
+from pathlib import Path
 from typing import Protocol
 
 from tgmirror.core.config import Limits
@@ -39,7 +46,7 @@ from tgmirror.core.errors import (
     TgMirrorError,
     Transient,
 )
-from tgmirror.core.gateway import MessageReader, SrcMessage, TelegramGateway, Unit
+from tgmirror.core.gateway import CaptionMode, MessageReader, SrcMessage, TelegramGateway, Unit
 from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
@@ -47,7 +54,18 @@ from tgmirror.engine.copy import copy_batch
 from tgmirror.engine.flood import FloodGuard, Interrupted
 from tgmirror.engine.planner import Skip
 from tgmirror.engine.reconcile import Outcome, judge
+from tgmirror.engine.reupload import (
+    ActionKind,
+    Options,
+    Pipeline,
+    Ready,
+    Window,
+    left_out,
+    plan_unit,
+    send_unit,
+)
 from tgmirror.engine.runs import DAILY_CAP
+from tgmirror.engine.strategy import Strategy, router
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 from tgmirror.filters.pushdown import plan_read
@@ -134,6 +152,7 @@ class Runner:
         clock: Clock = utc_now,
         timing: RunnerTiming | None = None,
         wait: bool = False,
+        tmp_dir: Path | None = None,
     ) -> None:
         self._store = store
         self._gateway = gateway
@@ -145,6 +164,8 @@ class Runner:
         self._clock = clock
         self._timing = timing or RunnerTiming()
         self._wait = wait  # sit out FloodWaits of any length instead of parking the run
+        self._tmp_dir = tmp_dir or Path(tempfile.gettempdir()) / "tgmirror"  # strategy B downloads
+        self._pipeline: Pipeline | None = None
         self._limiter: Limiter | None = None
         self._guard: FloodGuard | None = None
         self._reader: MessageReader | None = None
@@ -177,6 +198,7 @@ class Runner:
         )
         self._reader = self._guard.reader(self._gateway)
         heartbeat = asyncio.create_task(self._heartbeat(run.id))
+        await self._clear_tmp()  # what a killed run left behind
         try:
             await self._reconcile(run)
             status = await self._loop(run)
@@ -204,6 +226,7 @@ class Runner:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
+            await self._clear_tmp()
         final = await self._store.get_run(run.id)
         assert final is not None
         return final
@@ -227,22 +250,108 @@ class Runner:
                 matcher=None if spec.is_empty else Matcher(spec),
                 complete_albums=plan.complete_albums,
             )
+        caption = CaptionMode(run.options.caption)
         async with (
             aclosing(read) as units,
-            aclosing(batches(units, lambda: limiter.batch_size(run.options.batch_size))) as stream,
+            aclosing(
+                batches(
+                    units,
+                    lambda: limiter.batch_size(run.options.batch_size),
+                    route=router(run.mode, caption),
+                )
+            ) as stream,
+            aclosing(self._ready(run, stream)) as ready_stream,
         ):
-            async for batch in stream:
-                if not await self._gate(run):
-                    return RunStatus.STOPPED
-                todo = await self._without_done(run.id, batch)
-                if not todo.units:  # nothing to send: only the cursor and the filter count move
-                    await self._advance(run, todo)
-                    continue
-                await self._guard.pace(todo.size)
-                if not await self._gate(run):  # arrived while sleeping
-                    return RunStatus.STOPPED
-                await self._send(run, todo)
+            async for ready in ready_stream:
+                try:
+                    if not await self._gate(run):
+                        return RunStatus.STOPPED
+                    if not await self._process(run, ready):
+                        return RunStatus.STOPPED
+                finally:
+                    if self._pipeline is not None:
+                        await self._pipeline.finish(ready)
         return RunStatus.DONE
+
+    async def _ready(self, run: Run, stream: AsyncIterator[Batch]) -> AsyncIterator[Ready]:
+        """The batches with what they need before they are sent.
+
+        A run that can only copy reads inline. One that may re-upload reads ahead through a
+        ``Pipeline``, so the next unit is downloaded while this one uploads.
+        """
+        self._pipeline = None
+        caption = CaptionMode(run.options.caption)
+        if run.mode == "copy" or (run.mode == "auto" and caption is CaptionMode.KEEP):
+            async for batch in stream:
+                yield Ready(await self._without_done(run.id, batch))
+            return
+        options = Options.of(run.options)
+        window = Window(self._limits.prefetch + 1, self._limits.tmp_budget_mb * 1024 * 1024)
+
+        async def make(batch: Batch) -> Ready:
+            return await self._make(run, batch, options, window)
+
+        async def idle() -> None:
+            if await self._requested(run.id) is Control.STOP:
+                raise Interrupted  # the download in flight is dropped with the pipeline
+
+        self._pipeline = Pipeline(window, make, poll_interval=self._timing.poll_interval)
+        async with aclosing(self._pipeline.stream(stream, idle)) as ready_stream:
+            async for ready in ready_stream:
+                yield ready
+
+    async def _make(self, run: Run, batch: Batch, options: Options, window: Window) -> Ready:
+        """Settle what can be settled before the send: what is already ``done``, what to do with
+        the unit, and (for a unit that will be uploaded) its download."""
+        assert self._reader is not None
+        todo = await self._without_done(run.id, batch)
+        if not todo.units or todo.strategy is not Strategy.REUPLOAD:
+            return Ready(todo)
+        unit = todo.units[0]
+        action = plan_unit(unit, options)  # raises UnsupportedMedia
+        if action.kind is not ActionKind.SEND:
+            return Ready(todo, action)
+        size = sum(m.size or 0 for m in unit.messages)
+        await window.reserve(size)
+        try:
+            prepared = await self._reader.prepare(run.src_id, unit, self._run_tmp(run))
+        except PerMessage as exc:  # gone since it was read, or nothing to send: the unit fails
+            await window.release(size)
+            return Ready(todo, action, rejected=exc.reason)
+        except BaseException:
+            await window.release(size)
+            raise
+        return Ready(todo, action, prepared, reserved=size)
+
+    async def _process(self, run: Run, ready: Ready) -> bool:
+        """Send (or settle) one ready batch. ``False`` when a stop arrived while it waited."""
+        assert self._guard is not None
+        todo = ready.batch
+        if not todo.units:  # nothing to send: only the cursor and the filter count move
+            await self._advance(run, todo)
+            return True
+        if ready.rejected is not None:  # Telegram refused the fetch: fail the unit, send nothing
+            failed = [MessageResult(i, None, ready.rejected) for i in todo.ids]
+            await self._settle(run, todo, failed)
+            return True
+        if ready.action is not None and ready.action.kind is ActionKind.DROP:
+            self._reporter.notice("skipped_unsupported", id=todo.ids[0], reason=ready.action.reason)
+            await self._settle(run, todo, left_out(todo.units[0], ready.action))
+            return True
+        await self._guard.pace(todo.size)
+        if not await self._gate(run):  # arrived while sleeping
+            return False
+        await self._send(run, todo, ready)
+        return True
+
+    async def _settle(self, run: Run, batch: Batch, results: list[MessageResult]) -> None:
+        """Record what happened to a batch that needed no call to Telegram."""
+        batch_id = await self._store.begin_batch(run.id, batch.units)
+        extra = {"skipped_filter": batch.skipped} if batch.skipped else None
+        updated = await self._store.commit_batch(
+            run.id, batch_id, results, batch.last_id, extra_stats=extra
+        )
+        self._reporter.progress(updated)
 
     async def _failed_units(self, run: Run, failed_run: int) -> AsyncIterator[Unit]:
         """The messages ``failed_run`` left ``failed``, read by id (a retry, docs/04).
@@ -277,17 +386,28 @@ class Runner:
         if batch.skipped:  # a long stretch without matches still shows a sign of life
             self._reporter.progress(updated)
 
-    async def _send(self, run: Run, batch: Batch) -> None:
+    async def _send(self, run: Run, batch: Batch, ready: Ready | None = None) -> None:
         assert self._guard is not None and self._limiter is not None
         batch_id = await self._store.begin_batch(run.id, batch.units)  # write-ahead
         try:
             # A FloodWait is sat out inside ``write`` and the same call repeated: the batch stays
             # ``pending`` meanwhile and nothing is rebuilt.
-            results = await self._guard.write(
-                "copy_messages",
-                batch.size,
-                lambda: copy_batch(self._gateway, run.src_id, run.dst_id, batch),
-            )
+            if ready is not None and ready.action is not None:  # strategy B: one unit
+                action, options = ready.action, Options.of(run.options)
+                method = "send_text" if action.kind is ActionKind.PLACEHOLDER else "send_prepared"
+                results = await self._guard.write(
+                    method,
+                    batch.size,
+                    lambda: send_unit(
+                        self._gateway, run.dst_id, batch.units[0], ready.prepared, action, options
+                    ),
+                )
+            else:
+                results = await self._guard.write(
+                    "copy_messages",
+                    batch.size,
+                    lambda: copy_batch(self._gateway, run.src_id, run.dst_id, batch),
+                )
         except PerMessage as exc:
             if len(batch.units) > 1:
                 # Telegram refused the ids and created nothing. One bad message must not fail its
@@ -322,6 +442,17 @@ class Runner:
             await self._guard.pace(len(unit.messages))
             # the filter count and the cursor past the skipped messages go with the last unit
             await self._send(run, replace(batch, units=(unit,)) if i == last else Batch((unit,)))
+
+    # ---- strategy B's scratch space -----------------------------------------------------------
+
+    def _run_tmp(self, run: Run) -> Path:
+        return self._tmp_dir / f"run-{run.id}"
+
+    async def _clear_tmp(self) -> None:
+        """Delete the downloads of any run (this one, or one that was killed). One process owns the
+        session, so nothing else can be using them."""
+        if self._tmp_dir.is_dir():
+            await asyncio.to_thread(_remove_runs, self._tmp_dir)
 
     # ---- flood ----------------------------------------------------------------------------
 
@@ -432,3 +563,8 @@ class Runner:
         while True:
             await asyncio.sleep(self._timing.heartbeat_interval)
             await self._store.heartbeat(run_id)
+
+
+def _remove_runs(root: Path) -> None:
+    for entry in root.glob("run-*"):
+        shutil.rmtree(entry, ignore_errors=True)

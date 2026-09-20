@@ -20,14 +20,20 @@ from tgmirror.store.runs import FailedMessage, MsgStatus
 
 @dataclass(frozen=True, slots=True)
 class MessageResult:
-    """What happened to one source message in a batch: copied (``dst_id``) or not (``reason``)."""
+    """What happened to one source message in a batch: copied (``dst_id``), failed (``reason``), or
+    left out on purpose (``skipped``, with its ``reason``; ``dst_id`` is the placeholder text that
+    stands for it, if one was posted)."""
 
     src_id: int
     dst_id: int | None = None
     reason: str | None = None
+    skipped: bool = False
 
     def __post_init__(self) -> None:
-        if (self.dst_id is None) == (self.reason is None):
+        if self.skipped:
+            if self.reason is None:
+                raise ValueError("a skipped message needs its reason")
+        elif (self.dst_id is None) == (self.reason is None):
             raise ValueError("a result has either a dst_id or a failure reason")
 
 
@@ -86,16 +92,18 @@ async def finish_batch(
     batch_id: int,
     results: Iterable[MessageResult],
     ts: str,
-) -> tuple[int, int]:
-    """Turn a batch's pending rows into ``done``/``failed`` (now the rows of ``run_id``); returns
-    the ``(done, failed)`` counts."""
+) -> tuple[int, int, int]:
+    """Turn a batch's pending rows into ``done``/``failed``/``skipped`` (now the rows of
+    ``run_id``); returns the ``(done, failed, skipped)`` counts."""
     results = list(results)
     expected = {r.src_msg_id for r in await pending_rows(db, mirror_id, batch_id)}
     if {r.src_id for r in results} != expected or len(results) != len(expected):
         raise StoreError(f"results do not match the pending rows of batch {batch_id}")
-    done = failed = 0
+    done = failed = skipped = 0
     for r in results:
-        if r.dst_id is not None:
+        if r.skipped:
+            status, skipped = MsgStatus.SKIPPED, skipped + 1
+        elif r.dst_id is not None:
             status, done = MsgStatus.DONE, done + 1
         else:
             status, failed = MsgStatus.FAILED, failed + 1
@@ -104,7 +112,7 @@ async def finish_batch(
             "WHERE mirror_id = ? AND src_msg_id = ?",
             (status, r.dst_id, r.reason, run_id, ts, mirror_id, r.src_id),
         )
-    return done, failed
+    return done, failed, skipped
 
 
 async def pending_rows(

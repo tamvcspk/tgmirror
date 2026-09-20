@@ -41,7 +41,15 @@ from tgmirror.engine.endpoints import (
     SameChannel,
     SourceRestricted,
 )
-from tgmirror.engine.runs import ModeUnsupported, RunError, RunNotFound, RunWaiting
+from tgmirror.engine.reupload import UnsupportedMedia
+from tgmirror.engine.runs import (
+    InvalidOptions,
+    ModeUnsupported,
+    NeedsAcknowledgement,
+    RunError,
+    RunNotFound,
+    RunWaiting,
+)
 from tgmirror.filters.model import FilterError
 from tgmirror.filters.parser import FilterMix
 from tgmirror.ui.messages import t
@@ -115,6 +123,12 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.run_none") if exc.ref is None else t("err.run_not_found", ref=exc.ref)
         case ModeUnsupported():
             return t("err.mode_unsupported", mode=exc.mode)
+        case InvalidOptions():
+            return t(f"err.opt_{exc.key}")
+        case NeedsAcknowledgement():
+            return t("err.needs_admin_ack_rerun", title=exc.title)
+        case UnsupportedMedia():
+            return t("err.unsupported_media", id=exc.msg_id, kind=exc.kind)
         case RunWaiting():
             until = exc.until.astimezone().strftime("%Y-%m-%d %H:%M")
             return t(f"err.run_waiting_{exc.reason}", until=until)

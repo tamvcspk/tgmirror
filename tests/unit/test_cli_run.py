@@ -183,11 +183,11 @@ def test_an_unavailable_mode_is_refused_before_anything_is_created(
 
     result = runner.invoke(
         app,
-        ["clone", "--src", "Source", "--dst-new", "Copy", "--mode", "reupload", "--yes"],
+        ["clone", "--src", "Source", "--dst-new", "Copy", "--mode", "teleport", "--yes"],
         obj=rt,
     )
 
-    assert result.exit_code == 2 and "phase 6" in result.output
+    assert result.exit_code == 2 and "teleport" in result.output
     assert gateway.calls_to("create_channel") == [] and saved_runs(rt) == []
 
 
@@ -250,7 +250,9 @@ def test_wizard_and_flags_end_in_the_same_run_and_the_same_copy(
     flags_gw, wizard_gw = prepared(), prepared()
     flags_rt = make_runtime(gateway=flags_gw, root=tmp_path / "flags")
     flags = runner.invoke(app, CLONE, obj=flags_rt)
-    prompter = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[True])
+    prompter = ScriptedPrompter(
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, True]
+    )
     wizard_rt = make_runtime(
         gateway=wizard_gw, prompter=prompter, interactive=True, root=tmp_path / "wizard"
     )
@@ -263,7 +265,7 @@ def test_wizard_and_flags_end_in_the_same_run_and_the_same_copy(
     )  # fmt: skip
     assert texts(flags_gw, a.dst_id) == texts(wizard_gw, b.dst_id) == ["m1", "m2", "m3", "m4"]
     assert flags.output == wizard.output
-    (question,) = [m for kind, m in prompter.asked if kind == "confirm"]  # one, not three
+    _, question = [m for kind, m in prompter.asked if kind == "confirm"]  # not one per step
     assert question.startswith("Clone ") and question.endswith(" now?")
 
 
@@ -271,7 +273,9 @@ def test_declining_the_question_creates_and_copies_nothing(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     _, dst = source_with_messages(gateway)
-    prompter = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[False])
+    prompter = ScriptedPrompter(
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, False]
+    )
     rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -392,7 +396,7 @@ def test_a_restricted_source_exits_4_with_advice(
     result = runner.invoke(app, CLONE, obj=rt)
 
     assert result.exit_code == 4
-    assert "Restrict saving content" in result.output and "phase 6" in result.output
+    assert "Restrict saving content" in result.output and "--mode reupload" in result.output
     assert saved_runs(rt)[0].status is RunStatus.FAILED
 
 
@@ -572,25 +576,29 @@ def test_the_wizard_offers_continue_or_scratch_only_for_a_pair_with_progress(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     _, dst = source_with_messages(gateway)
-    fresh_pair = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[True])
+    fresh_pair = ScriptedPrompter(
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, True]
+    )
     runner.invoke(
         app, ["clone"], obj=make_runtime(gateway=gateway, prompter=fresh_pair, interactive=True)
     )
-    assert len(fresh_pair.select_labels) == 3  # source, destination, filter: no restart question
+    # source, destination, mode, filter: no restart question
+    assert len(fresh_pair.select_labels) == 4
 
     scratch = ScriptedPrompter(
-        select=["Source", "Copy", "Start from scratch", "No filter"], confirm=[True]
+        select=["Source", "Copy", "Automatic", "Start from scratch", "No filter"],
+        confirm=[False, True],
     )
     result = runner.invoke(
         app, ["clone"], obj=make_runtime(gateway=gateway, prompter=scratch, interactive=True)
     )
 
     assert result.exit_code == 0, result.output
-    assert [label for label in scratch.select_labels[2]] == [
+    assert [label for label in scratch.select_labels[3]] == [
         "Continue: only what is new",
         "Start from scratch: copy everything again",
     ]
-    assert "already has 3 messages" in [m for k, m in scratch.asked if k == "confirm"][0]
+    assert "already has 3 messages" in [m for k, m in scratch.asked if k == "confirm"][1]
     assert texts(gateway, dst) == ["m1", "m2", "m3"] * 2 and "Fresh start" in result.output
 
 
@@ -601,7 +609,9 @@ def test_the_wizard_continue_choice_is_an_ordinary_delta(
     rt = make_runtime(gateway=gateway)
     runner.invoke(app, CLONE, obj=rt)
     gateway.add_message(src, "m3")
-    carry_on = ScriptedPrompter(select=["Source", "Copy", "Continue", "No filter"], confirm=[True])
+    carry_on = ScriptedPrompter(
+        select=["Source", "Copy", "Automatic", "Continue", "No filter"], confirm=[False, True]
+    )
 
     result = runner.invoke(
         app, ["clone"], obj=make_runtime(gateway=gateway, prompter=carry_on, interactive=True)
@@ -617,7 +627,9 @@ def test_the_fresh_flag_skips_the_wizard_restart_question(
     _, dst = source_with_messages(gateway)
     rt = make_runtime(gateway=gateway)
     runner.invoke(app, CLONE, obj=rt)
-    prompter = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[True])
+    prompter = ScriptedPrompter(
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, True]
+    )
 
     result = runner.invoke(
         app,
@@ -626,7 +638,7 @@ def test_the_fresh_flag_skips_the_wizard_restart_question(
     )
 
     assert result.exit_code == 0, result.output
-    assert len(prompter.select_labels) == 3
+    assert len(prompter.select_labels) == 4
     assert texts(gateway, dst) == ["m1", "m2", "m3"] * 2
 
 

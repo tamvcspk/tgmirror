@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from tgmirror.core.errors import TgMirrorError
-from tgmirror.core.gateway import ChannelInfo, TelegramGateway
+from tgmirror.core.gateway import CaptionMode, ChannelInfo, TelegramGateway
+from tgmirror.engine.endpoints import SourceRestricted
+from tgmirror.engine.strategy import MODES, may_reupload
 from tgmirror.store.db import Clock, Store, utc_now
 from tgmirror.store.runs import Run, RunOptions, RunSpec, RunStatus, StartedRun
 
-SUPPORTED_MODES = ("auto", "copy")  # "reupload" arrives with strategy B (phase 6)
+SUPPORTED_MODES = MODES  # auto | copy | reupload
 PEER_FLOOD_COOLDOWN = timedelta(hours=24)  # docs/05-chong-flood.md: rest at least 24h
 DAILY_CAP = "daily_cap"  # ``fail_reason`` of a run parked in waiting_flood by the daily cap
 
@@ -34,6 +36,23 @@ class ModeUnsupported(RunError):
     def __init__(self, mode: str) -> None:
         super().__init__(f"mode {mode!r} is not available")
         self.mode = mode
+
+
+class InvalidOptions(RunError):
+    """Options that do not go together (``key`` names the message that says why)."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"invalid options: {key}")
+        self.key = key
+
+
+class NeedsAcknowledgement(RunError):
+    """The source restricts saving content and this run has no confirmation from the user that they
+    may copy it (decision D3): only ``clone`` can obtain one."""
+
+    def __init__(self, title: str) -> None:
+        super().__init__(f"{title!r} restricts saving content and the run was not confirmed")
+        self.title = title
 
 
 class RunWaiting(RunError):
@@ -57,6 +76,32 @@ class RunRequest:
     force: bool = False  # ``--force-takeover``
     fresh: bool = False  # ``--fresh``: forget the pair's progress and copy everything again
     retry_of: int | None = None  # ``retry``: send the ``failed`` messages of this run again
+    # Strategy B (``--caption``, ``--caption-text``, ``--reset-polls``, ``--ignore-unsupported``,
+    # ``--placeholder``); they only make sense for a run that can re-upload.
+    caption: str = "keep"
+    caption_text: str = ""
+    reset_polls: bool = False
+    ignore_unsupported: bool = False
+    placeholder: bool = False
+    protected_ack: bool = False  # the user confirmed a source that restricts saving content (D3)
+
+
+def check_options(request: RunRequest) -> None:
+    """Refuse a request whose options contradict each other. Raises ``ModeUnsupported`` for an
+    unknown mode and ``InvalidOptions`` otherwise."""
+    if request.mode not in SUPPORTED_MODES:
+        raise ModeUnsupported(request.mode)
+    if request.caption not in {m.value for m in CaptionMode}:
+        raise InvalidOptions("caption_unknown")
+    if request.caption == CaptionMode.APPEND and not request.caption_text.strip():
+        raise InvalidOptions("caption_text_missing")
+    if request.caption != CaptionMode.APPEND and request.caption_text:
+        raise InvalidOptions("caption_text_unused")
+    if request.mode == "copy" and request.caption != CaptionMode.KEEP:
+        raise InvalidOptions("caption_needs_reupload")
+    strategy_b = request.reset_polls or request.ignore_unsupported or request.placeholder
+    if strategy_b and request.mode != "reupload":
+        raise InvalidOptions("reupload_flags_need_reupload")
 
 
 async def begin_run(
@@ -74,8 +119,9 @@ async def begin_run(
     (hard rule 1's exception), one cheap request per run.
     """
     request = request or RunRequest()
-    if request.mode not in SUPPORTED_MODES:
-        raise ModeUnsupported(request.mode)
+    check_options(request)
+    if may_reupload(request.mode, request.caption):
+        await check_source(gateway, src, request)
     previous = await store.latest_run(src.id, dst.id)
     if previous is not None:
         check_runnable(previous, clock())
@@ -89,10 +135,40 @@ async def begin_run(
         src=src,
         dst=dst,
         mode=request.mode,
-        options=RunOptions(request.batch_size, base, request.pushdown, head, request.retry_of),
+        options=RunOptions(
+            batch_size=request.batch_size,
+            dst_base_id=base,
+            pushdown=request.pushdown,
+            caption=request.caption,
+            caption_text=request.caption_text,
+            reset_polls=request.reset_polls,
+            ignore_unsupported=request.ignore_unsupported,
+            placeholder=request.placeholder,
+            protected_ack=request.protected_ack,
+            src_last_id=head,
+            retry_of=request.retry_of,
+        ),
         filters_json=request.filters_json,
     )
     return await store.start_run(spec, force=request.force, fresh=request.fresh)
+
+
+async def check_source(gateway: TelegramGateway, src: ChannelInfo, request: RunRequest) -> None:
+    """Decision D3 for a run that can download content: read the source again (one setup request)
+    because it may have turned on "Restrict saving content" since the pair was chosen, and ``run``
+    and ``retry`` never go through ``plan_endpoints``.
+
+    The user's own statement (``--yes-i-administer-this-channel``, recorded by ``clone`` in the
+    run's options and carried on by ``run``/``retry``) is what lets a run go on. Without it a
+    protected source is refused: ``SourceRestricted`` when this account does not administer it,
+    ``NeedsAcknowledgement`` when it does (the prompt of ``clone`` is enough for those).
+    """
+    current = await gateway.get_channel(src.id)
+    if not current.noforwards or request.protected_ack:
+        return
+    if not current.is_admin:
+        raise SourceRestricted(current)
+    raise NeedsAcknowledgement(current.title)
 
 
 async def resolve_run(store: Store, ref: str | None) -> Run:

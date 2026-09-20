@@ -5,6 +5,7 @@ server-side narrowing, albums sharing a ``grouped_id``, copy with a result align
 ``noforwards`` and posting rights. Flood/peer-flood scenarios are injected with ``fail_next``.
 """
 
+import asyncio
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, replace
@@ -27,9 +28,12 @@ from tgmirror.core.gateway import (
     ALBUM_MARGIN,
     MAX_IDS_PER_CALL,
     NO_FILTER,
+    CaptionMode,
+    CaptionPolicy,
     ChannelInfo,
     ChatKind,
     MediaKind,
+    Prepared,
     ServerFilter,
     SrcMessage,
     Unit,
@@ -99,6 +103,8 @@ class FakeGateway:
         mime: str | None = None,
         views: int | None = None,
         date: datetime | None = None,
+        quiz_unanswered: bool = False,
+        title: str | None = None,
     ) -> SrcMessage:
         msg_id = self._alloc_id(channel)
         msg = SrcMessage(
@@ -113,6 +119,8 @@ class FakeGateway:
             duration=duration,
             mime=mime,
             views=views,
+            quiz_unanswered=quiz_unanswered,
+            title=title,
         )
         self.messages[channel].append(msg)
         return msg
@@ -232,19 +240,48 @@ class FakeGateway:
             results.append(new_id)
         return results
 
-    async def reupload(self, src: int, dst: int, unit: Unit, tmp: Path) -> list[int]:
-        self._enter("reupload", src, dst, unit.ids, tmp)
+    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+        """Reads the unit again and "downloads" its media: one small file per message that has
+        some, so a test can see that the engine keeps them until the unit is sent and then removes
+        them."""
+        self._enter("prepare", src, unit.ids, tmp)
         self._channel(src)
+        have = {m.id for m in self.messages[src]}
+        if any(i not in have for i in unit.ids):
+            raise PerMessage("gone_from_source")
+        files: list[Path] = []
+        for msg in unit.messages:
+            if msg.media in _NO_FILE:
+                continue
+            files.append(await asyncio.to_thread(_download, tmp, msg.id))
+        return Prepared(unit, tuple(files))
+
+    async def send_prepared(
+        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+    ) -> list[int]:
+        self._enter("send_prepared", dst, prepared.unit.ids, caption)
         target = self._channel(dst)
         if not target.can_post:
             raise NoPermission(f"cannot post to channel {dst}")
-        gid = self._alloc_group() if unit.is_album else None
+        missing = [p for p in prepared.files if not p.exists()]
+        assert not missing, f"the engine removed downloads before the unit was sent: {missing}"
+        gid = self._alloc_group() if prepared.unit.is_album else None
         new_ids: list[int] = []
-        for msg in unit.messages:
+        for msg in prepared.unit.messages:
             new_id = self._alloc_id(dst)
-            self.messages[dst].append(replace(msg, id=new_id, grouped_id=gid))
+            text = _rewrite(msg, caption)
+            self.messages[dst].append(replace(msg, id=new_id, grouped_id=gid, text=text))
             new_ids.append(new_id)
         return new_ids
+
+    async def send_text(self, dst: int, text: str) -> int:
+        self._enter("send_text", dst, text)
+        if not self._channel(dst).can_post:
+            raise NoPermission(f"cannot post to channel {dst}")
+        new_id = self._alloc_id(dst)
+        date = _EPOCH + timedelta(minutes=new_id)
+        self.messages[dst].append(SrcMessage(id=new_id, date=date, text=text))
+        return new_id
 
     # ---- internals --------------------------------------------------------------------------
 
@@ -267,6 +304,41 @@ class FakeGateway:
     def _alloc_group(self) -> int:
         self._next_group_id += 1
         return self._next_group_id
+
+
+# media without a file to download: the message itself carries them (or there is nothing)
+_NO_FILE = frozenset(
+    {
+        MediaKind.TEXT,
+        MediaKind.WEBPAGE,
+        MediaKind.POLL,
+        MediaKind.GEO,
+        MediaKind.CONTACT,
+        MediaKind.GAME,
+        MediaKind.INVOICE,
+    }
+)
+
+
+def _download(tmp: Path, msg_id: int) -> Path:
+    tmp.mkdir(parents=True, exist_ok=True)
+    path = tmp / str(msg_id)
+    path.write_bytes(b"x")
+    return path
+
+
+def _rewrite(msg: SrcMessage, policy: CaptionPolicy) -> str:
+    """The caption after ``policy``; only the caption of a media message is ever rewritten."""
+    if msg.media in _NO_FILE:
+        return msg.text
+    match policy.mode:
+        case CaptionMode.NONE:
+            return ""
+        case CaptionMode.APPEND:
+            return f"{msg.text}\n\n{policy.text}" if msg.text else msg.text
+        case CaptionMode.STRIP_LINKS:
+            return " ".join(w for w in msg.text.split(" ") if "t.me/" not in w)
+    return msg.text
 
 
 class FakeAuth:

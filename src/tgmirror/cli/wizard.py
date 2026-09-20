@@ -7,10 +7,11 @@ live in ``engine/endpoints.py`` and ``filters/``, so both paths end up in the sa
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from tgmirror.cli.errors import describe
-from tgmirror.core.gateway import ChannelInfo, MediaKind
+from tgmirror.core.gateway import CaptionMode, ChannelInfo, MediaKind
 from tgmirror.engine.endpoints import (
     InvalidChannelTitle,
     NewChannelSpec,
@@ -68,6 +69,75 @@ async def pick_resume(prompter: Prompter, copied: int) -> bool:
             Choice(t("clone.resume_continue"), False),
             Choice(t("clone.resume_fresh"), True),
         ],
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyChoice:
+    """Step 4: the values ``--mode``, ``--caption``, ``--caption-text`` and the strategy B flags
+    carry."""
+
+    mode: str = "auto"
+    caption: str = "keep"
+    caption_text: str = ""
+    reset_polls: bool = False
+    ignore_unsupported: bool = False
+    placeholder: bool = False
+
+
+async def pick_strategy(prompter: Prompter, *, protected: bool) -> StrategyChoice:
+    """Step 4: how to copy, then (only if asked to) the captions and what cannot be copied.
+
+    The mode is always asked (``auto``, ``copy`` or ``reupload``, the values of ``--mode``). A
+    source that forbids saving its content (``protected``) has one way only, download and send
+    again, so the mode is not asked, only what goes with it.
+
+    The details (captions; with ``reupload`` also polls and what cannot be copied) sit behind one
+    yes/no question, default no, so an ordinary clone answers two quick questions. ``copy`` has no
+    details: a forward cannot change a caption.
+    """
+    if protected:
+        prompter.say(t("options.protected"))
+        mode = "reupload"
+    else:
+        mode = await prompter.select(
+            t("options.pick_mode"),
+            [
+                Choice(t("options.mode_auto"), "auto"),
+                Choice(t("options.mode_copy"), "copy"),
+                Choice(t("options.mode_reupload"), "reupload"),
+            ],
+        )
+        if mode == "copy":
+            return StrategyChoice(mode)
+        question = t(
+            "options.customise_reupload" if mode == "reupload" else "options.customise_auto"
+        )
+        if not await prompter.confirm(question, False):
+            return StrategyChoice(mode)
+    caption = await prompter.select(
+        t("options.pick_caption"), [Choice(t(f"options.caption_{m}"), m.value) for m in CaptionMode]
+    )
+    text = ""
+    if caption == CaptionMode.APPEND:
+        text = (await prompter.text(t("options.ask_caption_text"))).strip()
+    flags: list[str] = []
+    if mode == "reupload":
+        flags = await prompter.checkbox(
+            t("options.pick_flags"),
+            [
+                Choice(t("options.flag_reset_polls"), "reset_polls"),
+                Choice(t("options.flag_ignore_unsupported"), "ignore_unsupported"),
+                Choice(t("options.flag_placeholder"), "placeholder"),
+            ],
+        )
+    return StrategyChoice(
+        mode,
+        caption,
+        text,
+        reset_polls="reset_polls" in flags,
+        ignore_unsupported="ignore_unsupported" in flags,
+        placeholder="placeholder" in flags,
     )
 
 

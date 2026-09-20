@@ -94,9 +94,18 @@ VI: dict[str, str] = {
     "control.pause_requested": "Đã yêu cầu tạm dừng lần chạy {id}; nó dừng sau batch hiện tại.",
     "control.stop_requested": "Đã yêu cầu dừng lần chạy {id}; nó dừng sau batch hiện tại.",
     # warnings
+    "warn.noforwards_unadministered": (
+        "Nguồn bật «Restrict saving content» và tài khoản này KHÔNG phải admin của nó; "
+        "tgmirror không kiểm tra được việc bạn là chủ kênh bằng tài khoản khác."
+    ),
+    "warn.responsibility": (
+        "CẢNH BÁO: bạn đang sao chép một nguồn cấm lưu nội dung dựa trên tuyên bố của chính "
+        "bạn rằng bạn được phép. Bạn chịu hoàn toàn trách nhiệm về quyền sao chép nội dung "
+        "này, kể cả với bản quyền và Điều khoản của Telegram."
+    ),
     "warn.noforwards_admin": (
         "Nguồn bật «Restrict saving content». Bạn là admin nên có thể tắt tùy chọn này tạm thời, "
-        "hoặc dùng --mode reupload kèm xác nhận (có từ phase 6)."
+        "hoặc dùng --mode reupload (tải xuống rồi tải lên lại; có hỏi xác nhận)."
     ),
     # errors (each says what to do next)
     "err.not_logged_in": "Chưa đăng nhập hoặc phiên đã hết hạn. Chạy `tgmirror login`.",
@@ -131,8 +140,10 @@ VI: dict[str, str] = {
     ),
     "err.ambiguous": "«{ref}» khớp nhiều kênh: {matches}. Dùng id hoặc @username.",
     "err.source_restricted": (
-        "«{title}» bật «Restrict saving content» và bạn không phải admin, nên tgmirror không "
-        "sao chép (quyết định D3). Nhờ chủ kênh tắt tùy chọn này nếu họ đồng ý."
+        "«{title}» bật «Restrict saving content» và tài khoản này không phải admin, nên tgmirror "
+        "không sao chép (quyết định D3). Nếu bạn là chủ kênh bằng tài khoản khác và tự chịu "
+        "hoàn toàn trách nhiệm, chạy lại với --mode reupload --yes-i-administer-this-channel; "
+        "hoặc nhờ chủ kênh tắt tùy chọn này."
     ),
     "err.dest_not_writable": "Bạn cần là admin có quyền đăng bài ở «{title}». Chọn đích khác.",
     "err.kind_mismatch": "Nguồn là {src} còn đích là {dst}; đích có sẵn phải cùng loại với nguồn.",
@@ -144,8 +155,30 @@ VI: dict[str, str] = {
         "Chưa tạo được đích mới cho nguồn loại {kind} (có từ phase 8). "
         "Chọn một đích có sẵn cùng loại."
     ),
-    "err.mode_unsupported": (
-        "Chế độ «{mode}» chưa dùng được (reupload có từ phase 6). Dùng auto hoặc copy."
+    "err.mode_unsupported": "Chế độ «{mode}» không có. Dùng auto, copy hoặc reupload.",
+    "err.opt_caption_unknown": "--caption phải là keep, strip-links, append hoặc none.",
+    "err.opt_caption_text_missing": '--caption append cần thêm --caption-text "<nội dung>".',
+    "err.opt_caption_text_unused": "--caption-text chỉ dùng cùng --caption append.",
+    "err.opt_caption_needs_reupload": (
+        "Sửa caption phải tải xuống rồi tải lên lại, forward không làm được: dùng --mode auto "
+        "(chỉ tin có caption đi đường đó) hoặc --mode reupload, không dùng --mode copy."
+    ),
+    "err.opt_reupload_flags_need_reupload": (
+        "--reset-polls, --ignore-unsupported và --placeholder chỉ có nghĩa với --mode reupload."
+    ),
+    "err.unsupported_media": (
+        "Tin {id} là {kind}, không sao chép được. Chạy lại với --ignore-unsupported để bỏ qua "
+        "nó, hoặc --placeholder để đăng một dòng ghi chú thay vào chỗ đó. Tiến độ đã lưu."
+    ),
+    "err.needs_admin_ack_rerun": (
+        "«{title}» bật «Restrict saving content» và lần chạy này chưa được bạn xác nhận. Chạy "
+        "lại bằng `tgmirror clone` cùng nguồn/đích với --mode reupload "
+        "--yes-i-administer-this-channel."
+    ),
+    "err.needs_admin_ack": (
+        "«{title}» bật «Restrict saving content». Tải xuống rồi tải lên lại nội dung đó là quyết "
+        "định của bạn: nếu bạn là chủ/admin và được phép sao chép, thêm "
+        "--yes-i-administer-this-channel (--yes không thay được)."
     ),
     "err.run_busy": (
         "Lần chạy {id} đang được một tiến trình khác giữ. Nếu chắc chắn nó đã chết, "
@@ -165,7 +198,7 @@ VI: dict[str, str] = {
     ),
     "err.forwards_restricted": (
         "Nguồn bật «Restrict saving content» nên Telegram từ chối forward. Nếu bạn là admin, "
-        "tắt tùy chọn này ở nguồn; chế độ reupload có từ phase 6."
+        "tắt tùy chọn này ở nguồn, hoặc chạy lại với --mode reupload."
     ),
     "err.store": "Lỗi cơ sở dữ liệu: {detail}",
     "err.schema_too_new": "Cơ sở dữ liệu do bản tgmirror mới hơn tạo ra. Hãy nâng cấp tgmirror.",
@@ -193,6 +226,42 @@ VI: dict[str, str] = {
     "clone.preview_empty": "Xem trước: nguồn không có tin nào trong khoảng đã chọn.",
     "clone.preview_example": "  · {text}",
     "run.skipped": "{count} tin bị filter loại.",
+    "run.skipped_unsupported": "Bỏ qua tin {id} ({reason}): không sao chép được.",
+    "run.unsupported_total": (
+        "{count} tin không sao chép được đã bị bỏ qua (xem `tgmirror history {id}`)."
+    ),
+    "clone.confirm_protected": (
+        "«{title}» bật «Restrict saving content»: chủ kênh đã cấm lưu nội dung của nó. Chỉ tiếp "
+        "tục nếu bạn là chủ/admin và được phép sao chép. Tải xuống rồi tải lên lại từng tin?"
+    ),
+    "options.protected": (
+        "Nguồn cấm lưu nội dung nên chỉ còn cách tải xuống rồi tải lên lại (reupload)."
+    ),
+    "options.customise_auto": "Đổi caption của tin media? (mặc định không)",
+    "options.customise_reupload": (
+        "Tùy chỉnh caption và cách xử lý tin không sao chép được? (mặc định không)"
+    ),
+    "options.pick_mode": "Cách sao chép?",
+    "options.mode_auto": (
+        "Tự động: forward phía server (nhanh, không tốn băng thông); chỉ tin cần đổi caption "
+        "mới tải lên lại"
+    ),
+    "options.mode_copy": "Chỉ forward phía server (copy): không đổi được caption",
+    "options.mode_reupload": (
+        "Tải xuống rồi tải lên lại (chậm; cần để đổi caption hay khi nguồn cấm lưu)"
+    ),
+    "options.pick_caption": "Caption của tin media?",
+    "options.caption_keep": "Giữ nguyên",
+    "options.caption_strip-links": (
+        "Bỏ link và mention trỏ về kênh nguồn (phải tải lên lại tin có caption)"
+    ),
+    "options.caption_append": "Thêm một đoạn chữ vào cuối (phải tải lên lại tin có caption)",
+    "options.caption_none": "Bỏ caption (phải tải lên lại tin có caption)",
+    "options.ask_caption_text": "Đoạn chữ thêm vào cuối caption:",
+    "options.pick_flags": "Với tin không forward được (chọn cái cần):",
+    "options.flag_reset_polls": "Tạo lại poll/quiz (mất toàn bộ số vote)",
+    "options.flag_ignore_unsupported": "Bỏ qua game, hóa đơn, quiz chưa trả lời thay vì dừng",
+    "options.flag_placeholder": "Đăng một dòng ghi chú thay cho tin bị bỏ qua",
     "run.progress_filtered": (
         "Lần chạy {id}: {done} tin đã sao chép, {skipped} bị filter loại, {failed} "
         "lỗi (tin nguồn tới id {cursor})."
@@ -371,9 +440,18 @@ EN: dict[str, str] = {
     "status.failed": "failed",
     "control.pause_requested": "Asked run {id} to pause; it holds after the current batch.",
     "control.stop_requested": "Asked run {id} to stop; it stops after the current batch.",
+    "warn.noforwards_unadministered": (
+        "The source has 'Restrict saving content' on and this account is NOT an admin of it; "
+        "tgmirror cannot check that you own it through another account."
+    ),
+    "warn.responsibility": (
+        "WARNING: you are copying a source that forbids saving its content on your own "
+        "statement that you may. You take full responsibility for your right to copy it, "
+        "copyright and Telegram's terms included."
+    ),
     "warn.noforwards_admin": (
         "The source has 'Restrict saving content' on. You are an admin, so you can turn it off "
-        "temporarily, or use --mode reupload with confirmation (available from phase 6)."
+        "temporarily, or use --mode reupload (download and send again; it asks to confirm)."
     ),
     "err.not_logged_in": "Not logged in, or the session expired. Run `tgmirror login`.",
     "err.missing_credentials": (
@@ -405,8 +483,10 @@ EN: dict[str, str] = {
     ),
     "err.ambiguous": "'{ref}' matches several chats: {matches}. Use the id or @username.",
     "err.source_restricted": (
-        "'{title}' has 'Restrict saving content' on and you are not an admin, so tgmirror will "
-        "not copy it (decision D3). Ask the owner to turn it off if they agree."
+        "'{title}' has 'Restrict saving content' on and this account is not an admin, so "
+        "tgmirror will not copy it (decision D3). If you own it through another account and "
+        "take full responsibility, run again with --mode reupload "
+        "--yes-i-administer-this-channel; or ask the owner to turn the option off."
     ),
     "err.dest_not_writable": "You must be an admin allowed to post in '{title}'. Pick another one.",
     "err.kind_mismatch": "The source is a {src} but the destination is a {dst}; they must match.",
@@ -418,8 +498,31 @@ EN: dict[str, str] = {
         "Creating a new destination for a {kind} source arrives in phase 8. "
         "Pick an existing destination of the same kind."
     ),
-    "err.mode_unsupported": (
-        "Mode '{mode}' is not available yet (reupload arrives in phase 6). Use auto or copy."
+    "err.mode_unsupported": "There is no mode '{mode}'. Use auto, copy or reupload.",
+    "err.opt_caption_unknown": "--caption must be keep, strip-links, append or none.",
+    "err.opt_caption_text_missing": '--caption append needs --caption-text "<text>".',
+    "err.opt_caption_text_unused": "--caption-text only goes with --caption append.",
+    "err.opt_caption_needs_reupload": (
+        "Changing captions means downloading and sending again, which a forward cannot do: use "
+        "--mode auto (only messages with a caption take that road) or --mode reupload, not copy."
+    ),
+    "err.opt_reupload_flags_need_reupload": (
+        "--reset-polls, --ignore-unsupported and --placeholder only mean something with "
+        "--mode reupload."
+    ),
+    "err.unsupported_media": (
+        "Message {id} is a {kind}, which cannot be copied. Run again with --ignore-unsupported "
+        "to leave it out, or --placeholder to post a short note in its place. Progress is saved."
+    ),
+    "err.needs_admin_ack_rerun": (
+        "'{title}' has 'Restrict saving content' on and this run was not confirmed by you. Run "
+        "`tgmirror clone` again for the same source and destination with --mode reupload "
+        "--yes-i-administer-this-channel."
+    ),
+    "err.needs_admin_ack": (
+        "'{title}' has 'Restrict saving content' on. Downloading and re-sending its content is "
+        "your call: if you own or administer it and may copy it, add "
+        "--yes-i-administer-this-channel (--yes does not stand in for it)."
     ),
     "err.run_busy": (
         "Run {id} is held by another process. If you are sure it is dead, run again "
@@ -440,7 +543,7 @@ EN: dict[str, str] = {
     ),
     "err.forwards_restricted": (
         "The source has 'Restrict saving content' on, so Telegram refuses to forward. If you are "
-        "an admin, turn that option off at the source; reupload mode arrives in phase 6."
+        "an admin, turn that option off at the source, or run again with --mode reupload."
     ),
     "err.store": "Database error: {detail}",
     "err.schema_too_new": "The database was made by a newer tgmirror. Please upgrade tgmirror.",
@@ -467,6 +570,43 @@ EN: dict[str, str] = {
     "clone.preview_empty": "Preview: the source has no messages in the chosen range.",
     "clone.preview_example": "  · {text}",
     "run.skipped": "{count} messages were left out by the filter.",
+    "run.skipped_unsupported": "Left out message {id} ({reason}): it cannot be copied.",
+    "run.unsupported_total": (
+        "{count} messages that cannot be copied were left out (see `tgmirror history {id}`)."
+    ),
+    "clone.confirm_protected": (
+        "'{title}' has 'Restrict saving content' on: its owner forbade saving its content. Go on "
+        "only if you own or administer it and may copy it. Download and re-send every message?"
+    ),
+    "options.protected": (
+        "The source forbids saving its content, so downloading and re-sending (reupload) is the "
+        "only way."
+    ),
+    "options.customise_auto": "Change the captions of media messages? (default: no)",
+    "options.customise_reupload": ("Customise captions and what cannot be copied? (default: no)"),
+    "options.pick_mode": "How to copy?",
+    "options.mode_auto": (
+        "Automatic: server-side forward (fast, no bandwidth); only messages whose caption "
+        "changes are re-uploaded"
+    ),
+    "options.mode_copy": "Server-side forward only (copy): captions cannot change",
+    "options.mode_reupload": (
+        "Download and send again (slow; needed to change captions or when saving is restricted)"
+    ),
+    "options.pick_caption": "Captions of media messages?",
+    "options.caption_keep": "Keep them",
+    "options.caption_strip-links": (
+        "Remove links and mentions that point at the source (captioned messages are re-uploaded)"
+    ),
+    "options.caption_append": "Add some text at the end (captioned messages are re-uploaded)",
+    "options.caption_none": "Remove them (captioned messages are re-uploaded)",
+    "options.ask_caption_text": "Text to add at the end of each caption:",
+    "options.pick_flags": "For messages that cannot be forwarded (tick what you want):",
+    "options.flag_reset_polls": "Re-create polls and quizzes (they lose all their votes)",
+    "options.flag_ignore_unsupported": (
+        "Leave out games, invoices, unanswered quizzes instead of stopping"
+    ),
+    "options.flag_placeholder": "Post a short note where a message was left out",
     "run.progress_filtered": (
         "Run {id}: {done} messages copied, {skipped} left out by the filter, {failed} "
         "failed (source up to id {cursor})."

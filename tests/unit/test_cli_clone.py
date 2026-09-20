@@ -219,7 +219,7 @@ def test_wizard_creates_the_same_channel_as_the_flags(
     wizard_gateway = FakeGateway()
     wizard_gateway.add_channel("Source")
     prompter = ScriptedPrompter(
-        select=["Source", "No filter"], text=["Copy", "about"], confirm=[True]
+        select=["Source", "Automatic", "No filter"], text=["Copy", "about"], confirm=[False, True]
     )
     wizard = runner.invoke(
         app,
@@ -244,14 +244,14 @@ def test_wizard_offers_only_eligible_destinations(
     gateway.add_channel("Good target")
     gateway.add_channel("Read only", can_post=False)
     gateway.add_channel("Group", kind=ChatKind.SUPERGROUP)
-    prompter = ScriptedPrompter(select=["Source", "Good target", "No filter"])
+    prompter = ScriptedPrompter(select=["Source", "Good target", "Automatic", "No filter"])
 
     result = runner.invoke(
         app, ["clone"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
     )
 
     assert result.exit_code == 0, result.output
-    source_choices, destination_choices, filter_choices = prompter.select_labels
+    source_choices, destination_choices, _mode, _filter = prompter.select_labels
     assert len(source_choices) == 4  # every joined chat can be a source
     assert [
         c for c in destination_choices if "Read only" in c or "Group" in c or "Source" in c
@@ -264,7 +264,9 @@ def test_wizard_with_no_eligible_destination_goes_straight_to_creating(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     gateway.add_channel("Only one")
-    prompter = ScriptedPrompter(select=["Only one", "No filter"], text=["Copy", ""], confirm=[True])
+    prompter = ScriptedPrompter(
+        select=["Only one", "Automatic", "No filter"], text=["Copy", ""], confirm=[False, True]
+    )
 
     result = runner.invoke(
         app, ["clone"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
@@ -279,7 +281,9 @@ def test_wizard_declining_the_confirmation_creates_nothing(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     gateway.add_channel("Source")
-    prompter = ScriptedPrompter(select=["Source", "No filter"], text=["Copy", ""], confirm=[False])
+    prompter = ScriptedPrompter(
+        select=["Source", "Automatic", "No filter"], text=["Copy", ""], confirm=[False, False]
+    )
 
     result = runner.invoke(
         app, ["clone"], obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True)
@@ -294,9 +298,9 @@ def test_wizard_asks_again_after_an_empty_title(
 ) -> None:
     gateway.add_channel("Source")
     prompter = ScriptedPrompter(
-        select=["Source", "No filter"],
+        select=["Source", "Automatic", "No filter"],
         text=["", "", "Copy", ""],
-        confirm=[True],  # title+about twice
+        confirm=[False, True],  # title+about twice
     )
 
     result = runner.invoke(

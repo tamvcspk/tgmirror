@@ -100,6 +100,12 @@ def run_clone(
                 pushdown=target.options.pushdown,
                 force=force_takeover,
                 fresh=fresh,
+                caption=target.options.caption,
+                caption_text=target.options.caption_text,
+                reset_polls=target.options.reset_polls,
+                ignore_unsupported=target.options.ignore_unsupported,
+                placeholder=target.options.placeholder,
+                protected_ack=target.options.protected_ack,
             )
             src, dst = pair_of(target)
             if fresh:
@@ -158,7 +164,10 @@ async def execute(
         reporter=LineReporter(typer.echo),
         control=control,
         wait=wait,
+        tmp_dir=rt.paths.tmp_dir,
     )
+    if current.options.protected_ack:  # decision D3: the user answers for this copy
+        typer.echo(t("warn.responsibility"), err=True)
     retry_of = current.options.retry_of
     if retry_of is not None:  # no source cursor or filter to talk about
         count = await store.count_failed(retry_of)
@@ -206,6 +215,8 @@ async def execute(
     )
     if final.skipped_filter:
         typer.echo(t("run.skipped", count=final.skipped_filter))
+    if final.skipped_unsupported:
+        typer.echo(t("run.unsupported_total", count=final.skipped_unsupported, id=final.id))
     if final.gone:
         typer.echo(t("retry.gone", count=final.gone))
     if final.failed:

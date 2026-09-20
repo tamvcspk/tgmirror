@@ -6,9 +6,14 @@ This is the only module (with its tests) that imports Telethon. Telethon excepti
 adds reading and copying messages. The limiter is wired in at phase 4 (docs/06-lo-trinh.md).
 """
 
+import asyncio
+import copy
+import os
+import re
 import sqlite3
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Collection, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -41,9 +46,12 @@ from tgmirror.core.errors import (
 from tgmirror.core.gateway import (
     ALBUM_MARGIN,
     NO_FILTER,
+    CaptionMode,
+    CaptionPolicy,
     ChannelInfo,
     ChatKind,
     MediaKind,
+    Prepared,
     ServerFilter,
     SrcMessage,
     Unit,
@@ -119,6 +127,10 @@ def map_exception(exc: BaseException) -> GatewayError | None:
             return FileRefExpired("FILE_REFERENCE_EXPIRED")
         case errors.MessageIdInvalidError():  # every id of a forward is gone; the request failed
             return PerMessage("MESSAGE_ID_INVALID")
+        case (
+            errors.MediaCaptionTooLongError() | errors.MessageTooLongError()
+        ):  # ``append`` can do it
+            return PerMessage(_rpc_name(exc))
         case errors.ChannelsTooMuchError() | errors.UserChannelsTooMuchError():
             return TooManyChannels(_rpc_name(exc))
         case ConnectionError() | TimeoutError() | errors.TimedOutError() | errors.ServerError():
@@ -253,6 +265,25 @@ def _hashtags(message: custom.Message) -> tuple[str, ...]:
     return tuple(text.split("@", 1)[0].casefold() for _, text in found)  # groups: #tag@channel
 
 
+def _text_of(value: object) -> str:
+    """Poll questions are ``TextWithEntities`` in newer layers and plain strings in older ones."""
+    return str(getattr(value, "text", value))
+
+
+def _title_and_quiz(message: custom.Message) -> tuple[str | None, bool]:
+    """A title to name the message by (game, invoice, poll question) and whether it is a quiz whose
+    right answer this account cannot see (Telethon cannot rebuild such a quiz)."""
+    media = message.media
+    if isinstance(media, types.MessageMediaPoll):
+        seen = bool(media.results and media.results.results)
+        return _text_of(media.poll.question), bool(media.poll.quiz) and not seen
+    if isinstance(media, types.MessageMediaGame):
+        return media.game.title, False
+    if isinstance(media, types.MessageMediaInvoice):
+        return media.title, False
+    return None, False
+
+
 def src_message(message: object) -> SrcMessage | None:
     """Reduce a Telethon message to ``SrcMessage``; ``None`` for anything that is not a message."""
     # Telethon's patched MessageEmpty is a custom.Message too, so it has to be excluded by name
@@ -263,6 +294,7 @@ def src_message(message: object) -> SrcMessage | None:
     attachment = isinstance(message.media, types.MessageMediaPhoto | types.MessageMediaDocument)
     if attachment and (file := message.file) is not None:
         size, duration, mime = file.size, file.duration, file.mime_type
+    title, quiz_unanswered = _title_and_quiz(message)
     return SrcMessage(
         id=message.id,
         date=message.date,
@@ -275,7 +307,136 @@ def src_message(message: object) -> SrcMessage | None:
         duration=duration,
         mime=mime,
         views=message.views,
+        quiz_unanswered=quiz_unanswered,
+        title=title,
     )
+
+
+# ---- strategy B: captions and files ---------------------------------------------------------
+
+_SELF_CONTAINED = (
+    types.MessageMediaPoll,
+    types.MessageMediaGeo,
+    types.MessageMediaGeoLive,
+    types.MessageMediaVenue,
+    types.MessageMediaContact,
+    types.MessageMediaDice,
+)  # media with no file: Telethon rebuilds it from the message's own media object
+
+
+def _units16(text: str) -> bytes:
+    return text.encode("utf-16-le")
+
+
+def _slice16(text: str, offset: int, length: int) -> str:
+    """Telegram counts entity offsets in UTF-16 code units."""
+    return _units16(text)[2 * offset : 2 * (offset + length)].decode("utf-16-le", "ignore")
+
+
+def _points_at_source(reference: str, names: Collection[str]) -> bool:
+    """A ``t.me`` link or an ``@mention`` of one of the source's names (lower-case)."""
+    ref = reference.strip().casefold()
+    if ref.startswith("@"):
+        return ref[1:] in names
+    found = re.match(r"(?:https?://)?(?:www\.)?(?:t|telegram)\.me/(?:c/)?([\w]+)", ref)
+    return found is not None and found.group(1) in names
+
+
+def strip_source_links(
+    text: str, entities: Sequence[object], names: Collection[str]
+) -> tuple[str, list[object]]:
+    """Drop what points back at the source: a visible link or mention is deleted with its text, a
+    hyperlink keeps its words and loses the link. Everything else stays, offsets moved to fit."""
+    cuts: list[tuple[int, int]] = []
+    kept: list[object] = []
+    for entity in entities:
+        if isinstance(entity, types.MessageEntityUrl | types.MessageEntityMention):
+            visible = _slice16(text, entity.offset, entity.length)
+            if _points_at_source(visible, names):
+                cuts.append((entity.offset, entity.length))
+                continue
+        elif isinstance(entity, types.MessageEntityTextUrl) and _points_at_source(
+            entity.url, names
+        ):
+            continue
+        kept.append(entity)
+    if not cuts:
+        return text, kept
+
+    def moved(position: int) -> int:
+        return position - sum(min(length, max(0, position - at)) for at, length in cuts)
+
+    units = bytearray(_units16(text))
+    for at, length in sorted(cuts, reverse=True):
+        del units[2 * at : 2 * (at + length)]
+    new_text = units.decode("utf-16-le")
+    trimmed = new_text.rstrip()
+    limit = len(_units16(trimmed)) // 2
+    result: list[object] = []
+    for entity in kept:
+        start = moved(entity.offset)
+        end = min(moved(entity.offset + entity.length), limit)
+        if end > start:
+            clone = copy.copy(entity)
+            clone.offset, clone.length = start, end - start
+            result.append(clone)
+    return trimmed, result
+
+
+def rewrite_caption(
+    text: str, entities: Sequence[object], policy: CaptionPolicy, names: Collection[str]
+) -> tuple[str, list[object]]:
+    """The caption and its entities after ``policy`` (docs/02-cli-ux.md, "Caption handling")."""
+    match policy.mode:
+        case CaptionMode.NONE:
+            return "", []
+        case CaptionMode.APPEND:
+            return (f"{text}\n\n{policy.text}" if text else text), list(entities)
+        case CaptionMode.STRIP_LINKS:
+            return strip_source_links(text, entities, names)
+    return text, list(entities)
+
+
+def _source_names(message: custom.Message) -> set[str]:
+    """What links to the message's chat look like: its usernames and, for a private channel, the
+    number in ``t.me/c/<number>/...``."""
+    names: set[str] = set()
+    chat = message.chat
+    for name in [getattr(chat, "username", None)] + [
+        u.username for u in getattr(chat, "usernames", None) or [] if u.active
+    ]:
+        if name:
+            names.add(name.casefold())
+    if message.chat_id is not None:
+        names.add(str(message.chat_id).removeprefix("-100").removeprefix("-"))
+    return names
+
+
+@dataclass(frozen=True, slots=True)
+class _Item:
+    """One message of a prepared unit: the message as Telegram gave it and the files downloaded."""
+
+    message: custom.Message
+    path: Path | None = None  # its media, when it has a file
+    thumb: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Fetched:
+    items: tuple[_Item, ...]
+
+
+def _has_file(message: custom.Message) -> bool:
+    return isinstance(message.media, types.MessageMediaPhoto | types.MessageMediaDocument)
+
+
+def _make_room(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+
+
+def _publish(part: str, final: Path) -> None:
+    os.replace(part, final)
 
 
 # ---- client, auth, gateway ------------------------------------------------------------------
@@ -424,8 +585,158 @@ class TelethonGateway:
             except ValueError:  # not in the session cache
                 raise NoPermission(f"channel {ref} is not accessible") from None
 
-    async def reupload(self, src: int, dst: int, unit: Unit, tmp: Path) -> list[int]:
-        raise NotImplementedError("reupload arrives in phase 6")
+    # ---- strategy B ------------------------------------------------------------------------
+
+    async def prepare(self, src: int, unit: Unit, tmp: Path) -> Prepared:
+        peer = await self._peer(src)
+        with mapped_errors():
+            found = await self._client.get_messages(peer, ids=unit.ids)
+        messages = [
+            m
+            for m in found
+            if isinstance(m, custom.Message) and not isinstance(m, types.MessageEmpty)
+        ]
+        if len(messages) != len(unit.ids):  # deleted since it was read
+            raise PerMessage("gone_from_source")
+        items: list[_Item] = []
+        with mapped_errors():
+            for message in messages:
+                path = thumb = None
+                if _has_file(message):
+                    path = await self._download(message, tmp)
+                    thumb = await self._thumbnail(message, tmp)
+                items.append(_Item(message, path, thumb))
+        files = tuple(f for item in items for f in (item.path, item.thumb) if f is not None)
+        return Prepared(unit, files, _Fetched(tuple(items)))
+
+    async def _download(self, message: custom.Message, tmp: Path) -> Path:
+        """The media of ``message`` in ``tmp``. A finished file is kept, so the same call after a
+        FloodWait does not download it again; an interrupted one is only ever a ``.part``."""
+        final = tmp / f"{message.id}{message.file.ext or ''}"
+        if await asyncio.to_thread(final.exists):
+            return final
+        part = tmp / f"{message.id}.part"
+        await asyncio.to_thread(_make_room, part)
+        got = await self._client.download_media(message, file=str(part))
+        if got is None:
+            raise PerMessage("download_failed")
+        await asyncio.to_thread(_publish, got, final)
+        return final
+
+    async def _thumbnail(self, message: custom.Message, tmp: Path) -> Path | None:
+        """The cover of a video, when Telegram has one (a stripped preview is too small to use)."""
+        if not (message.video or message.gif or message.video_note):
+            return None
+        sizes = [
+            s
+            for s in message.document.thumbs or []
+            if isinstance(s, types.PhotoSize | types.PhotoCachedSize)
+        ]
+        if not sizes:
+            return None
+        final = tmp / f"{message.id}.thumb.jpg"
+        if await asyncio.to_thread(final.exists):
+            return final
+        part = tmp / f"{message.id}.thumb.part"
+        await asyncio.to_thread(_make_room, part)
+        best = max(sizes, key=lambda s: s.w * s.h)
+        got = await self._client.download_media(message, file=str(part), thumb=best)
+        if got is None:
+            return None  # a missing cover is not worth failing the video for
+        await asyncio.to_thread(_publish, got, final)
+        return final
+
+    async def send_prepared(
+        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+    ) -> list[int]:
+        fetched = prepared.handle
+        assert isinstance(fetched, _Fetched)
+        peer = await self._peer(dst)
+        with mapped_errors():
+            if len(fetched.items) > 1:
+                return await self._send_album(peer, fetched.items, caption)
+            return [await self._send_one(peer, fetched.items[0], caption)]
+
+    async def _send_one(self, peer: object, item: _Item, caption: CaptionPolicy) -> int:
+        message = item.message
+        text, entities = message.message or "", list(message.entities or [])
+        media = message.media
+        if item.path is not None:
+            text, entities = rewrite_caption(text, entities, caption, _source_names(message))
+            extra: dict[str, object] = {}
+            if (doc := message.document) is not None:
+                kind = media_kind(message)
+                # The attributes are what make it a video, a voice note, a sticker, ... at the
+                # destination. ``force_document`` must NOT be set for those: Telethon turns it into
+                # ``force_file`` and Telegram then shows the upload as a plain file whatever the
+                # attributes say. Only what already was a plain file at the source is forced (it
+                # also keeps a .jpg document from being re-sent as a photo).
+                extra = {
+                    "attributes": list(doc.attributes),
+                    "mime_type": doc.mime_type,
+                    "force_document": kind is MediaKind.DOCUMENT,
+                    "supports_streaming": bool(message.video),
+                }
+                if kind is MediaKind.VIDEO:
+                    # without it Telegram turns a video with no sound track into a GIF
+                    extra["nosound_video"] = True
+            sent = await self._client.send_file(
+                peer,
+                str(item.path),
+                caption=text,
+                formatting_entities=entities or None,
+                parse_mode=None,  # the entities are the formatting: nothing to parse as markdown
+                thumb=None if item.thumb is None else str(item.thumb),
+                **extra,
+            )
+        elif media is None or isinstance(media, types.MessageMediaWebPage):
+            sent = await self._client.send_message(
+                peer,
+                text,
+                formatting_entities=entities or None,
+                parse_mode=None,
+                link_preview=media is not None,
+            )
+        elif isinstance(media, _SELF_CONTAINED):
+            sent = await self._client.send_message(
+                peer, text, file=media, formatting_entities=entities or None, parse_mode=None
+            )
+        else:
+            raise PerMessage(f"unsupported_media:{type(media).__name__}")
+        return int(sent.id)
+
+    async def _send_album(
+        self, peer: object, items: Sequence[_Item], caption: CaptionPolicy
+    ) -> list[int]:
+        captions: list[str] = []
+        entity_lists: list[list[object]] = []
+        for item in items:
+            message = item.message
+            text, entities = rewrite_caption(
+                message.message or "", list(message.entities or []), caption, _source_names(message)
+            )
+            captions.append(text)
+            entity_lists.append(entities)
+        # Telethon sends every file of an album alike and reads video/audio details from the file
+        # (that needs ``hachoir``). Only an album of plain files is forced to stay files: forcing
+        # anything else (videos, songs) would make Telegram show them as files too.
+        as_documents = all(media_kind(i.message) is MediaKind.DOCUMENT for i in items)
+        sent = await self._client.send_file(
+            peer,
+            [str(i.path) for i in items],
+            caption=captions,
+            formatting_entities=entity_lists,
+            parse_mode=None,
+            force_document=as_documents,
+            supports_streaming=True,
+        )
+        return [int(m.id) for m in sent]
+
+    async def send_text(self, dst: int, text: str) -> int:
+        peer = await self._peer(dst)
+        with mapped_errors():
+            sent = await self._client.send_message(peer, text, parse_mode=None, link_preview=False)
+        return int(sent.id)
 
 
 @asynccontextmanager

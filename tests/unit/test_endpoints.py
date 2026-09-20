@@ -93,6 +93,29 @@ def test_plan_refuses_restricted_source_for_non_admin(gateway: FakeGateway) -> N
         plan_endpoints(src, NewChannelSpec("copy"))
 
 
+def test_the_users_statement_of_responsibility_lets_a_non_admin_account_through(
+    gateway: FakeGateway,
+) -> None:
+    src = gateway.add_channel("locked", noforwards=True, is_admin=False, can_post=False)
+    dst = gateway.add_channel("dst")
+
+    plan = plan_endpoints(src, dst, take_responsibility=True)
+
+    assert plan.protected and plan.warnings == ("noforwards_unadministered",)
+    with pytest.raises(SourceRestricted):  # ...and nothing else does
+        plan_endpoints(src, dst)
+
+
+def test_the_statement_changes_nothing_for_a_source_that_is_not_protected(
+    gateway: FakeGateway,
+) -> None:
+    src, dst = gateway.add_channel("open"), gateway.add_channel("dst")
+
+    plan = plan_endpoints(src, dst, take_responsibility=True)
+
+    assert not plan.protected and plan.warnings == ()
+
+
 def test_plan_warns_for_restricted_source_when_admin(gateway: FakeGateway) -> None:
     src = gateway.add_channel("locked", noforwards=True, is_admin=True)
     dst = gateway.add_channel("dst")

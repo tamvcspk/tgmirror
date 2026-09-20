@@ -21,8 +21,8 @@ Mọi lời gọi đọc/ghi của một lần `run` đi qua `await limiter.acqu
 - **Jitter**: mỗi lần chờ nhân với `uniform(1 - jitter, 1 + jitter)`.
 - **Long pause**: sau mỗi `long_pause_every` tin, nghỉ ngẫu nhiên trong `long_pause_range` giây.
 - **Daily cap**: đếm tin gửi trong ngày (`limiter_state.sent_today`, theo ngày **giờ máy**, lưu cùng transaction với batch); một batch mà `sent_today + cost > daily_cap` không được gửi (trừ khi hôm nay chưa gửi gì: batch đầu lớn hơn cap vẫn đi, để không kẹt vĩnh viễn). Chạm cap → `DailyCapReached`: lần chạy kết thúc ở `waiting_flood` với `fail_reason='daily_cap'` và `resume_at` là 00:00 ngày kế (giờ máy), thoát mã 3 kèm một câu giải thích; không phải lỗi. Bộ đếm là của cả account, không phải của một lần chạy. `--wait` không áp dụng cho daily cap.
-- **Cost**: tin gửi tính theo số tin trong batch. Lời gọi đọc dùng bucket riêng, nhẹ hơn: `cost` là số request (một `iter_messages` = 1, cộng 1 cho mỗi đầu `--since`/`--until` vì gateway tra ngày → id; mỗi lần hoàn thiện album cũng là một `iter_messages`; `get_messages` của `retry` là 1 cho mỗi lô tối đa 100 id), chờ `read_delay × (delay / min_delay) × jitter` giữa hai lần đọc (lần đọc đầu của một lần chạy đi ngay), nên đọc chậm theo cùng tốc độ với ghi khi bị flood. Việc lật trang bên trong một `iter_messages` do Telethon giãn cách bằng `wait_time` (`READ_WAIT` = 1 s). `daily_cap` chỉ áp cho ghi.
-- **Upload**: tin cần upload (strategy B) cộng thêm delay theo dung lượng và `upload_concurrency = 1` mặc định.
+- **Cost**: tin gửi tính theo số tin trong batch. Lời gọi đọc dùng bucket riêng, nhẹ hơn: `cost` là số request (một `iter_messages` = 1, cộng 1 cho mỗi đầu `--since`/`--until` vì gateway tra ngày → id; mỗi lần hoàn thiện album cũng là một `iter_messages`; `get_messages` của `retry` là 1 cho mỗi lô tối đa 100 id; `prepare` của chiến lược B là 1 cho mỗi unit), chờ `read_delay × (delay / min_delay) × jitter` giữa hai lần đọc (lần đọc đầu của một lần chạy đi ngay), nên đọc chậm theo cùng tốc độ với ghi khi bị flood. Việc lật trang bên trong một `iter_messages` do Telethon giãn cách bằng `wait_time` (`READ_WAIT` = 1 s). `daily_cap` chỉ áp cho ghi.
+- **Upload (chiến lược B, phase 6)**: mỗi unit tải lên lại là một lần `pace` như mọi lần ghi (cùng `min_delay`, jitter, nghỉ dài, `daily_cap` tính theo tin), và `prepare` (đọc lại tin + tải xuống) là một request đọc qua bucket đọc. **Chưa có delay cộng thêm theo dung lượng**: một upload lớn vốn đã chậm hơn khoảng giãn cách, và chưa có số liệu để chọn một hệ số; sẽ xét khi có `flood_log` (spike 6). Chỉ nửa đọc chạy trước (`prefetch`): việc gửi luôn tuần tự, một lời gọi một lúc, nên không tăng số lời gọi ghi đồng thời. FloodWait khi tải (`prepare`) xử lý như đọc (chờ rồi lặp lại; file đã tải xong được giữ), khi gửi (`send_prepared`, `send_text`) như ghi.
 - Trạng thái (`delay`, `day`, `sent_today`) lưu ở `limiter_state` theo `mirrors.account`: cùng transaction với mỗi batch (`commit_batch(limiter=...)`) và ngay sau mỗi flood. Không lưu: cửa sổ 10 phút và mức giảm batch (tạm thời).
 - Thời gian và `sleep` được tiêm vào (`clock`, `sleep`): test dùng đồng hồ giả, không ngủ thật.
 
@@ -39,7 +39,8 @@ Mọi lời gọi đọc/ghi của một lần `run` đi qua `await limiter.acqu
 | `long_pause_range` | 30–90 s | |
 | `daily_cap` | 5000 | tin/ngày/account |
 | `max_auto_wait` | 900 s | FloodWait dài hơn → lần chạy kết thúc `waiting_flood`, không ngủ tiếp (trừ khi `--wait`) |
-| `upload_concurrency` | 1 | File upload đồng thời |
+| `prefetch` | 1 | Số unit tải xuống trước trong lúc một unit đang tải lên (0 = không; tối đa 3). Tối đa `prefetch + 1` unit nằm trên đĩa. Thay cho `upload_concurrency` (chưa phát hành, bỏ hẳn: gửi vẫn một lúc một unit) |
+| `tmp_budget_mb` | 2048 | Dung lượng đĩa tối đa cho các file đã tải xuống chờ gửi; unit lớn hơn ngân sách vẫn đi khi đĩa trống |
 
 ## Xử lý FloodWait
 

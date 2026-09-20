@@ -61,6 +61,15 @@ class RunOptions:
     # False reads the whole source instead of letting Telegram narrow it (docs/03-filters.md):
     # the escape hatch for checking that pushdown loses nothing on a real account.
     pushdown: bool = True
+    # Strategy B (docs/01-kien-truc.md): what to do with captions and with what cannot be copied.
+    caption: str = "keep"  # a ``CaptionMode`` value
+    caption_text: str = ""  # what ``--caption append`` adds
+    reset_polls: bool = False
+    ignore_unsupported: bool = False
+    placeholder: bool = False
+    # The user said they may copy a source that restricts saving content (decision D3); ``run`` and
+    # ``retry`` carry it on, so they do not ask again.
+    protected_ack: bool = False
     # The two below belong to one run, never to the pair (see ``for_pair``).
     # Highest id of the source when the run began (0 = unknown): the total ``status`` measures
     # progress and ETA against. Messages posted meanwhile are not in it.
@@ -70,7 +79,17 @@ class RunOptions:
 
     def for_pair(self, dst_base_id: int) -> "RunOptions":
         """What the mirror remembers: the run-only keys dropped, ``dst_base_id`` as given."""
-        return RunOptions(self.batch_size, dst_base_id, self.pushdown)
+        return RunOptions(
+            batch_size=self.batch_size,
+            dst_base_id=dst_base_id,
+            pushdown=self.pushdown,
+            caption=self.caption,
+            caption_text=self.caption_text,
+            reset_polls=self.reset_polls,
+            ignore_unsupported=self.ignore_unsupported,
+            placeholder=self.placeholder,
+            protected_ack=self.protected_ack,
+        )
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -150,6 +169,10 @@ class Run:
     @property
     def skipped_filter(self) -> int:
         return self.stats.get("skipped_filter", 0)
+
+    @property
+    def skipped_unsupported(self) -> int:
+        return self.stats.get("skipped_unsupported", 0)
 
     @property
     def gone(self) -> int:
