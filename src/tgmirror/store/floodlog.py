@@ -25,6 +25,14 @@ async def log_flood(
     )
 
 
+async def count_since(db: aiosqlite.Connection, since: datetime) -> int:
+    """Rate-limit events of every run since ``since`` (one account, so the account's)."""
+    cur = await db.execute("SELECT COUNT(*) FROM flood_log WHERE ts >= ?", (since.isoformat(),))
+    row = await cur.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 async def events_of_run(db: aiosqlite.Connection, run_id: int) -> list[FloodEvent]:
     cur = await db.execute(
         "SELECT ts, kind, seconds, method FROM flood_log WHERE run_id = ? ORDER BY id", (run_id,)

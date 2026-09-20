@@ -71,6 +71,8 @@ def _record(item: Run) -> dict[str, object]:
         "copied": item.done,
         "failed": item.failed,
         "left_out_by_filter": item.skipped_filter,
+        "gone_from_source": item.gone,
+        "retry_of": item.options.retry_of,
         "source_from": item.cursor_from,
         "source_to": item.cursor_src_id,
         "filter": json.loads(item.filters_json),
@@ -134,9 +136,14 @@ async def _detail(store: Store, item: Run, as_json: bool) -> None:
             skipped=item.skipped_filter,
         )
     )
-    say(t("history.line_cursor", start=item.cursor_from, end=item.cursor_src_id))
-    filter_text = t("history.no_filter") if item.filters_json == "{}" else item.filters_json
-    say(t("history.line_filter", filter=filter_text))
+    if item.gone:
+        say(t("history.line_gone", count=item.gone))
+    if item.options.retry_of is not None:  # a retry reads by id: no source range, no filter
+        say(t("history.line_retry", of=item.options.retry_of))
+    else:
+        say(t("history.line_cursor", start=item.cursor_from, end=item.cursor_src_id))
+        filter_text = t("history.no_filter") if item.filters_json == "{}" else item.filters_json
+        say(t("history.line_filter", filter=filter_text))
     if failures:
         say(t("history.failed_title", count=min(len(failures), DETAIL_FAILURES)))
         for f in failures[:DETAIL_FAILURES]:

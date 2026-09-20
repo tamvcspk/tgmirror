@@ -22,7 +22,7 @@
 ```
 
 - **gateway**: `TelegramGateway` protocol + `TelethonGateway`. Mọi lời gọi mạng đi qua đây, và đi qua `Limiter`.
-- **engine**: không import Telethon. Phần đọc của gateway có protocol hẹp `MessageReader` (`iter_messages`) để planner/preview/reconcile nhận cả gateway trần lẫn bản đã qua `FloodGuard`. Làm việc với dataclass riêng (`SrcMessage`, `Unit`, `ChannelInfo`, `ServerFilter`, `MediaKind` định nghĩa trong `core/gateway.py` vì protocol dùng chúng; `Batch` nằm ở engine). `Unit` tự kiểm tra bất biến album (một `grouped_id`, id tăng dần).
+- **engine**: không import Telethon. Phần đọc của gateway có protocol hẹp `MessageReader` (`iter_messages`, `get_messages`) để planner/preview/reconcile/retry nhận cả gateway trần lẫn bản đã qua `FloodGuard`. Làm việc với dataclass riêng (`SrcMessage`, `Unit`, `ChannelInfo`, `ServerFilter`, `MediaKind` định nghĩa trong `core/gateway.py` vì protocol dùng chúng; `Batch` nằm ở engine). `Unit` tự kiểm tra bất biến album (một `grouped_id`, id tăng dần).
 - **store**: chỉ engine và CLI đọc/ghi, qua `Store` (`store/db.py`) với các phương thức theo ý định (`start_run`, `begin_batch`, `commit_batch`, `finish`, `set_control`, ...); SQL không rò ra ngoài `store/` (có test).
 - **filters**: thuần logic, không I/O: `model` (pydantic, chuẩn hóa), `parser` (YAML + cờ), `matcher` (đánh giá một Unit), `pushdown` (`plan_read`: chuyển phần an toàn của filter thành `ReadPlan`/`ServerFilter`). Engine dùng chúng; `engine/preview.py` lấy mẫu để xem trước.
 
@@ -36,14 +36,17 @@ class TelegramGateway(Protocol):
     async def list_topics(self, src: int) -> list[TopicInfo]: ...      # forum only
     async def create_topic(self, dst: int, title: str, ...) -> int: ...# forum only
     def iter_messages(self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER) -> AsyncIterator[SrcMessage]: ...   # id > min_id, tăng dần
-    async def last_message_id(self, chat: int) -> int: ...             # 0 nếu trống; lần chạy đầu của cặp ghi làm dst_base_id
+    async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]: ...   # đọc theo id (1..100/lần); tin đã xóa thì vắng mặt; `retry` dùng
+    async def last_message_id(self, chat: int) -> int: ...             # 0 nếu trống; lần chạy đầu của cặp ghi làm dst_base_id (đích) và mỗi lần chạy thường ghi làm `src_last_id` (nguồn)
     async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]: ...   # strategy A
     async def reupload(self, src: int, dst: int, unit: Unit, tmp: Path) -> list[int]: ...        # strategy B
 ```
 
 Đăng nhập cũng là lời gọi mạng nên có protocol riêng, `TelegramAuth` (`core/auth.py`): `account()`, `request_code`, `sign_in_code`, `sign_in_password`, `log_out`. Luồng `login(auth, prompts)` (thử lại tối đa 3 lần cho số điện thoại, mã, mật khẩu; mã hết hạn thì gửi lại một lần) chỉ biết protocol và `LoginPrompts`, nên test được bằng `FakeAuth`. `AccountInfo` cố ý không có số điện thoại.
 
-`ServerFilter(media, search, since, until, max_id)` là phần Telegram lọc hộ; gateway chỉ được **thu hẹp an toàn** (trả về tập chứa mọi tin khớp), engine luôn chạy lại client matcher (xem `03-filters.md`). `since`/`until` là ngày nên chỉ gateway đổi được thành vị trí (kèm lề `ALBUM_MARGIN` id để album trên biên còn nguyên); `media`/`search` làm rớt các tin anh em trong album nên planner phải hoàn thiện album (một lần đọc không lọc quanh album). `FakeGateway` làm đúng hai điều đó nên test đối chiếu pushdown/quét đầy đủ có nghĩa. `FakeGateway` (`tests/fakes.py`) hiện thực protocol này trong bộ nhớ, có `fail_next(method, error)` để giả lập FloodWait/PeerFlood và `poison(channel, msg_id)` để giả lập một tin làm `copy_messages` ném `PerMessage`.
+`ServerFilter(media, search, since, until, max_id)` là phần Telegram lọc hộ; gateway chỉ được **thu hẹp an toàn** (trả về tập chứa mọi tin khớp), engine luôn chạy lại client matcher (xem `03-filters.md`). `since`/`until` là ngày nên chỉ gateway đổi được thành vị trí (kèm lề `ALBUM_MARGIN` id để album trên biên còn nguyên); `media`/`search` làm rớt các tin anh em trong album nên planner phải hoàn thiện album (một lần đọc không lọc quanh album). `FakeGateway` làm đúng hai điều đó nên test đối chiếu pushdown/quét đầy đủ có nghĩa. `FakeGateway` (`tests/fakes.py`) hiện thực protocol này trong bộ nhớ, có `fail_next(method, error)` để giả lập FloodWait/PeerFlood `poison(channel, msg_id)` (rồi `heal`) để giả lập một tin làm `copy_messages` ném `PerMessage`, và `delete_message` để xóa tin ở nguồn.
+
+Hợp đồng của `get_messages`: một request, tối đa `MAX_IDS_PER_CALL` = 100 id (Telegram cho tối đa 100 id mỗi lời gọi forward hay đọc theo id; phía gọi tự chia). Trả về các tin **còn tồn tại**, tăng dần theo id; id đã bị xóa chỉ đơn giản là vắng mặt, không có chỗ giữ. Tin service cũng có thể có mặt (planner của lần chạy thường loại chúng, `retry` không cần vì tin service không bao giờ vào `msg_map`). `FloodGuard.reader` giãn cách và thử lại nó như `iter_messages` (một request đọc mỗi lời gọi).
 
 Hợp đồng của `copy_messages`: kết quả thẳng hàng với `ids`. Lời gọi trả về bình thường là kết luận cuối: `None` nghĩa là Telegram không tạo tin nào cho id đó (đã xóa ở nguồn, không forward được) → `failed('not_copied')`. `PerMessage` nghĩa là Telegram từ chối chính các id (không tạo gì), engine thử lại từng unit. Nếu lời gọi bị ngắt (`Transient`) thì kết quả không rõ, chỉ reconcile mới biết (`04-state-checkpoint.md`).
 
@@ -143,6 +146,8 @@ for batch in batcher(planner.units(run), run.batch_size):
 
 `planner.units(...)` (phase 3): `plan = plan_read(filters, run.cursor_from, pushdown=run.options.pushdown)` rồi `gw.iter_messages(src, min_id=plan.min_id, filters=plan.server)` (ascending), gom album (hoàn thiện album nếu `plan.complete_albums`), áp `Matcher`, bỏ service message, đưa ra `Unit` hoặc `Skip`.
 
+`planner.failed_units(reader, src, ids)` (phase 5, cho `retry`): đọc các id đã lỗi theo lô 100 bằng `get_messages` (không quét nguồn), gom các tin liên tiếp cùng `grouped_id` thành một `Unit` (chỉ gồm các thành viên đã lỗi; album vắt qua ranh giới hai lô vẫn là một unit), và đưa ra `Gone(ids)` cho các id không còn ở nguồn. Không áp filter: các tin này đã qua filter lúc được đọc lần đầu.
+
 ## Xử lý lỗi
 
 | Lỗi | Hành động |
@@ -164,10 +169,10 @@ for batch in batcher(planner.units(run), run.batch_size):
 ```
 src/tgmirror/
   core/     gateway.py  auth.py  telethon_gateway.py  limiter.py  errors.py  config.py  paths.py  uploader.py
-  engine/   endpoints.py  runs.py  planner.py  batcher.py  copy.py  flood.py  reconcile.py  preview.py  reupload.py  runner.py
+  engine/   endpoints.py  runs.py  planner.py  batcher.py  copy.py  flood.py  reconcile.py  preview.py  reupload.py  runner.py  status.py
   filters/  model.py  parser.py  pushdown.py  matcher.py
   store/    schema.sql  db.py  runs.py  msgmap.py  floodlog.py  limiterstate.py
-  cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py clone.py run.py control.py history.py ...)
+  cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py clone.py run.py retry.py status.py control.py history.py ...)
   ui/       messages.py  prompts.py  tables.py  progress.py
 tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integration/
 ```
@@ -175,5 +180,5 @@ tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integrati
 ## Kiểm thử
 
 - `FakeGateway` mô phỏng kênh (danh sách tin, album, lỗi FloodWait/PeerFlood theo kịch bản) và đồng hồ giả cho limiter.
-- Test bắt buộc: resume sau khi kill giữa chừng không trùng/sót; album không bị tách; FloodWait làm tăng delay; PeerFlood dừng lần chạy; delta chỉ lấy tin mới; pause giữ tại chỗ rồi chạy tiếp. Phase 2 có `tests/integration/test_runner.py`, `tests/unit/test_store.py`, ...; phase 4 thêm `tests/unit/test_limiter.py` (đồng hồ giả) và `tests/integration/test_runner_flood.py` (kịch bản flood trên `FakeGateway`); test kiến trúc (`tests/unit/test_architecture.py`) giữ Telethon và SQL trong đúng chỗ.
+- Test bắt buộc: resume sau khi kill giữa chừng không trùng/sót; album không bị tách; FloodWait làm tăng delay; PeerFlood dừng lần chạy; delta chỉ lấy tin mới; pause giữ tại chỗ rồi chạy tiếp. Phase 2 có `tests/integration/test_runner.py`, `tests/unit/test_store.py`, ...; phase 4 thêm `tests/unit/test_limiter.py` (đồng hồ giả) và `tests/integration/test_runner_flood.py` (kịch bản flood trên `FakeGateway`); phase 5 thêm `tests/integration/test_runner_retry.py` (retry: kill giữa chừng, bị từ chối, album, tin đã xóa), `tests/unit/test_status.py` (ước lượng tiến độ/ETA) và `tests/unit/test_cli_retry.py` (`retry`, `status`); test kiến trúc (`tests/unit/test_architecture.py`) giữ Telethon và SQL trong đúng chỗ.
 - Không test tự động chống lại Telegram thật. Có script thủ công `scripts/smoke.py` dùng kênh test riêng.

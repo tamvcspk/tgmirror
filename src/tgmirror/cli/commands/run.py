@@ -15,7 +15,7 @@ from tgmirror.core.gateway import ChannelInfo, TelegramGateway
 from tgmirror.engine.runner import RunControl, Runner
 from tgmirror.engine.runs import RunRequest, begin_run, check_runnable, resolve_run
 from tgmirror.store.db import Store, utc_now
-from tgmirror.store.runs import Control, FilterChange, RunStatus, StartedRun
+from tgmirror.store.runs import Control, FilterChange, Run, RunStatus, StartedRun
 from tgmirror.ui.messages import t
 from tgmirror.ui.progress import LineReporter
 from tgmirror.ui.tables import channel_label
@@ -101,8 +101,7 @@ def run_clone(
                 force=force_takeover,
                 fresh=fresh,
             )
-            src = ChannelInfo(target.src_id, target.src_title, target.src_kind)
-            dst = ChannelInfo(target.dst_id, target.dst_title, target.src_kind)
+            src, dst = pair_of(target)
             if fresh:
                 copied = await store.count_copied(src.id, dst.id)
                 await confirm_fresh(rt, copied, yes, channel_label(src), channel_label(dst))
@@ -111,6 +110,15 @@ def run_clone(
                 await execute(rt, store, conn.gateway, started, wait=wait)
 
     run(rt, command())
+
+
+def pair_of(earlier: Run) -> tuple[ChannelInfo, ChannelInfo]:
+    """Source and destination of an earlier run, as ``begin_run`` takes them (a destination has
+    the kind of its source: that is how the pair was chosen)."""
+    return (
+        ChannelInfo(earlier.src_id, earlier.src_title, earlier.src_kind),
+        ChannelInfo(earlier.dst_id, earlier.dst_title, earlier.src_kind),
+    )
 
 
 async def confirm_fresh(rt: Runtime, copied: int, yes: bool, src: str, dst: str) -> None:
@@ -151,21 +159,35 @@ async def execute(
         control=control,
         wait=wait,
     )
-    typer.echo(
-        t(
-            "run.start",
-            id=current.id,
-            src=current.src_title,
-            dst=current.dst_title,
-            cursor=current.cursor_from,
+    retry_of = current.options.retry_of
+    if retry_of is not None:  # no source cursor or filter to talk about
+        count = await store.count_failed(retry_of)
+        typer.echo(
+            t(
+                "run.retry_start",
+                id=current.id,
+                of=retry_of,
+                count=count,
+                src=current.src_title,
+                dst=current.dst_title,
+            )
         )
-    )
-    if started.forgot is not None:
-        typer.echo(t("run.fresh_started", count=started.forgot))
-    elif started.filters is FilterChange.CHANGED:
-        typer.echo(t("run.filter_changed"))
-    if started.filters is FilterChange.SAME and current.filters_json != "{}":
-        typer.echo(t("run.filter_reused"))
+    else:
+        typer.echo(
+            t(
+                "run.start",
+                id=current.id,
+                src=current.src_title,
+                dst=current.dst_title,
+                cursor=current.cursor_from,
+            )
+        )
+        if started.forgot is not None:
+            typer.echo(t("run.fresh_started", count=started.forgot))
+        elif started.filters is FilterChange.CHANGED:
+            typer.echo(t("run.filter_changed"))
+        if started.filters is FilterChange.SAME and current.filters_json != "{}":
+            typer.echo(t("run.filter_reused"))
     with (
         stop_on_interrupt(control, lambda: typer.echo(t("run.stopping"), err=True)) as interrupt,
         rt.keys(control) as listening,
@@ -184,7 +206,15 @@ async def execute(
     )
     if final.skipped_filter:
         typer.echo(t("run.skipped", count=final.skipped_filter))
+    if final.gone:
+        typer.echo(t("retry.gone", count=final.gone))
+    if final.failed:
+        key = "retry.still_failing" if retry_of is not None else "run.retry_hint"
+        typer.echo(t(key, count=final.failed, id=final.id))
     if final.status is RunStatus.STOPPED:
-        typer.echo(t("run.continue_hint", id=final.id))
+        if retry_of is not None:  # `run` would start a delta: the messages left are retry's job
+            typer.echo(t("run.retry_continue_hint", of=retry_of))
+        else:
+            typer.echo(t("run.continue_hint", id=final.id))
     if interrupt.hit:  # Ctrl+C: saved cleanly, but the clone is not finished
         raise typer.Exit(EXIT_INTERRUPTED)

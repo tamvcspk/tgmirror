@@ -6,7 +6,14 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.fakes import FakeGateway
-from tgmirror.core.gateway import ALBUM_MARGIN, MediaKind, ServerFilter, SrcMessage, Unit
+from tgmirror.core.gateway import (
+    ALBUM_MARGIN,
+    MAX_IDS_PER_CALL,
+    MediaKind,
+    ServerFilter,
+    SrcMessage,
+    Unit,
+)
 from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
 from tgmirror.engine.planner import Skip
@@ -271,3 +278,66 @@ async def test_only_skips_make_a_progress_only_batch() -> None:
 
 async def test_no_skips_and_no_units_make_no_batches() -> None:
     assert await batched([], 10) == []
+
+
+# ---- retry: read the failed messages by id ---------------------------------------------------
+
+
+async def failed_items(
+    gw: FakeGateway, src: int, ids: list[int]
+) -> list[list[int] | tuple[str, ...]]:
+    """Units as id lists; ``Gone`` as ``("gone", ids...)`` so one list shows the order."""
+    out: list[list[int] | tuple[str, ...]] = []
+    async for item in planner.failed_units(gw, src, ids):
+        out.append(("gone", *map(str, item.ids)) if isinstance(item, planner.Gone) else item.ids)
+    return out
+
+
+async def test_failed_units_are_read_by_id_and_albums_stay_whole(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    gateway.add_message(src, "a")  # 1
+    gateway.add_album(src, [PHOTO, PHOTO, VIDEO])  # 2 3 4
+    gateway.add_message(src, "b")  # 5
+    gateway.add_album(src, [PHOTO, PHOTO])  # 6 7
+
+    got = await failed_items(gateway, src, [1, 2, 3, 4, 6, 7])
+
+    assert got == [[1], [2, 3, 4], [6, 7]]
+    assert [c.method for c in gateway.calls] == ["get_messages"]  # no scan of the source
+
+
+async def test_only_the_failed_members_of_an_album_make_the_unit(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    gateway.add_album(src, [PHOTO, PHOTO, PHOTO])  # 1 2 3, the middle one was copied
+
+    assert await failed_items(gateway, src, [1, 3]) == [[1, 3]]
+
+
+async def test_two_albums_in_a_row_stay_two_units_when_read_by_id(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    gateway.add_album(src, [PHOTO, PHOTO])
+    gateway.add_album(src, [PHOTO, PHOTO])
+
+    assert await failed_items(gateway, src, [1, 2, 3, 4]) == [[1, 2], [3, 4]]
+
+
+async def test_an_album_across_two_reads_is_still_one_unit(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    for _ in range(MAX_IDS_PER_CALL - 1):
+        gateway.add_message(src, "x")
+    gateway.add_album(src, [PHOTO, PHOTO, PHOTO])  # ids 100 101 102: split by the 100-id read
+
+    got = await failed_items(gateway, src, list(range(1, 103)))
+
+    assert got[-1] == [100, 101, 102]
+    assert len(got) == MAX_IDS_PER_CALL - 1 + 1
+    assert len(gateway.calls_to("get_messages")) == 2
+
+
+async def test_ids_the_source_no_longer_has_are_reported_as_gone(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    for text in "abcd":
+        gateway.add_message(src, text)
+    gateway.delete_message(src, 2)
+
+    assert await failed_items(gateway, src, [1, 2, 4]) == [("gone", "2"), [1], [4]]

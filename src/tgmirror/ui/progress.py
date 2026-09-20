@@ -42,7 +42,10 @@ class LineReporter:
         if self._last is not None and now - self._last < self._interval:
             return
         self._last = now
-        key = "run.progress_filtered" if run.skipped_filter else "run.progress"
+        if run.options.retry_of is not None:  # the source cursor does not move in a retry
+            key = "run.progress_retry"
+        else:
+            key = "run.progress_filtered" if run.skipped_filter else "run.progress"
         self._emit(
             t(
                 key,

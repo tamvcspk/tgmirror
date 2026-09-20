@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 
 from tgmirror import __version__
-from tgmirror.cli.commands import auth, channels, clone, control, history, run
+from tgmirror.cli.commands import auth, channels, clone, control, history, retry, run, status
 from tgmirror.cli.runtime import Runtime, default_runtime
 
 app = typer.Typer(
@@ -68,3 +68,5 @@ app.command("run")(run.run_clone)
 app.command("pause")(control.pause)
 app.command("stop")(control.stop)
 app.command("history")(history.history)
+app.command("retry")(retry.retry)
+app.command("status")(status.status)

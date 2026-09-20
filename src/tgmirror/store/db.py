@@ -18,6 +18,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from importlib import resources
 from pathlib import Path
@@ -38,7 +39,6 @@ from tgmirror.store.runs import (
     FloodEvent,
     Mirror,
     Run,
-    RunOptions,
     RunSpec,
     RunStatus,
     StartedRun,
@@ -195,7 +195,7 @@ class Store:
                         spec.dst.title,
                         spec.mode,
                         filters,
-                        spec.options.to_json(),
+                        spec.options.for_pair(spec.options.dst_base_id).to_json(),
                         ts,
                         ts,
                     ),
@@ -218,13 +218,7 @@ class Store:
                     await db.execute(
                         "UPDATE mirrors SET options_json = ?, cursor_src_id = 0, updated_at = ? "
                         "WHERE id = ?",
-                        (
-                            RunOptions(
-                                spec.options.batch_size, base, spec.options.pushdown
-                            ).to_json(),
-                            ts,
-                            mirror_id,
-                        ),
+                        (spec.options.for_pair(base).to_json(), ts, mirror_id),
                     )
                 if spec.filters_json is not None and spec.filters_json != mirror.filters_json:
                     filters, cursor, change = spec.filters_json, 0, FilterChange.CHANGED
@@ -233,7 +227,7 @@ class Store:
                         "WHERE id = ?",
                         (filters, ts, mirror_id),
                     )
-            options = RunOptions(spec.options.batch_size, base, spec.options.pushdown)
+            options = replace(spec.options, dst_base_id=base)
             cur = await db.execute(
                 "INSERT INTO runs(mirror_id, mode, filters_json, options_json, status, control, "
                 "cursor_from, cursor_to, started_at, updated_at) "
@@ -312,9 +306,18 @@ class Store:
         async with self._lock:
             return await msgmap.failed_of_run(self._conn, run_id, limit)
 
+    async def count_failed(self, run_id: int) -> int:
+        """Messages that are ``failed`` and were last written by this run: what ``retry`` sends."""
+        async with self._lock:
+            return await msgmap.count_failed_of_run(self._conn, run_id)
+
     async def flood_events(self, run_id: int) -> list[FloodEvent]:
         async with self._lock:
             return await floodlog.events_of_run(self._conn, run_id)
+
+    async def flood_count_since(self, since: datetime) -> int:
+        async with self._lock:
+            return await floodlog.count_since(self._conn, since)
 
     # ---- ownership, control, status -------------------------------------------------------
 
@@ -389,7 +392,7 @@ class Store:
         ts = self._ts()
         async with self._tx() as db:
             mirror_id = await self._mirror_id(db, run_id)
-            done, failed = await msgmap.finish_batch(db, mirror_id, batch_id, results, ts)
+            done, failed = await msgmap.finish_batch(db, mirror_id, run_id, batch_id, results, ts)
             if await msgmap.pending_rows(db, mirror_id):
                 # The cursor may only pass a batch with nothing pending (rule 3).
                 raise StoreError("another batch is still pending; refusing to move the cursor")
@@ -431,6 +434,16 @@ class Store:
             mirror_id = await self._mirror_id(db, run_id)
             await self._bump(db, run_id, mirror_id, extra_stats or {}, cursor, self._ts())
         return await self._require(run_id)
+
+    async def mark_gone(self, run_id: int, ids: Sequence[int]) -> None:
+        """A retry found these ``failed`` messages deleted at the source: they become ``skipped``
+        (with a reason), so they stop showing as failures nobody can fix; counted in ``gone``."""
+        async with self._tx() as db:
+            mirror_id = await self._mirror_id(db, run_id)
+            ts = self._ts()
+            count = await msgmap.mark_gone(db, mirror_id, run_id, ids, ts)
+            if count:
+                await self._bump(db, run_id, mirror_id, {"gone": count}, 0, ts)
 
     async def done_ids(self, run_id: int, ids: Sequence[int]) -> set[int]:
         async with self._lock:

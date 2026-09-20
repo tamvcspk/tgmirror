@@ -10,7 +10,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 - [x] Phase 3 — Filters (2026-09-20; pushdown và cơ chế giữ album nguyên vẹn được kiểm bằng `FakeGateway`, chưa thử trên Telegram thật, xem "Phase 3 — ghi chú")
 - [x] Phase 4 — Limiter & flood (2026-09-20; kịch bản flood được kiểm bằng `FakeGateway` và đồng hồ giả, chưa gặp FloodWait thật, xem "Phase 4 — ghi chú")
 - [x] Tái thiết luồng job (2026-09-20): `clone` chạy ngay và Ctrl+C dừng, nhật ký lần chạy (`history`) thay cho job, chạy lại cùng cặp là delta, pause tại chỗ + phím `p`/`r`/`q` (xem "Tái thiết luồng job")
-- [ ] Phase 5 — `retry`, `status` (delta đã có từ việc tái thiết)
+- [x] Phase 5 — `retry`, `status` (2026-09-20; kịch bản retry được kiểm bằng `FakeGateway` và SQLite thật, kể cả kill giữa chừng; chưa thử trên Telegram thật, xem "Phase 5 — ghi chú"; delta đã có từ việc tái thiết)
 - [ ] Phase 6 — Reupload
 - [ ] Phase 7 — TUI, doctor, đóng gói
 - [ ] Phase 8 — Group, supergroup, forum topics
@@ -125,6 +125,23 @@ Các lựa chọn khi làm (không phải D1–D9; chi tiết ở `05-chong-floo
 
 Chưa kiểm chứng (người dùng chạy tay): mọi hành vi thật của Telegram. Chạy một job đủ lớn để chạm FloodWait thật, rồi xem `flood_log` (spike 6) trước khi tin vào các số mặc định; kiểm tra thêm rằng khi `FloodWait` ném ở giữa `iter_messages` thật thì Telethon không để lại trạng thái lạ và lần đọc lại từ `min_id` cho đúng tin kế tiếp.
 
+### Phase 5 — ghi chú
+
+Đã có: `tgmirror retry [n]` và `tgmirror status [--json]`; `get_messages(src, ids)` ở `MessageReader`/`TelegramGateway` (`TelethonGateway`, `FloodGuard.reader`, `FakeGateway`); `planner.failed_units`/`Gone`; `Runner._failed_units` (nguồn `Unit` của lần chạy có `options.retry_of`); `engine/status.py` (`estimate`, `build_report`); `RunOptions.src_last_id`/`retry_of`/`for_pair`; `Store.count_failed`, `mark_gone`, `flood_count_since`; gợi ý `retry` khi một lần chạy kết thúc mà có tin lỗi. Không đổi schema (hai khóa mới nằm trong `options_json`, đã có sẵn chỗ cho khóa lạ). Tiêu chí "`retry` thử lại đúng các tin `failed`; `status` cho thấy tiến độ, tốc độ, ETA": `tests/integration/test_runner_retry.py` (đúng các tin lỗi, không quét nguồn, không đụng con trỏ/filter, album nguyên vẹn kể cả vắt qua ranh giới lô 100 id, tin đã xóa, kill trước/sau copy, FloodWait quá dài, stop, FloodWait lúc đọc theo id), `tests/unit/test_status.py`, `tests/unit/test_cli_retry.py`. Đã thử đột biến (bỏ giữ album qua lô, đổi công thức ETA, áp filter cho retry, không đặt tin đã xóa sang `skipped`, để khóa của lần chạy lọt vào mirror, gợi ý chạy tiếp bằng `run`, bỏ giãn cách đọc theo id, bỏ `run_id` ở `finish_batch`, bỏ khôi phục hàng `failed` khi hủy `pending`): test đều đỏ.
+
+Các lựa chọn khi làm (không phải D1–D9; chi tiết ở `02-cli-ux.md` và `04-state-checkpoint.md`):
+
+- **`retry` là một lần chạy riêng** (dòng trong `history`, pause/stop được, cùng `FloodGuard`/limiter), không phải một chế độ của `run`; đánh dấu bằng `options.retry_of` chứ không thêm cột (không cần migration: dự án chưa phát hành nhưng DB thật đã có dữ liệu clone, xóa nó chỉ để thêm một cờ là quá đắt).
+- **`retry n` = các tin `failed` có `run_id = n`** (chính là danh sách `history n`); tin lại lỗi chuyển sang lần retry mới, nên `tgmirror retry` (không số) thử tiếp. Không có `--all` (mọi tin lỗi của cặp): chưa ai cần, thêm sau nếu thiếu.
+- **Tin đã bị xóa ở nguồn** → `skipped` + `gone_from_source` thay vì để `failed` mãi (không ai sửa được, và `status` sẽ luôn báo lỗi).
+- **`status` chỉ đọc DB**: clone đang chạy giữ session nên không kết nối được từ terminal thứ hai. Vì vậy tổng cho tiến độ/ETA là id tin mới nhất của nguồn, ghi một lần khi lần chạy bắt đầu (`begin_run` thêm một `last_message_id(src)`, thuộc ngoại lệ "chuẩn bị" của luật 1). Tiến độ theo id là ước lượng thô (id có khoảng trống, filter nhảy nhanh); của retry thì chính xác. Tốc độ là trung bình từ lúc bắt đầu, ETA chỉ khi đang `running`.
+- **`status` không có số `n`**: chỉ xem lần đang chạy (hoặc gần nhất); chi tiết một lần cũ đã có ở `history n`.
+- **`get_messages` tối đa 100 id/lời gọi, phía gọi tự chia** (giống `copy_messages`); `FloodGuard` tính một request đọc cho mỗi lô.
+
+Lỗi phát hiện khi viết test (đã sửa): `insert_pending` ghi đè hàng `failed` thành `pending` và mọi đường hủy `pending` (reconcile thấy chưa gửi, FloodWait quá dài, stop khi chờ) **xóa** hàng đó. Với lần chạy thường không sao (con trỏ đưa tin trở lại), nhưng tin lỗi nằm dưới con trỏ nên một retry bị ngắt sẽ làm mất dấu tin đó hoàn toàn: không được sao chép, cũng không còn ghi nhận là lỗi. Nay hàng `pending` từng lỗi giữ `reason`/`run_id` cũ và quay về `failed` khi bị hủy (`04-state-checkpoint.md`, "Hủy `pending`"); `run_id` chuyển sang lần chạy mới khi batch kết thúc.
+
+Chưa kiểm chứng (người dùng chạy tay): `get_messages(ids=[...])` của Telethon với kênh thật (đọc mã 1.45: một slot mỗi id, `None`/`MessageEmpty` cho tin đã xóa, tự chia 100 id nhưng ta chia trước); forward một danh sách id thưa (album mà chỉ một số thành viên lỗi) có giữ nhóm album ở đích không; ETA trên kênh lớn có đủ tốt để tin.
+
 Lưu ý cho phase 2 (đã áp dụng): schema đã có `jobs.src_kind`, `msg_map.src_topic_id`, `topic_map` (xem `04-state-checkpoint.md`) để phase 8 không cần migration. Đường code phase 1–7 vẫn viết với `kind` trong đầu, dù chỉ kiểm thử với broadcast.
 
 ## Việc cần xác minh sớm (spike, phase 0–1)
@@ -161,6 +178,7 @@ Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đ�
 
 Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và lý do ở đây.
 
+- 2026-09-20: Phase 5 xong (`retry`, `status`). Không đổi D1–D9, không đổi schema. Các lựa chọn nhỏ và một lỗi mất-tin-lỗi đã sửa ghi ở "Phase 5 — ghi chú". Người dùng yêu cầu bắt đầu phase 5 theo lộ trình; các chi tiết thiết kế (retry là một lần chạy, `status` chỉ đọc DB, tin đã xóa thành `skipped`) chưa được duyệt riêng: đổi được nếu người dùng muốn khác.
 - 2026-09-20: Thêm `--fresh` (xem "`--fresh` — làm lại từ đầu"): cờ trên `clone`/`run`, chỉ quên tiến độ, có câu hỏi hàng rào khi đích có thể bị trùng; không phải D1–D9, người dùng đã duyệt kế hoạch trước khi viết mã.
 - 2026-09-20: Bỏ khái niệm job (xem "Tái thiết luồng job"). `clone` chạy ngay trong foreground; chỉ lưu nhật ký các lần chạy (`runs`) cộng một điểm kiểm tra ẩn theo cặp (`mirrors`); chạy lại cùng cặp là delta, filter được nhớ; `run`/`pause`/`stop` giữ nhưng nhắm vào lần chạy; pause giữ tại chỗ; phím `p`/`r`/`q`. D5 (một file SQLite) giữ nguyên, chỉ đổi lý do ("`tgmirror jobs` đơn giản" → "`tgmirror history` đơn giản"). Không viết migration từ `jobs` (dự án đang phát triển, người dùng chọn xóa DB cũ). Đảo ngược quyết định "mỗi cặp một job, cặp đã có job thì mã 2" (commit 9ed8509): cùng một cặp giờ là trường hợp delta. Người dùng đã duyệt kế hoạch trước khi viết mã.
 

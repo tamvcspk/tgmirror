@@ -61,6 +61,16 @@ class RunOptions:
     # False reads the whole source instead of letting Telegram narrow it (docs/03-filters.md):
     # the escape hatch for checking that pushdown loses nothing on a real account.
     pushdown: bool = True
+    # The two below belong to one run, never to the pair (see ``for_pair``).
+    # Highest id of the source when the run began (0 = unknown): the total ``status`` measures
+    # progress and ETA against. Messages posted meanwhile are not in it.
+    src_last_id: int = 0
+    # Set on a ``tgmirror retry``: the run whose ``failed`` messages this run sends again.
+    retry_of: int | None = None
+
+    def for_pair(self, dst_base_id: int) -> "RunOptions":
+        """What the mirror remembers: the run-only keys dropped, ``dst_base_id`` as given."""
+        return RunOptions(self.batch_size, dst_base_id, self.pushdown)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -140,6 +150,11 @@ class Run:
     @property
     def skipped_filter(self) -> int:
         return self.stats.get("skipped_filter", 0)
+
+    @property
+    def gone(self) -> int:
+        """Failed messages a retry found deleted at the source (they cannot be copied any more)."""
+        return self.stats.get("gone", 0)
 
 
 @dataclass(frozen=True, slots=True)

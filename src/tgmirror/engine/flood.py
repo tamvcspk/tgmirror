@@ -5,8 +5,9 @@
 - ``pace`` waits for the limiter before a write; ``write`` runs the call, and on a FloodWait logs
   it, backs the limiter off, sleeps ``seconds`` plus a little jitter and then repeats **the same
   call** (the batch is already ``pending``, so nothing is rebuilt and the cursor does not move).
-- ``reader`` wraps the gateway's ``iter_messages`` the same way: it paces every read request and,
-  after a FloodWait, carries on from the last message it handed out.
+- ``reader`` wraps the gateway's reads the same way: ``iter_messages`` paces every read request
+  and, after a FloodWait, carries on from the last message it handed out; ``get_messages`` (a
+  retry reading failed messages by id) is one paced request, repeated after a FloodWait.
 - A wait longer than ``max_auto_wait`` (unless ``wait``) or too many floods in a row on one call
   are not slept through: the FloodWait propagates and the runner parks the run as
   ``waiting_flood``. PeerFlood is logged and propagates at once; it is never retried.
@@ -16,7 +17,7 @@ none of this can hold up Ctrl+C.
 """
 
 import random
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from typing import Protocol, TypeVar
 
@@ -161,4 +162,19 @@ class _GuardedReader:
                 await self._guard.flooded("iter_messages", exc, give_up=give_up)
             except PeerFlood:
                 await self._guard.peer_flood("iter_messages")
+                raise
+
+    async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
+        floods = 0
+        while True:
+            await self._guard.pace_read(1)
+            try:
+                return await self._inner.get_messages(src, ids)
+            except FloodWait as exc:
+                floods += 1
+                await self._guard.flooded(
+                    "get_messages", exc, give_up=floods >= MAX_FLOODS_PER_CALL
+                )
+            except PeerFlood:
+                await self._guard.peer_flood("get_messages")
                 raise

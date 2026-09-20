@@ -42,7 +42,7 @@ When adding or changing a code path that can raise flood errors:
 
 - Batch to reduce call count (forward up to `batch_size` ids per call).
 - One account ⇒ one run at a time. Never parallelise sends across runs or pairs on the same session.
-- Read calls are limited too: set `wait_time`, cache entities. Filters add reads (date-to-id lookups, one unfiltered window per album after content pushdown): they are counted as read requests (`requests` in `_GuardedReader`), so a new read path must add its request count there.
+- Read calls are limited too: set `wait_time`, cache entities. Filters add reads (date-to-id lookups, one unfiltered window per album after content pushdown): they are counted as read requests (`requests` in `_GuardedReader`), so a new read path must add its request count there. `get_messages` (reading the failed messages by id for `retry`) is one paced read request per call (`_GuardedReader.get_messages`).
 - Default order is chronological (D4). Any reordering option must be opt-in.
 - `tgmirror doctor` and README must say: risk is reduced, not eliminated; use an established account.
 

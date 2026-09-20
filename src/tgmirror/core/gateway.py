@@ -5,7 +5,7 @@ Telegram network call is implemented behind this protocol and goes through the l
 The types live here rather than in ``engine/`` because the protocol itself refers to them.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -102,6 +102,7 @@ class Unit:
 
 
 ALBUM_MARGIN = 10  # an album has at most 10 messages, with consecutive ids
+MAX_IDS_PER_CALL = 100  # Telegram takes at most 100 ids in one forward or one read by id
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +143,14 @@ class MessageReader(Protocol):
         """Messages with ``id > min_id``, ascending (decision D4), narrowed by ``filters``."""
         ...
 
+    async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
+        """The messages with these ids (one request: 1..``MAX_IDS_PER_CALL`` ids), ascending.
+
+        An id whose message no longer exists is simply absent from the result. ``retry`` uses it to
+        read what it must send again without scanning the source.
+        """
+        ...
+
 
 @runtime_checkable
 class TelegramGateway(Protocol):
@@ -159,6 +168,10 @@ class TelegramGateway(Protocol):
         self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER
     ) -> AsyncIterator[SrcMessage]:
         """Messages with ``id > min_id``, ascending (decision D4), narrowed by ``filters``."""
+        ...
+
+    async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
+        """As ``MessageReader.get_messages``."""
         ...
 
     async def last_message_id(self, chat: int) -> int:

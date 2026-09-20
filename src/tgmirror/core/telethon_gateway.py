@@ -7,7 +7,7 @@ adds reading and copying messages. The limiter is wired in at phase 4 (docs/06-l
 """
 
 import sqlite3
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -394,6 +394,14 @@ class TelethonGateway:
             async for message in self._client.iter_messages(peer, **options):
                 if (reduced := src_message(message)) is not None:
                     yield reduced
+
+    async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
+        peer = await self._peer(src)
+        with mapped_errors():
+            found = await self._client.get_messages(peer, ids=list(ids))
+        # Telethon answers ``None`` (or an empty message) for an id that no longer exists
+        reduced = (src_message(message) for message in found)
+        return sorted((m for m in reduced if m is not None), key=lambda m: m.id)
 
     async def _first_id_after(self, peer: object, moment: datetime) -> int | None:
         """Id of the oldest message dated after ``moment`` (``None`` when there is none)."""

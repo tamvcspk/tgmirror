@@ -125,6 +125,7 @@ class HistoryClient:
         self.unknown: set[int] = set()
         self.after: list[list[Any]] = []  # answers to "first message after <date>", in order
         self.lookups: list[dict[str, Any]] = []
+        self.id_lookups: list[dict[str, Any]] = []
 
     async def get_input_entity(self, ref: int) -> str:
         if ref in self.unknown:
@@ -144,7 +145,13 @@ class HistoryClient:
             raise self.raises
         return self.forward_result
 
-    async def get_messages(self, peer: Any, limit: int, **kwargs: Any) -> list[Any]:
+    async def get_messages(self, peer: Any, limit: int = 1, **kwargs: Any) -> list[Any]:
+        if "ids" in kwargs:  # like Telethon: one slot per id, ``None`` for a message that is gone
+            self.id_lookups.append({"peer": peer, "ids": list(kwargs["ids"])})
+            if self.raises:
+                raise self.raises
+            by_id = {m.id: m for m in self.history}
+            return [by_id.get(i) for i in kwargs["ids"]]
         if "offset_date" in kwargs:
             self.lookups.append({"limit": limit, **kwargs})
             return self.after.pop(0)
@@ -410,3 +417,23 @@ async def test_copy_to_a_chat_we_never_saw_is_no_permission() -> None:
 async def test_last_message_id() -> None:
     assert await gateway_on(HistoryClient([message(3), message(9)])).last_message_id(-1001) == 9
     assert await gateway_on(HistoryClient()).last_message_id(-1001) == 0
+
+
+async def test_get_messages_reads_by_id_and_drops_what_is_gone() -> None:
+    client = HistoryClient([message(3, message="c"), message(5, message="e"), message(9)])
+
+    got = await gateway_on(client).get_messages(-1001, [9, 4, 3])  # 4 does not exist
+
+    assert [(m.id, m.text) for m in got] == [(3, "c"), (9, "")]  # ascending, no placeholder
+    assert client.id_lookups == [{"peer": "peer:-1001", "ids": [9, 4, 3]}]
+
+
+async def test_get_messages_maps_errors_and_unknown_chats() -> None:
+    client = HistoryClient([message(5)])
+    client.raises = errors.FloodWaitError(None, capture=12)
+    with pytest.raises(FloodWait):
+        await gateway_on(client).get_messages(-1001, [5])
+
+    client.unknown.add(-1002)
+    with pytest.raises(NoPermission):
+        await gateway_on(client).get_messages(-1002, [5])

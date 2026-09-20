@@ -9,12 +9,13 @@ stream by content (``complete_albums``) it dropped the album members that do not
 own, so each album is completed with one unfiltered read of the ids around it before it is judged.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 
 from tgmirror.core.gateway import (
     ALBUM_MARGIN,
+    MAX_IDS_PER_CALL,
     NO_FILTER,
     MessageReader,
     ServerFilter,
@@ -69,6 +70,41 @@ async def units(
                 album.append(message)
     if album:
         yield await judged(album)
+
+
+@dataclass(frozen=True, slots=True)
+class Gone:
+    """Ids the source no longer has (deleted since they failed): nothing left to send."""
+
+    ids: tuple[int, ...]
+
+
+async def failed_units(
+    gateway: MessageReader, src: int, ids: Sequence[int]
+) -> AsyncIterator[Unit | Gone]:
+    """The messages ``ids`` (ascending), read by id instead of scanning, as units for ``retry``.
+
+    Members of one album that follow each other form one unit, so an album is still never split
+    (hard rule 4) — but only the members that failed: those that were copied stay as they are.
+    No filter applies: these messages passed it when they were first read.
+    """
+    album: list[SrcMessage] = []
+    for start in range(0, len(ids), MAX_IDS_PER_CALL):
+        chunk = ids[start : start + MAX_IDS_PER_CALL]
+        found = await gateway.get_messages(src, chunk)
+        present = {m.id for m in found}
+        if missing := tuple(i for i in chunk if i not in present):
+            yield Gone(missing)
+        for message in found:
+            if album and message.grouped_id != album[0].grouped_id:
+                yield Unit(tuple(album))
+                album = []
+            if message.grouped_id is None:
+                yield Unit((message,))
+            else:
+                album.append(message)  # the album may go on in the next chunk
+    if album:
+        yield Unit(tuple(album))
 
 
 async def _whole_album(

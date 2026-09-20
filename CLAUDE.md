@@ -10,16 +10,16 @@ Python >= 3.11, `uv`, Telethon + `cryptg`, Typer (CLI), questionary (prompts), R
 
 ```
 core/     gateway (Telegram wrapper), auth (login flow), telethon_gateway (only Telethon importer), limiter (AIMD, daily cap, `limiter_state`), errors, config, paths
-engine/   endpoints (source/destination rules), runs (`begin_run`, resolve, vet), planner, batcher, preview, strategies (copy / reupload), flood (`FloodGuard`: pacing + FloodWait handling for reads and writes), reconcile, runner
+engine/   endpoints (source/destination rules), runs (`begin_run`, resolve, vet), planner (`units`, and `failed_units` for `retry`), batcher, preview, strategies (copy / reupload), flood (`FloodGuard`: pacing + FloodWait handling for reads and writes), reconcile, runner, status (progress/ETA estimates for `status`)
 filters/  model, parser (YAML + flags), pushdown (`plan_read`), matcher (pure, client side)
 store/    schema.sql (+ numbered migrations after release), db (`Store`: the only place with SQL), runs (`Run`, `Mirror`), msgmap, floodlog, limiterstate
-cli/      app, wizard, filter_options (shared filter flags), runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), keys (hotkeys p/r/q), commands/ (auth, channels, clone, run, control = pause/stop, history)
+cli/      app, wizard, filter_options (shared filter flags), runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), keys (hotkeys p/r/q), commands/ (auth, channels, clone, run, retry, status, control = pause/stop, history)
 ui/       messages (all user strings), prompts, tables, progress (plain-line reporter; Rich TUI is phase 7)
 ```
 
 ## Hard rules
 
-1. **Every Telegram network call goes through `core.gateway.TelegramGateway` and the limiter.** No raw `client(...)` / `client.send_*` elsewhere. This is what makes FLOOD_WAIT handling and tests possible. In a `run` that means `FloodGuard` (`engine/flood.py`); the one-shot commands (login, channels, `history`) and the setup `clone` does before it starts copying (listing chats, creating the destination, `last_message_id`, the preview) are the documented exception. See skill `flood-safety`.
+1. **Every Telegram network call goes through `core.gateway.TelegramGateway` and the limiter.** No raw `client(...)` / `client.send_*` elsewhere. This is what makes FLOOD_WAIT handling and tests possible. In a `run` that means `FloodGuard` (`engine/flood.py`); the one-shot commands (login, channels, `history`) and the setup `clone`/`run` does before it starts copying (listing chats, creating the destination, `last_message_id` of the destination and the source, the preview) are the documented exception. See skill `flood-safety`.
 2. The Telethon client is created with `flood_sleep_threshold=0`, so every FloodWait surfaces to our limiter instead of being slept silently.
 3. Progress is durable: state changes go through `store` in one transaction per batch. See skill `checkpoint-state`.
 4. Never split an album (`grouped_id`) across batches.

@@ -13,15 +13,15 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 | `tgmirror clone` | Sao chép một nguồn vào một đích **ngay bây giờ**, trong terminal này (foreground): không chạy nền, không lên lịch; Ctrl+C dừng (tiến độ đã lưu). Wizard (bước 1–3 chọn nguồn/đích/filter, bước 5 xem trước, một câu xác nhận) hoặc cờ không tương tác. Chạy lại cho cùng cặp nguồn/đích thì chỉ lấy tin mới hơn con trỏ (delta), dùng lại filter của lần trước; đưa filter khác thì quét lại từ đầu (bỏ qua tin đã sao chép), `--no-filter` bỏ filter cũ (xem `03-filters.md`). Cờ: `--src`, `--dst` \| `--dst-new` (+ `--about`), cờ lọc (`--media`, `--hashtag`, `--contains`, `--regex`, `--exclude-regex`, `--exclude-media`, `--since`, `--until`, `--min-size`, `--max-size`, `--album`, `--filter-file`), `--no-filter`, `--fresh` (làm lại từ đầu, xem dưới), `--pushdown/--no-pushdown`, `--preview/--no-preview`, `--mode auto\|copy` (`reupload` từ phase 6, hiện báo mã 2), `--batch-size 1..100` (mặc định `[limits] batch_size`), `--wait`, `--force-takeover`, `--yes` (bỏ câu xác nhận). Chưa có bước 4 (tùy chọn) và `--caption` |
 | `tgmirror run [n]` | Chạy lại cặp nguồn/đích của lần chạy `n` (mặc định lần gần nhất; số lấy từ `tgmirror history`) với filter và tùy chọn của lần đó: chỉ lấy tin mới hơn, hoặc tiếp tục chỗ Ctrl+C/lỗi đã dừng. Nếu lần chạy đó đang **tạm dừng ở terminal khác** thì cho nó chạy tiếp ở đó thay vì mở lần thứ hai. `--force-takeover`: chạy dù có vẻ tiến trình khác đang giữ (chỉ khi chắc nó đã chết). `--wait`: chờ hết mọi FloodWait thay vì kết thúc khi chờ dài hơn `max_auto_wait` (không áp dụng cho `daily_cap`). FloodWait ngắn hơn `max_auto_wait` luôn được chờ rồi gửi lại đúng batch đó. Từ chối khi lần chạy trước là `waiting_flood` trước `resume_at` (kể cả nghỉ vì `daily_cap`, có câu riêng) hoặc `failed(peer_flood)` trong 24 giờ (mã 3). `--fresh`: quên tiến độ của cặp và sao chép lại từ đầu (kèm `--yes` để không hỏi). Đổi filter: dùng `tgmirror clone` với cùng `--src/--dst` |
 | `tgmirror pause` / `tgmirror stop` | Từ terminal khác: đặt cờ `control` trên lần chạy đang chạy (chỉ có tối đa một mỗi account). `pause` giữ nó **tại chỗ** sau batch hiện tại (tiến trình vẫn sống và giữ terminal của nó) cho tới khi `tgmirror run` hoặc phím `r`; `stop` kết thúc nó (`stopped`) như Ctrl+C. Không có gì đang chạy thì báo "Không có clone nào đang chạy", mã 1 |
-| `tgmirror history [n]` | Nhật ký các lần chạy, mới nhất trước: số lần, lúc bắt đầu, nguồn → đích, trạng thái, số tin đã sao chép/lỗi/bị filter loại (`--limit`, `--json`). `history n`: chi tiết một lần: thời gian, khoảng tin nguồn, filter, tin lỗi kèm lý do (tối đa 20), các lần Telegram giới hạn (flood) |
-| `tgmirror retry [n]` | (Phase 5) thử lại các tin `failed` của lần chạy `n` |
-| `tgmirror status` | (Phase 5) tiến độ, tốc độ, ETA, số lỗi, lần flood gần nhất của lần đang chạy |
+| `tgmirror history [n]` | Nhật ký các lần chạy, mới nhất trước: số lần, lúc bắt đầu, nguồn → đích, trạng thái, số tin đã sao chép/lỗi/bị filter loại (`--limit`, `--json`). `history n`: chi tiết một lần: thời gian, khoảng tin nguồn, filter (lần thử lại: "Thử lại: tin lỗi của lần chạy n" thay cho hai dòng đó), số tin đã xóa ở nguồn, tin lỗi kèm lý do (tối đa 20), các lần Telegram giới hạn (flood) |
+| `tgmirror retry [n]` | Thử lại các tin còn `failed` của lần chạy `n` (mặc định lần gần nhất; xem "Thử lại tin lỗi" dưới). Là một lần chạy riêng (có trong `history`, pause/stop được) trong foreground của terminal này. `--force-takeover`, `--wait` như `run`. Không có tin lỗi nào thì báo và thoát mã 0, không kết nối Telegram |
+| `tgmirror status` | Tiến độ, tốc độ, ETA, số lỗi, delay hiện tại và số lần Telegram giới hạn trong 24 giờ của **lần đang chạy** (không có thì lần gần nhất). Chỉ đọc DB, không kết nối Telegram nên chạy được từ terminal thứ hai trong lúc clone đang giữ session. `--json`. Xem "Xem tiến độ" dưới |
 | `tgmirror config [get\|set]` | Xem/sửa config (`[limits]`, đường dẫn, ...) |
 | `tgmirror doctor` | Kiểm tra: session hợp lệ, cryptg đã cài, quyền kênh đích, cảnh báo an toàn |
 
 Tùy chọn chung: `--version`, `--debug` (hiện traceback thay vì một câu lỗi).
 
-Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, file YAML, regex; kiểm tra trước khi hỏi hay ghi gì), `3` lần chạy dừng vì flood/peer_flood/chạm `daily_cap` (hoặc `clone`/`run` bị từ chối vì phải chờ), `4` thiếu quyền (kể cả nguồn cấm forward), `130` Ctrl+C (đã lưu, lần chạy `stopped`). `clone`/`run` trả mã của lần chạy (`0` xong hoặc dừng bằng phím `q`/`tgmirror stop`, `3`, `130`, ...).
+Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, file YAML, regex; kiểm tra trước khi hỏi hay ghi gì), `3` lần chạy dừng vì flood/peer_flood/chạm `daily_cap` (hoặc `clone`/`run` bị từ chối vì phải chờ), `4` thiếu quyền (kể cả nguồn cấm forward), `130` Ctrl+C (đã lưu, lần chạy `stopped`). `clone`/`run`/`retry` trả mã của lần chạy (`0` xong hoặc dừng bằng phím `q`/`tgmirror stop`, `3`, `130`, ...).
 
 ## Wizard `tgmirror clone`
 
@@ -135,6 +135,38 @@ daily_cap = 5000
 max_auto_wait = 900
 upload_concurrency = 1
 ```
+
+## Thử lại tin lỗi (`retry`)
+
+Một tin `failed` (Telegram từ chối, hoặc không tạo tin nào cho nó) nằm dưới con trỏ nên `run` không bao giờ đọc lại nó; `retry` là cách gửi lại. `tgmirror retry [n]` gửi lại đúng các tin **còn** `failed` mà lần chạy `n` để lại (chính là danh sách `history n`), đọc chúng theo id (không quét nguồn), và **không** đụng tới con trỏ hay filter của cặp. Nó là một lần chạy mới trong nhật ký (`history` ghi "Thử lại: tin lỗi của lần chạy n"), qua cùng limiter/FloodGuard/pause/stop như mọi lần chạy.
+
+- Tin gửi lại thành công được thêm vào **cuối** đích (thứ tự ở đích không còn theo thời gian, như khi đổi filter).
+- Tin lại lỗi thuộc về lần retry mới: `tgmirror retry` (không số) thử lại chúng lần nữa. `retry n` lần hai trên cùng `n` báo không còn gì để thử.
+- Tin đã bị xóa ở nguồn từ lúc lỗi không gửi được nữa: chúng được đặt sang `skipped` với `reason='gone_from_source'` (bộ đếm `gone` của lần chạy, dòng `Đã xóa ở nguồn` ở `history n`), để không hiện mãi như lỗi không ai sửa được.
+- Tin `skipped` (loại không hỗ trợ) không được thử lại.
+- Dừng giữa chừng (`q`, Ctrl+C, `stop`): gợi ý chạy tiếp là `tgmirror retry n`, **không phải** `run` (`run` chỉ tìm tin mới). Các tin chưa kịp gửi vẫn `failed` như cũ.
+- Khi một `clone`/`run` kết thúc mà có tin lỗi, nó in gợi ý `tgmirror retry <lần chạy>`.
+
+## Xem tiến độ (`status`)
+
+```
+Lần chạy 7: Kenh A → Kenh A (copy)
+Trạng thái:  đang chạy
+Tiến độ:     ~43% (tin nguồn tới id 4210 / 9800)
+Tốc độ:      2.1 tin/giây (trung bình từ lúc bắt đầu), còn khoảng 44 phút
+Kết quả:     4180 đã sao chép, 3 lỗi, 27911 bị filter loại
+Giới hạn:    nghỉ 2.4s giữa các lần gửi; hôm nay đã gửi 1200/5000 tin
+Telegram:    2 lần bị giới hạn trong 24 giờ qua; gần nhất 38 giây trước (flood_wait, 30s)
+```
+
+Mọi số là **ước lượng**: `status` chỉ đọc DB (clone đang chạy giữ session Telegram nên terminal thứ hai không kết nối được), vì vậy tổng là id tin mới nhất của nguồn lúc lần chạy bắt đầu (`RunOptions.src_last_id`, một request đọc ở bước chuẩn bị).
+
+- **Tiến độ** của lần chạy thường tính theo *id* nguồn, từ chỗ lần chạy bắt đầu tới id đó (id có khoảng trống do tin bị xóa/service, filter lại nhảy nhanh qua quãng không khớp nên chỉ là tỉ lệ thô, không phải số tin). Lần chạy cũ từ trước khi có tổng thì không có phần trăm. Tiến độ của `retry` chính xác: số tin lỗi đã xử lý trên số còn chờ.
+- **Tốc độ** là trung bình từ lúc bắt đầu (gồm cả lúc tạm dừng và chờ flood): tin đã sao chép hoặc lỗi mỗi giây; chưa hiện trong 5 giây đầu. **ETA** ngoại suy từ đó và chỉ hiện khi lần chạy thật sự đang `running`.
+- Lần chạy ghi `running`/`paused` nhưng heartbeat cũ hơn 2 phút được báo là **không có tiến trình nào giữ** (tín hiệu cuối lúc ...); lần chạy kế tiếp của cặp ghi nó `failed('interrupted')` (`04-state-checkpoint.md`).
+- `waiting_flood`: hiện thời điểm được chạy lại. Lần chạy đã kết thúc mà còn tin lỗi: gợi ý `tgmirror retry`.
+- Số lần Telegram giới hạn trong 24 giờ là của cả account (`flood_log`); dòng "Giới hạn" đọc `limiter_state` (delay hiện tại; số tin gửi hôm nay, về 0 khi sang ngày mới theo giờ máy).
+- `--json`: `run`, `status`, `live`, `abandoned`, `progress`, `speed_per_second`, `eta_seconds`, `copied`, `failed`, `failed_now`, `gone_from_source`, `limiter`, `floods_24h`, `last_flood`, ... (khóa cho máy đọc, không dịch).
 
 ## Làm lại từ đầu (`--fresh`)
 

@@ -249,6 +249,45 @@ VI: dict[str, str] = {
         "--fresh sẽ quên {count} tin đã sao chép và sao chép lại (đích có thể bị "
         "trùng); thêm --yes để đồng ý khi không có terminal."
     ),
+    # retry
+    "retry.nothing": "Lần chạy {id} không có tin lỗi nào để thử lại.",
+    "run.retry_start": (
+        "Lần chạy {id}: thử lại {count} tin lỗi của lần chạy {of} ({src} → {dst})."
+    ),
+    "run.progress_retry": "Lần chạy {id}: {done} tin đã sao chép lại, {failed} vẫn lỗi.",
+    "run.retry_hint": "Thử lại các tin lỗi: tgmirror retry {id}",
+    "run.retry_continue_hint": "Chạy tiếp việc thử lại: tgmirror retry {of}",
+    "retry.gone": "{count} tin đã bị xóa ở nguồn nên không thể sao chép; bỏ qua.",
+    "retry.still_failing": (
+        "{count} tin vẫn lỗi. Xem `tgmirror history {id}`, hoặc thử lại: tgmirror retry {id}"
+    ),
+    "history.line_retry": "Thử lại:     tin lỗi của lần chạy {of}",
+    "history.line_gone": "Đã xóa ở nguồn: {count} tin không thể sao chép (bỏ qua)",
+    # status
+    "status.none_live": "Không có lần chạy nào đang chạy; đây là lần gần nhất.",
+    "status.abandoned": (
+        "Không có tiến trình nào giữ lần chạy này (tín hiệu cuối lúc {at}). Lần chạy kế "
+        "tiếp của cặp này sẽ ghi nó là bị ngắt và làm tiếp."
+    ),
+    "status.line_progress": "Tiến độ:     ~{percent}% (tin nguồn tới id {cursor} / {head})",
+    "status.line_progress_retry": (
+        "Tiến độ:     {percent}% ({handled} / {total} tin lỗi đã thử lại)"
+    ),
+    "status.line_progress_unknown": "Tiến độ:     tin nguồn tới id {cursor} (chưa biết tổng)",
+    "status.line_speed": "Tốc độ:      {speed} tin/giây (trung bình từ lúc bắt đầu){eta}",
+    "status.line_speed_unknown": "Tốc độ:      chưa đủ dữ liệu",
+    "status.eta": ", còn khoảng {eta}",
+    "status.line_resume": "Chờ đến:     {at}{note}",
+    "status.line_limiter": (
+        "Giới hạn:    nghỉ {delay}s giữa các lần gửi; hôm nay đã gửi {sent}/{cap} tin"
+    ),
+    "status.line_floods": "Telegram:    {count} lần bị giới hạn trong 24 giờ qua{last}",
+    "status.line_floods_none": "Telegram:    chưa bị giới hạn lần nào trong 24 giờ qua",
+    "status.last_flood": "; gần nhất {ago} trước ({kind}, {seconds}s)",
+    "status.retry_hint": "Có {count} tin lỗi. Thử lại: tgmirror retry {id}",
+    "duration.hours": "{hours} giờ {minutes} phút",
+    "duration.minutes": "{minutes} phút",
+    "duration.seconds": "{seconds} giây",
 }
 
 EN: dict[str, str] = {
@@ -490,6 +529,41 @@ EN: dict[str, str] = {
         "destination may get duplicates); add --yes to agree when there is no "
         "terminal to ask."
     ),
+    "retry.nothing": "Run {id} has no failed messages to retry.",
+    "run.retry_start": ("Run {id}: retrying {count} failed messages of run {of} ({src} → {dst})."),
+    "run.progress_retry": "Run {id}: {done} messages copied again, {failed} still failing.",
+    "run.retry_hint": "Retry the failed messages with: tgmirror retry {id}",
+    "run.retry_continue_hint": "Carry on retrying with: tgmirror retry {of}",
+    "retry.gone": "{count} messages no longer exist at the source and cannot be copied; left out.",
+    "retry.still_failing": (
+        "{count} messages still fail. See `tgmirror history {id}`, or retry: tgmirror retry {id}"
+    ),
+    "history.line_retry": "Retry of:    the failed messages of run {of}",
+    "history.line_gone": "Gone at source: {count} messages that cannot be copied (left out)",
+    "status.none_live": "No run is running; this is the latest one.",
+    "status.abandoned": (
+        "No process holds this run (last sign of life at {at}). The next run of this pair "
+        "records it as interrupted and carries on."
+    ),
+    "status.line_progress": "Progress:    ~{percent}% (source up to id {cursor} / {head})",
+    "status.line_progress_retry": (
+        "Progress:    {percent}% ({handled} / {total} failed messages retried)"
+    ),
+    "status.line_progress_unknown": "Progress:    source up to id {cursor} (total not known)",
+    "status.line_speed": "Speed:       {speed} messages/s (average since it began){eta}",
+    "status.line_speed_unknown": "Speed:       not enough data yet",
+    "status.eta": ", about {eta} left",
+    "status.line_resume": "Waiting until: {at}{note}",
+    "status.line_limiter": (
+        "Limits:      {delay}s between sends; {sent}/{cap} messages sent today"
+    ),
+    "status.line_floods": "Telegram:    limited {count} times in the last 24 hours{last}",
+    "status.line_floods_none": "Telegram:    not limited once in the last 24 hours",
+    "status.last_flood": "; latest {ago} ago ({kind}, {seconds}s)",
+    "status.retry_hint": "{count} messages failed. Retry: tgmirror retry {id}",
+    "duration.hours": "{hours} h {minutes} min",
+    "duration.minutes": "{minutes} min",
+    "duration.seconds": "{seconds} s",
 }
 
 

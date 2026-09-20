@@ -406,6 +406,91 @@ async def test_what_one_run_copied_is_known_to_the_next_run_of_the_pair(store: S
     assert await store.run_failures(second.id) == []
 
 
+async def test_count_failed_is_per_run_and_a_later_run_takes_rows_over(store: Store) -> None:
+    first = (await store.start_run(spec())).run
+    batch = await store.begin_batch(first.id, [unit(1), unit(2), unit(3)])
+    results = [MessageResult(1, 10), MessageResult(2, None, "x"), MessageResult(3, None, "y")]
+    await store.commit_batch(first.id, batch, results, 3)
+    await store.finish(first.id, RunStatus.DONE)
+    assert await store.count_failed(first.id) == 2
+
+    second = (await store.start_run(again(first))).run
+    retry = await store.begin_batch(second.id, [unit(2)])  # written again by the second run
+    await store.commit_batch(second.id, retry, [MessageResult(2, 20)], 3)
+
+    assert await store.count_failed(first.id) == 1  # only message 3 is still the first run's
+    assert await store.count_failed(second.id) == 0
+    assert [f.src_msg_id for f in await store.run_failures(first.id)] == [3]
+
+
+async def test_a_failed_message_gone_from_the_source_is_set_aside_and_counted(
+    store: Store, tmp_path: Path
+) -> None:
+    first = (await store.start_run(spec())).run
+    batch = await store.begin_batch(first.id, [unit(1), unit(2), unit(3)])
+    results = [MessageResult(1, 10), MessageResult(2, None, "x"), MessageResult(3, None, "y")]
+    await store.commit_batch(first.id, batch, results, 3)
+    await store.finish(first.id, RunStatus.DONE)
+    second = (await store.start_run(again(first))).run
+
+    await store.mark_gone(second.id, [2, 1, 9])  # 1 is done and 9 unknown: neither is touched
+
+    after = await store.get_run(second.id)
+    assert after is not None and (after.gone, after.cursor_src_id) == (1, 3)  # cursor unmoved
+    assert await rows(
+        tmp_path / "state.db",
+        "SELECT src_msg_id, status, reason, run_id FROM msg_map ORDER BY src_msg_id",
+    ) == [(1, "done", None, first.id), (2, "skipped", "gone_from_source", second.id),
+          (3, "failed", "y", first.id)]  # fmt: skip
+    assert await store.count_failed(first.id) == 1  # message 2 is no longer something to retry
+
+
+async def test_marking_nothing_gone_counts_nothing(store: Store) -> None:
+    run = (await store.start_run(spec())).run
+
+    await store.mark_gone(run.id, [5])
+
+    assert (await store.get_run(run.id)).stats == {}  # type: ignore[union-attr]
+
+
+async def test_the_options_of_one_run_do_not_leak_into_the_pair(store: Store) -> None:
+    options = RunOptions(batch_size=5, dst_base_id=7, src_last_id=900, retry_of=3)
+
+    run = (await store.start_run(spec(options=options))).run
+    mirror = await store.find_mirror(run.src_id, run.dst_id)
+
+    assert (run.options.src_last_id, run.options.retry_of) == (900, 3)
+    assert mirror is not None
+    assert mirror.options == RunOptions(batch_size=5, dst_base_id=7)  # run-only keys dropped
+
+
+async def test_a_run_keeps_its_own_source_total_while_the_mirror_stays_clean(store: Store) -> None:
+    first = (await store.start_run(spec(options=RunOptions(src_last_id=10)))).run
+    await store.finish(first.id, RunStatus.DONE)
+
+    second = (await store.start_run(spec_of(first, RunOptions(src_last_id=25)))).run
+
+    assert (first.options.src_last_id, second.options.src_last_id) == (10, 25)
+
+
+def spec_of(run, options: RunOptions) -> RunSpec:  # type: ignore[no-untyped-def]
+    return RunSpec(ChannelInfo(run.src_id, "Src"), ChannelInfo(run.dst_id, "Dst"), options=options)
+
+
+async def test_flood_events_are_counted_by_when_they_happened(store: Store, clock: Clock) -> None:
+    run = (await store.start_run(spec())).run
+    for _ in range(2):
+        await store.log_flood(
+            run.id, kind="flood_wait", seconds=5, method="m", delay_ms=1, batch_size=1
+        )
+        clock.advance(hours=13)
+    await store.log_flood(run.id, kind="slow_mode", seconds=5, method="m", delay_ms=1, batch_size=1)
+
+    assert await store.flood_count_since(clock.now - timedelta(hours=24)) == 2  # the first is older
+    assert await store.flood_count_since(clock.now - timedelta(hours=1)) == 1
+    assert await store.flood_count_since(clock.now + timedelta(hours=1)) == 0
+
+
 async def test_discard_and_confirm_pending(store: Store) -> None:
     run = (await store.start_run(spec())).run
     await store.begin_batch(run.id, [unit(1), unit(2)])
@@ -616,3 +701,27 @@ async def test_a_refused_commit_leaves_the_limiter_state_alone(store: Store) -> 
         await store.commit_batch(run.id, first, [MessageResult(1, 11)], 1, limiter=LEARNED)
 
     assert await store.load_limiter_state(run.account) is None
+
+
+async def test_discarding_pending_puts_a_failed_message_back_and_forgets_a_new_one(
+    store: Store, tmp_path: Path
+) -> None:
+    """A retry's rows were ``failed``; a refused or never-sent batch must not lose them."""
+    first = (await store.start_run(spec())).run
+    batch = await store.begin_batch(first.id, [unit(1), unit(2)])
+    await store.commit_batch(
+        first.id, batch, [MessageResult(1, None, "boom"), MessageResult(2, 20)], 2
+    )
+    await store.finish(first.id, RunStatus.DONE)
+    second = (await store.start_run(again(first))).run
+
+    await store.begin_batch(second.id, [unit(1), unit(3)])  # 1 failed before; 3 is new
+    assert await store.count_failed(first.id) == 0  # in flight: not a failure while pending
+
+    await store.discard_pending(second.id)
+
+    assert await rows(
+        tmp_path / "state.db",
+        "SELECT src_msg_id, status, reason, run_id FROM msg_map ORDER BY src_msg_id",
+    ) == [(1, "failed", "boom", first.id), (2, "done", None, first.id)]  # 3 is forgotten
+    assert await store.count_failed(first.id) == 1  # message 1 is still the first run's to retry

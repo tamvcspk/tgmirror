@@ -5,6 +5,9 @@ is started by ``engine.runs.begin_run`` (it claims the pair); this module only c
 Every batch is written ``pending`` before Telegram is called and settled in one transaction
 afterwards, so a kill at any point is repaired by ``_reconcile`` on the next run.
 
+A run with ``options.retry_of`` (``tgmirror retry``) differs only in where its units come from: the
+messages that run left ``failed``, read by id. Everything after that is the same loop.
+
 Pause is *in place*: the runner finishes the batch it is on, marks the run ``paused`` and waits,
 keeping the process, the terminal and the heartbeat, until it is resumed or stopped.
 
@@ -20,6 +23,7 @@ import asyncio
 import contextlib
 import random
 import threading
+from collections.abc import AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -35,12 +39,13 @@ from tgmirror.core.errors import (
     TgMirrorError,
     Transient,
 )
-from tgmirror.core.gateway import MessageReader, SrcMessage, TelegramGateway
+from tgmirror.core.gateway import MessageReader, SrcMessage, TelegramGateway, Unit
 from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
 from tgmirror.engine.copy import copy_batch
 from tgmirror.engine.flood import FloodGuard, Interrupted
+from tgmirror.engine.planner import Skip
 from tgmirror.engine.reconcile import Outcome, judge
 from tgmirror.engine.runs import DAILY_CAP
 from tgmirror.filters.matcher import Matcher
@@ -208,16 +213,20 @@ class Runner:
     async def _loop(self, run: Run) -> RunStatus:
         assert self._limiter is not None and self._guard is not None and self._reader is not None
         limiter = self._limiter
-        spec = FilterSpec.from_json(run.filters_json)
-        plan = plan_read(spec, run.cursor_from, pushdown=run.options.pushdown)
-        read = planner.units(
-            self._reader,
-            run.src_id,
-            min_id=plan.min_id,
-            filters=plan.server,
-            matcher=None if spec.is_empty else Matcher(spec),
-            complete_albums=plan.complete_albums,
-        )
+        read: AsyncIterator[Unit | Skip]
+        if run.options.retry_of is not None:  # ``tgmirror retry``: only what failed, no filter
+            read = self._failed_units(run, run.options.retry_of)
+        else:
+            spec = FilterSpec.from_json(run.filters_json)
+            plan = plan_read(spec, run.cursor_from, pushdown=run.options.pushdown)
+            read = planner.units(
+                self._reader,
+                run.src_id,
+                min_id=plan.min_id,
+                filters=plan.server,
+                matcher=None if spec.is_empty else Matcher(spec),
+                complete_albums=plan.complete_albums,
+            )
         async with (
             aclosing(read) as units,
             aclosing(batches(units, lambda: limiter.batch_size(run.options.batch_size))) as stream,
@@ -234,6 +243,22 @@ class Runner:
                     return RunStatus.STOPPED
                 await self._send(run, todo)
         return RunStatus.DONE
+
+    async def _failed_units(self, run: Run, failed_run: int) -> AsyncIterator[Unit]:
+        """The messages ``failed_run`` left ``failed``, read by id (a retry, docs/04).
+
+        The ids are taken once, up front: a message this run sends turns ``done`` or is written
+        again by this run, so it drops out of ``failed_run``'s list either way. One found deleted
+        at the source is set aside for good (``mark_gone``) and not sent.
+        """
+        assert self._reader is not None
+        ids = [f.src_msg_id for f in await self._store.run_failures(failed_run)]
+        async with aclosing(planner.failed_units(self._reader, run.src_id, ids)) as stream:
+            async for item in stream:
+                if isinstance(item, planner.Gone):
+                    await self._store.mark_gone(run.id, item.ids)
+                else:
+                    yield item
 
     async def _without_done(self, run_id: int, batch: Batch) -> Batch:
         """Drop units that already have a ``done`` row (resume, step 4); may leave it empty.

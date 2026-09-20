@@ -2,7 +2,7 @@
 
 CLI tool that clones a Telegram channel, group or forum you have joined into another one (existing or newly created; forum topics are mapped topic to topic), using your own Telegram API credentials (MTProto, via [Telethon](https://github.com/LonamiWebs/Telethon)).
 
-> Status: **phase 4 (rate limiting) done on top of phase 3 (filters) and phase 2 (copy, checkpoints, pause/resume); the job flow was then redesigned (2026-09-20): `clone` copies at once, earlier runs are a log (`history`), running the same pair again is a delta. Phase 2 was run by hand on a real account with a channel that allows forwarding (albums and kill-then-resume work; a "Restrict saving content" group you do not administer is refused as designed; an admin-owned restricted source is not tried yet). Filters, including the server-side narrowing, are tested against fakes only: compare a job made with `--no-pushdown` before trusting them on a real channel. The rate limiter (AIMD delay, FloodWait auto-wait, daily cap) is tested against fakes only: its numbers are conservative guesses, not measured Telegram limits, and no real FloodWait has been seen yet**. `login`, `logout`, `whoami`, `channels`, `clone`, `run`, `pause`, `stop` and `history` exist. The keys `p`/`r`/`q` and the in-place pause are tested against fakes only. The database schema changed without a migration: delete an old `tgmirror.db`. `retry`, `status`, reupload and the Rich view come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
+> Status: **phase 5 (`retry`, `status`) and phase 4 (rate limiting) done on top of phase 3 (filters) and phase 2 (copy, checkpoints, pause/resume); the job flow was then redesigned (2026-09-20): `clone` copies at once, earlier runs are a log (`history`), running the same pair again is a delta. Phase 2 was run by hand on a real account with a channel that allows forwarding (albums and kill-then-resume work; a "Restrict saving content" group you do not administer is refused as designed; an admin-owned restricted source is not tried yet). Filters, including the server-side narrowing, are tested against fakes only: compare a job made with `--no-pushdown` before trusting them on a real channel. The rate limiter (AIMD delay, FloodWait auto-wait, daily cap) is tested against fakes only: its numbers are conservative guesses, not measured Telegram limits, and no real FloodWait has been seen yet**. `login`, `logout`, `whoami`, `channels`, `clone`, `run`, `pause`, `stop`, `history`, `retry` and `status` exist. The keys `p`/`r`/`q`, the in-place pause, and `retry`/`status` (reading failed messages by id, the ETA) are tested against fakes only. The database schema changed without a migration: delete an old `tgmirror.db`. Reupload and the Rich view come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
 
 ## Goals
 
@@ -32,6 +32,8 @@ tgmirror run --fresh [--yes]   # the same, for the latest run's pair
 tgmirror run --wait           # sit out FloodWaits of any length (default: end the run after [limits] max_auto_wait)
 tgmirror pause | stop         # from another terminal: pause in place / stop after the current batch
 tgmirror history [n] [--json] # what earlier runs did (n: one run in detail, with failed messages and why)
+tgmirror retry [n]            # send again the messages run n failed to copy (default: the latest run); a run of its own
+tgmirror status [--json]      # progress, speed, ETA, failures and Telegram's limits of the running clone (works from a second terminal)
 ```
 
 While a clone runs in a terminal: `p` pause (it holds until resumed), `r` resume, `q` stop; Ctrl+C also stops (exit 130). Everything runs in your terminal: no background process and no schedule.
@@ -40,7 +42,6 @@ Planned (later phases):
 
 ```bash
 tgmirror clone                # wizard: also the options step (mode, caption handling)
-tgmirror retry [n] | status   # retry the failed messages of a run; progress and ETA
 ```
 
 ## Development

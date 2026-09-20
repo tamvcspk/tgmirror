@@ -25,6 +25,7 @@ from tgmirror.core.errors import (
 )
 from tgmirror.core.gateway import (
     ALBUM_MARGIN,
+    MAX_IDS_PER_CALL,
     NO_FILTER,
     ChannelInfo,
     ChatKind,
@@ -36,7 +37,7 @@ from tgmirror.core.gateway import (
 from tgmirror.ui.prompts import Choice
 
 ACCOUNT = AccountInfo(id=42, name="Test User", username="tester")  # what FakeAuth logs in
-MAX_FORWARD_IDS = 100  # Telegram's hard limit per forward call
+MAX_FORWARD_IDS = MAX_IDS_PER_CALL  # Telegram's hard limit per forward call
 _EPOCH = datetime(2024, 1, 1, tzinfo=UTC)
 
 
@@ -134,6 +135,10 @@ class FakeGateway:
         """A ``copy_messages`` whose ids include this one raises ``PerMessage`` (no side effect)."""
         self._poisoned[(channel, msg_id)] = reason
 
+    def heal(self, channel: int, msg_id: int) -> None:
+        """Undo ``poison``: Telegram accepts this message from now on."""
+        self._poisoned.pop((channel, msg_id), None)
+
     def calls_to(self, method: str) -> list[Call]:
         return [c for c in self.calls if c.method == method]
 
@@ -180,6 +185,18 @@ class FakeGateway:
             if filters.search is not None and filters.search.lower() not in msg.text.lower():
                 continue
             yield msg
+
+    async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]:
+        self._enter("get_messages", src, list(ids))
+        if not ids or len(ids) > MAX_IDS_PER_CALL:
+            raise ValueError(f"get_messages takes 1..{MAX_IDS_PER_CALL} ids, got {len(ids)}")
+        self._channel(src)
+        wanted = set(ids)
+        return [m for m in self.messages[src] if m.id in wanted]
+
+    def delete_message(self, channel: int, msg_id: int) -> None:
+        """The message disappears from the channel (a later read no longer finds it)."""
+        self.messages[channel] = [m for m in self.messages[channel] if m.id != msg_id]
 
     async def last_message_id(self, chat: int) -> int:
         self._enter("last_message_id", chat)

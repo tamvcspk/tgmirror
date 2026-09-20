@@ -56,9 +56,9 @@ CREATE TABLE msg_map (
   grouped_id   INTEGER,
   src_topic_id INTEGER,                     -- NULL nếu nguồn không phải forum
   status       TEXT NOT NULL,               -- pending|done|failed|skipped
-  reason       TEXT,
+  reason       TEXT,                        -- lý do lỗi/bỏ qua; hàng `pending` từng lỗi giữ lý do cũ (xem "Hủy pending")
   batch_id     INTEGER,
-  run_id       INTEGER,                     -- lần chạy ghi hàng này gần nhất (để `history n` liệt kê tin lỗi)
+  run_id       INTEGER,                     -- lần chạy đã kết thúc hàng này gần nhất (để `history n`/`retry n` liệt kê tin lỗi)
   ts           TEXT NOT NULL,
   PRIMARY KEY (mirror_id, src_msg_id)
 );
@@ -97,13 +97,15 @@ CREATE TABLE limiter_state (               -- persist AIMD giữa các lần ch�
 
 `options_json.dst_base_id`: id tin mới nhất của kênh đích lúc clone cặp lần đầu (`gateway.last_message_id`, chỉ gọi khi cặp mới). Mirror lưu một lần; mỗi run chép giá trị vào `runs.options_json`. Reconcile chỉ đọc đích sau `max(dst_msg_id của các hàng done, dst_base_id)`.
 
+`options_json.src_last_id` (ghi ở `runs`, không ở `mirrors`; 0 = không biết): id tin mới nhất của nguồn lúc lần chạy bắt đầu (`begin_run` đọc bằng `last_message_id`, một request ở bước chuẩn bị), là tổng mà `status` đo tiến độ và ETA (`engine/status.py`); tin đăng thêm trong lúc chạy không nằm trong đó. `options_json.retry_of` (ghi ở `runs`): id lần chạy mà lần này gửi lại các tin `failed` (xem "Retry"); `None` là lần chạy thường. Hai khóa này chỉ thuộc về từng lần chạy: `RunOptions.for_pair` bỏ chúng khi ghi `mirrors.options_json`, và `tgmirror run` không thừa hưởng `retry_of` của lần chạy trước.
+
 `options_json.pushdown` (mặc định `true`, ghi ở `runs`): `false` thì đọc mọi tin sau cursor và chỉ lọc ở máy (`clone --no-pushdown`, xem `03-filters.md`). `batch_size` cũng là của từng lần chạy (`tgmirror run` dùng lại giá trị của lần trước).
 
 `mirrors.filters_json` / `runs.filters_json`: JSON chuẩn hóa của `FilterSpec` (`{}` = không lọc), nạp lại bằng `FilterSpec.from_json` mỗi lần chạy; hỏng thì lần chạy `failed` với lý do `FilterError: ...`. Mirror giữ filter đang nhớ, run ghi filter lần đó dùng.
 
 Tin bị **filter loại** không được ghi vào `msg_map` (hàng triệu hàng vô ích); chỉ tăng bộ đếm `stats.skipped_filter` của lần chạy (đếm theo tin, album tính đủ mọi tin) và đẩy `cursor_src_id` tiến lên. Số đếm và con trỏ đi cùng transaction với batch mà chúng được cộng vào (`commit_batch(extra_stats=...)`), hoặc riêng một transaction `advance_cursor(extra_stats=...)` khi batch không có gì để gửi (chỉ có tin bị loại, hoặc mọi unit đã `done`); không bao giờ vượt qua một unit chưa xử lý. Khi Telegram thu hẹp theo nội dung (`media`/`search`) thì tin bị loại ở server không được thấy nên không được đếm và con trỏ chỉ tới unit khớp cuối cùng; lần chạy sau đọc lại từ đó (rẻ, vì vẫn thu hẹp).
 
-Tin **không hỗ trợ** (game, invoice, quiz chưa trả lời, poll khi thiếu `--reset-polls`; xem `01-kien-truc.md`) khác filter: người dùng muốn clone nhưng không thể, nên có ghi `msg_map` với `status='skipped'` + `reason='unsupported:<loại>'` và tăng `skipped_unsupported`. `retry` chỉ thử lại `failed`, không thử `skipped`.
+Tin **không hỗ trợ** (game, invoice, quiz chưa trả lời, poll khi thiếu `--reset-polls`; xem `01-kien-truc.md`) khác filter: người dùng muốn clone nhưng không thể, nên có ghi `msg_map` với `status='skipped'` + `reason='unsupported:<loại>'` và tăng `skipped_unsupported`. `retry` chỉ thử lại `failed`, không thử `skipped`. Cũng `skipped` là tin mà `retry` thấy đã bị xóa ở nguồn: `reason='gone_from_source'`, tăng `stats.gone` của lần retry (`Store.mark_gone`).
 
 `topic_map` được ghi cùng transaction với việc tạo topic đích (tạo topic xong phải lưu ngay, kẻo resume tạo trùng).
 
@@ -120,6 +122,7 @@ Kết quả của một lời gọi copy:
 - Lời gọi trả về bình thường: từng id có `dst_id` → `done`; id `None` (Telegram không tạo tin, thường vì đã xóa ở nguồn) → `failed` với `reason='not_copied'`.
 - `PerMessage` (Telegram từ chối chính các id, không tạo gì): xóa `pending` của batch, gửi lại **từng unit một** (mỗi unit là một batch nhỏ có write-ahead và commit riêng). Unit đơn lẻ vẫn bị từ chối → cả unit `failed` với lý do đó.
 - `FloodWait` ngắn hơn `max_auto_wait`: chờ rồi gửi lại **đúng lời gọi đó**; `pending` giữ nguyên trong lúc chờ (Telegram từ chối nên chưa tạo gì; nếu process chết lúc đó thì reconcile lần sau thấy đích không có gì và gửi lại). `FloodWait` quá dài hoặc quá nhiều lần, `PeerFlood`, `NoPermission`, `ForwardsRestricted`, lỗi RPC khác, hoặc stop/Ctrl+C trong lúc chờ: Telegram chưa tạo gì → xóa `pending` của batch rồi kết thúc lần chạy (xem `01-kien-truc.md`, `05-chong-flood.md`).
+- **Hủy `pending`** (mọi chỗ trên nói "xóa `pending`": `discard_batch`, `discard_pending`): hàng `pending` chưa từng lỗi thì bị xóa, vì con trỏ sẽ đưa tin đó trở lại. Hàng từng `failed` (write-ahead giữ lại `reason` và `run_id` cũ của nó, xem `msgmap.insert_pending`) thì quay về `failed` với lý do và lần chạy cũ, **không** bị xóa: nó nằm dưới con trỏ, không ai đọc lại, nên xóa là mất dấu hẳn một tin chưa được sao chép. Đây là chỗ `retry` khác lần chạy thường (lỗi được phát hiện khi viết test kill giữa chừng cho retry). `run_id` chỉ chuyển sang lần chạy mới khi batch kết thúc (`finish_batch`) hoặc được reconcile xác nhận.
 - Daily cap (`DailyCapReached`) xảy ra **trước** write-ahead (ở `limiter.acquire`), nên không có gì để xóa: lần chạy `waiting_flood`, `fail_reason='daily_cap'`, `resume_at` = 00:00 ngày kế (giờ máy).
 - `Transient` (kết nối đứt sau khi gửi): kết quả **không rõ** → giữ nguyên `pending`, lần chạy `failed('transient')`; lần chạy sau reconcile.
 
@@ -151,6 +154,18 @@ Từ chối (`RunBusy`) khi cặp đang có run `running`/`paused` với heartbe
 ## Làm lại từ đầu
 
 `start_run(spec, fresh=True)` (`clone --fresh`, `run --fresh`): trong **cùng một transaction** và **sau** khi kiểm tra cặp có bị giữ (`RunBusy` thì chưa xóa gì), đếm rồi xóa mọi hàng `msg_map` của mirror (mọi trạng thái, kể cả `pending`), đặt `cursor_src_id = 0` và ghi `dst_base_id` mới (tin mới nhất của đích lúc đó, do `begin_run` đọc bằng `last_message_id` — với cặp đã có mirror bình thường không đọc lại) vào `mirrors.options_json`. Lần chạy mới bắt đầu ở `cursor_from = 0`. Filter xử lý như thường (không đưa thì giữ filter đang nhớ). Cặp chưa có mirror thì `fresh` không có gì để quên: coi như lần chạy đầu. `StartedRun.forgot` là số tin `done` đã quên (`None` nếu không phải làm lại). `Store.count_copied(src, dst)` cho CLI đếm trước để hỏi. Các run cũ và bộ đếm của chúng giữ nguyên; danh sách tin lỗi của run cũ (`history n`) mất theo `msg_map`. Reconcile của lần chạy làm lại chỉ đọc đích sau `dst_base_id` mới nên không quét phần đã có từ trước.
+
+## Retry
+
+`tgmirror retry [n]` (`RunRequest.retry_of = n`) mở một run mới trên mirror của cặp (`start_run` như mọi lần chạy: cùng kiểm tra `RunBusy`/`check_runnable`, filter và con trỏ giữ nguyên, `cursor_from` = con trỏ hiện tại) với `options.retry_of = n`. Khác lần chạy thường ở nguồn `Unit` của runner (`Runner._failed_units`), còn lại (reconcile trước, gate, `pace`, write-ahead, `commit_batch`, FloodGuard) là cùng một đường:
+
+1. Sau reconcile, chụp danh sách id `failed` của lần chạy `n` (`run_failures(n)`), tăng dần.
+2. Đọc theo id, lô 100 (`planner.failed_units`); id không còn ở nguồn → `Store.mark_gone` (`skipped`, không gửi), một transaction cho mỗi lô; idempotent nên crash giữa chừng chỉ làm lô đó được xử lý lại.
+3. Gom thành batch như thường; mỗi batch: write-ahead (hàng `failed` → `pending`, giữ lý do/run cũ), `copy_messages`, rồi `commit_batch`: `done` (`dst_msg_id` mới) hoặc `failed` (lý do mới), `run_id` = lần retry. `cursor_src_id` không đổi (`MAX` với id thấp hơn) và `runs.cursor_to` cũng vậy.
+
+Crash-safety: kill trước copy → reconcile lần sau thấy đích chưa có tin → hủy `pending` → hàng quay về `failed` (xem "Hủy `pending`") và `retry n` gửi lại; kill sau copy → reconcile tìm thấy bản sao ở đích, ghi `done`. Bị FloodWait quá dài/`PeerFlood`/stop: batch bị hủy, hàng vẫn `failed` của lần `n`.
+
+Bộ đếm là của lần retry (`done`: gửi lại được, `failed`: vẫn lỗi, `gone`: đã xóa ở nguồn). Tiến độ của `status` cho retry là `(done + failed + gone) / (đó + số hàng `failed` còn lại của lần `n`)`: hàng đã xử lý chuyển `run_id` sang lần retry nên tự rời khỏi danh sách của `n`.
 
 ## Điều khiển
 

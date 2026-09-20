@@ -1,7 +1,7 @@
 """SQL for ``msg_map``. Every function takes an open transaction from ``Store`` (``store/db.py``).
 
 Rows belong to a mirror (the source/destination pair), so a later run of the same pair sees what an
-earlier one copied. ``run_id`` records the run that last wrote the row, which is how ``history``
+earlier one copied. ``run_id`` records the run that last settled the row, which is how ``history``
 shows the failed messages of one run.
 
 The states follow docs/04-state-checkpoint.md: ``pending`` is written *before* Telegram is called
@@ -55,7 +55,13 @@ async def insert_pending(
     batch_id: int,
     ts: str,
 ) -> None:
-    """Write-ahead rows. A ``failed`` row from an earlier attempt is reused; ``done`` never is."""
+    """Write-ahead rows. A ``failed`` row from an earlier attempt is reused; ``done`` never is.
+
+    A reused row keeps its ``reason`` and ``run_id`` while it is ``pending``: that is how
+    ``delete_pending`` knows to put it back to ``failed`` instead of forgetting it (a retry sends
+    messages that are below the cursor, so nothing else would ever read them again). ``run_id``
+    moves to the current run when the batch is settled (``finish_batch``).
+    """
     rows = [
         (mirror_id, m.id, m.grouped_id, MsgStatus.PENDING, batch_id, run_id, ts)
         for unit in units
@@ -66,8 +72,8 @@ async def insert_pending(
         "VALUES(?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(mirror_id, src_msg_id) DO UPDATE SET "
         "  dst_msg_id = NULL, grouped_id = excluded.grouped_id, status = excluded.status, "
-        "  reason = NULL, batch_id = excluded.batch_id, run_id = excluded.run_id, "
-        "  ts = excluded.ts "
+        "  reason = CASE WHEN msg_map.status = 'failed' THEN msg_map.reason END, "
+        "  batch_id = excluded.batch_id, ts = excluded.ts "
         "WHERE msg_map.status != 'done'",
         rows,
     )
@@ -76,11 +82,13 @@ async def insert_pending(
 async def finish_batch(
     db: aiosqlite.Connection,
     mirror_id: int,
+    run_id: int,
     batch_id: int,
     results: Iterable[MessageResult],
     ts: str,
 ) -> tuple[int, int]:
-    """Turn a batch's pending rows into ``done``/``failed``; returns ``(done, failed)`` counts."""
+    """Turn a batch's pending rows into ``done``/``failed`` (now the rows of ``run_id``); returns
+    the ``(done, failed)`` counts."""
     results = list(results)
     expected = {r.src_msg_id for r in await pending_rows(db, mirror_id, batch_id)}
     if {r.src_id for r in results} != expected or len(results) != len(expected):
@@ -92,9 +100,9 @@ async def finish_batch(
         else:
             status, failed = MsgStatus.FAILED, failed + 1
         await db.execute(
-            "UPDATE msg_map SET status = ?, dst_msg_id = ?, reason = ?, ts = ? "
+            "UPDATE msg_map SET status = ?, dst_msg_id = ?, reason = ?, run_id = ?, ts = ? "
             "WHERE mirror_id = ? AND src_msg_id = ?",
-            (status, r.dst_id, r.reason, ts, mirror_id, r.src_id),
+            (status, r.dst_id, r.reason, run_id, ts, mirror_id, r.src_id),
         )
     return done, failed
 
@@ -117,12 +125,21 @@ async def pending_rows(
 async def delete_pending(
     db: aiosqlite.Connection, mirror_id: int, batch_id: int | None = None
 ) -> None:
-    sql = "DELETE FROM msg_map WHERE mirror_id = ? AND status = 'pending'"
+    """Forget pending rows (the batch is sent again, or was never sent).
+
+    A row that had ``failed`` before (it still has its ``reason``, see ``insert_pending``) goes
+    back to ``failed`` under its old run: it is not a new message that the cursor will bring back.
+    """
+    where = "mirror_id = ? AND status = 'pending'"
     params: tuple[int, ...] = (mirror_id,)
     if batch_id is not None:
-        sql += " AND batch_id = ?"
+        where += " AND batch_id = ?"
         params = (mirror_id, batch_id)
-    await db.execute(sql, params)
+    await db.execute(
+        f"UPDATE msg_map SET status = 'failed' WHERE {where} AND reason IS NOT NULL",  # noqa: S608
+        params,
+    )
+    await db.execute(f"DELETE FROM msg_map WHERE {where}", params)  # noqa: S608
 
 
 async def confirm_pending(
@@ -176,6 +193,32 @@ async def failed_of_run(
         params = (run_id, limit)
     cur = await db.execute(sql, params)
     return [FailedMessage(r[0], r[1]) for r in await cur.fetchall()]
+
+
+async def count_failed_of_run(db: aiosqlite.Connection, run_id: int) -> int:
+    cur = await db.execute(
+        "SELECT COUNT(*) FROM msg_map WHERE run_id = ? AND status = 'failed'", (run_id,)
+    )
+    row = await cur.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+GONE = "gone_from_source"  # ``reason`` of a failed message a retry found deleted at the source
+
+
+async def mark_gone(
+    db: aiosqlite.Connection, mirror_id: int, run_id: int, ids: Sequence[int], ts: str
+) -> int:
+    """``failed`` rows whose source message no longer exists become ``skipped`` (nothing left to
+    retry); returns how many. ``run_id`` is the retry that noticed."""
+    marks = ",".join("?" * len(ids))
+    cur = await db.execute(
+        "UPDATE msg_map SET status = 'skipped', reason = ?, run_id = ?, ts = ? "  # noqa: S608
+        f"WHERE mirror_id = ? AND status = 'failed' AND src_msg_id IN ({marks})",
+        (GONE, run_id, ts, mirror_id, *ids),
+    )
+    return cur.rowcount
 
 
 async def count_done(db: aiosqlite.Connection, mirror_id: int) -> int:

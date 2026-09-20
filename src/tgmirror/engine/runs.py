@@ -56,6 +56,7 @@ class RunRequest:
     filters_json: str | None = None
     force: bool = False  # ``--force-takeover``
     fresh: bool = False  # ``--fresh``: forget the pair's progress and copy everything again
+    retry_of: int | None = None  # ``retry``: send the ``failed`` messages of this run again
 
 
 async def begin_run(
@@ -67,7 +68,11 @@ async def begin_run(
     *,
     clock: Clock = utc_now,
 ) -> StartedRun:
-    """Validate and start a run of the pair; a pair seen before continues from its cursor."""
+    """Validate and start a run of the pair; a pair seen before continues from its cursor.
+
+    Like the destination read below, the source read is setup that happens before any copying
+    (hard rule 1's exception), one cheap request per run.
+    """
     request = request or RunRequest()
     if request.mode not in SUPPORTED_MODES:
         raise ModeUnsupported(request.mode)
@@ -78,11 +83,13 @@ async def begin_run(
     # it is recorded once, so reconcile never scans what the destination held before.
     known = await store.find_mirror(src.id, dst.id) is not None
     base = 0 if known and not request.fresh else await gateway.last_message_id(dst.id)
+    # A retry is measured by how many failed messages are left, so it needs no source total.
+    head = 0 if request.retry_of is not None else await gateway.last_message_id(src.id)
     spec = RunSpec(
         src=src,
         dst=dst,
         mode=request.mode,
-        options=RunOptions(request.batch_size, base, request.pushdown),
+        options=RunOptions(request.batch_size, base, request.pushdown, head, request.retry_of),
         filters_json=request.filters_json,
     )
     return await store.start_run(spec, force=request.force, fresh=request.fresh)
