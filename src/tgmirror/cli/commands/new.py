@@ -35,7 +35,7 @@ from tgmirror.engine.endpoints import (
     materialize,
     plan_endpoints,
 )
-from tgmirror.engine.jobs import SUPPORTED_MODES, ModeUnsupported, NewJob, create_job
+from tgmirror.engine.jobs import SUPPORTED_MODES, JobExists, ModeUnsupported, NewJob, create_job
 from tgmirror.filters.model import FilterSpec
 from tgmirror.ui.messages import t
 from tgmirror.ui.tables import channel_label
@@ -167,6 +167,11 @@ def new(
             plan = plan_endpoints(source, destination)  # every refusal happens before any write
             for code in plan.warnings:
                 typer.echo(t(f"warn.{code}"), err=True)
+
+            if isinstance(plan.dst, ChannelInfo):  # fail before previewing or asking anything
+                async with opened_store(rt) as store:
+                    if (old := await store.find_job_for_pair(plan.src.id, plan.dst.id)) is not None:
+                        raise JobExists(old, refilter=filters is not None and not filters.is_empty)
 
             if filters is None:  # no flags: the wizard asks, but only if it asked for the rest too
                 asked = (

@@ -127,7 +127,7 @@ def describe(exc: TgMirrorError) -> str:
                 matches=", ".join(f"{j.id} ({j.name})" for j in exc.matches),
             )
         case JobExists():
-            return t("err.job_exists", id=exc.job.id)
+            return t("err.job_exists_refilter" if exc.refilter else "err.job_exists", id=exc.job.id)
         case ModeUnsupported():
             return t("err.mode_unsupported", mode=exc.mode)
         case JobWaiting():

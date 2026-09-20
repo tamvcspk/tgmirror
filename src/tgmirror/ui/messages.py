@@ -150,6 +150,12 @@ VI: dict[str, str] = {
     "err.job_exists": (
         "Job {id} đã sao chép nguồn này vào đích này. Chạy tiếp bằng `tgmirror run {id}`."
     ),
+    "err.job_exists_refilter": (
+        "Job {id} đã sao chép nguồn này vào đích này, nên filter bạn vừa nhập KHÔNG được áp dụng "
+        "và không có gì được lưu. Đổi filter của job đó: `tgmirror run {id} --refilter <cờ lọc>` "
+        "(tin đã sao chép giữ nguyên ở đích, tin khớp mới được thêm vào cuối), "
+        "hoặc chọn một đích khác."
+    ),
     "err.mode_unsupported": (
         "Chế độ «{mode}» chưa dùng được (reupload có từ phase 6). Dùng auto hoặc copy."
     ),
@@ -349,6 +355,12 @@ EN: dict[str, str] = {
     "err.job_exists": (
         "Job {id} already copies this source into this destination. "
         "Continue it with `tgmirror run {id}`."
+    ),
+    "err.job_exists_refilter": (
+        "Job {id} already copies this source into this destination, so the filter you just gave "
+        "was NOT applied and nothing was saved. To change that job's filter: "
+        "`tgmirror run {id} --refilter <filter flags>` (what was copied stays in the destination, "
+        "newly matching messages are appended), or pick another destination."
     ),
     "err.mode_unsupported": (
         "Mode '{mode}' is not available yet (reupload arrives in phase 6). Use auto or copy."

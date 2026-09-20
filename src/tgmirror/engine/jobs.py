@@ -40,9 +40,10 @@ class AmbiguousJob(JobError):
 class JobExists(JobError):
     """One job per source/destination pair: a second one would copy everything twice."""
 
-    def __init__(self, job: Job) -> None:
+    def __init__(self, job: Job, *, refilter: bool = False) -> None:
         super().__init__(f"job {job.id} already copies this source into this destination")
         self.job = job
+        self.refilter = refilter  # the user asked for a filter: it was NOT applied to the old job
 
 
 class ModeUnsupported(JobError):

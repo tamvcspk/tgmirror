@@ -52,7 +52,7 @@ tgmirror new --src -1001234567890 --dst -1009876543210 --filter-file filters.yam
 
 Wizard chỉ thu thập giá trị (kể cả filter: cùng `FlagFilters` như cờ, rồi `from_flags`) rồi gọi cùng một hàm `create_job(spec)` như flag. Không được có logic chỉ tồn tại ở một nhánh.
 
-Từ phase 2 cả hai nhánh đi qua `engine/endpoints.py` (`find_channel` → `plan_endpoints` → `materialize`) rồi `engine/jobs.py` (`create_job`, kiểm `--mode`, mỗi cặp nguồn/đích chỉ một job: cặp đã có job thì mã 2 kèm id job) và `run`. Quy tắc kiểm tra:
+Từ phase 2 cả hai nhánh đi qua `engine/endpoints.py` (`find_channel` → `plan_endpoints` → `materialize`) rồi `engine/jobs.py` (`create_job`, kiểm `--mode`, mỗi cặp nguồn/đích chỉ một job: cặp đã có job thì mã 2 kèm id job; kiểm tra **ngay sau khi chọn nguồn/đích**, trước bước filter, xem trước và mọi câu hỏi. Nếu người dùng đã đưa cờ lọc thì thông báo nói rõ filter **không** được áp dụng và chỉ tới `tgmirror run <job> --refilter`) và `run`. Quy tắc kiểm tra:
 
 - `--src`/`--dst` nhận `@username`, id (`-100...` hoặc số trần) hoặc **tên chính xác** (không phân biệt hoa thường, phải duy nhất; không đoán theo một phần tên); một từ không khớp tên nào thì thử làm username không có `@`. Chỉ khớp trong các chat đã join. **PowerShell**: phải viết `"@ten_kenh"` trong dấu nháy, vì `@ten_kenh` trần bị shell hiểu là splatting và biến mất (khi đó `--src` nuốt cờ kế tiếp và lệnh báo "unexpected extra argument").
 - Nguồn bật `noforwards` và user không phải admin → từ chối (D3), thoát mã 4; là admin → cảnh báo (tắt tạm hoặc `--mode reupload` từ phase 6).

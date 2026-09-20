@@ -459,3 +459,61 @@ def test_filter_flags_without_refilter_are_refused_not_ignored(
     assert result.exit_code == 2 and "--refilter" in result.output
     assert filters_of(rt) == {}
     assert gateway.calls_to("copy_messages") == []
+
+
+# ---- a pair that already has a job ----------------------------------------------------------
+
+
+def test_a_filter_for_a_pair_that_already_has_a_job_is_refused_up_front_and_says_how_to_change_it(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """The real-account slip: preview and 'save?' first, 'job exists' last, then `run 1` ran the
+    old unfiltered job. Now it stops before previewing, and names --refilter."""
+    tagged_source(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+
+    result = runner.invoke(
+        app,
+        ["new", "--src", "Source", "--dst", "Copy", "--media", "video", "--preview"],
+        obj=rt,
+    )
+
+    assert result.exit_code == 2
+    assert "Preview" not in result.output  # refused before any read
+    assert "NOT applied" in result.output and "run 1 --refilter" in result.output
+    (job,) = saved_jobs(rt)
+    assert job.filters_json == "{}"
+
+
+def test_without_a_filter_the_existing_job_message_just_says_to_continue_it(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    source_and_target(gateway)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+
+    result = runner.invoke(app, ["new", "--src", "Source", "--dst", "Copy", "--yes"], obj=rt)
+
+    assert result.exit_code == 2
+    assert "run 1" in result.output and "--refilter" not in result.output
+
+
+def test_the_wizard_stops_before_asking_for_a_filter_when_the_pair_has_a_job(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    source_and_target(gateway)
+    runner.invoke(
+        app,
+        ["new", "--src", "Source", "--dst", "Copy", "--yes"],
+        obj=make_runtime(gateway=gateway, root=tmp_path / "w"),
+    )
+    rt, prompter = wizard_rt(
+        make_runtime, gateway, tmp_path / "w", select=["Source", "Copy"], confirm=[]
+    )
+
+    result = runner.invoke(app, ["new"], obj=rt)
+
+    assert result.exit_code == 2
+    assert [k for k, _ in prompter.asked if k in ("checkbox", "confirm")] == []
+    assert len(prompter.select_labels) == 2  # source and destination, not the filter step
