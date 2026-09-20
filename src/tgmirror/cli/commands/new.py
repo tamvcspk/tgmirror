@@ -1,7 +1,7 @@
-"""``tgmirror new``: choose the source and the destination, then save the job.
+"""``tgmirror new``: choose the source, the destination and the filter, then save the job.
 
-Wizard steps 1-2 (source, destination) and the "run it now?" question. Filters and the options
-step arrive with phase 3 onwards; until then a job copies everything, in chronological order.
+Wizard steps 1-3 (source, destination, filter), the preview of step 5 and the "run it now?"
+question. The options step (4) arrives with later phases; until then a job uses the defaults.
 """
 
 from typing import Annotated
@@ -11,7 +11,24 @@ import typer
 from tgmirror.cli import wizard
 from tgmirror.cli.commands.run import execute
 from tgmirror.cli.errors import UsageProblem, run
+from tgmirror.cli.filter_options import (
+    AlbumOption,
+    ContainsOption,
+    ExcludeMediaOption,
+    ExcludeRegexOption,
+    FilterFileOption,
+    HashtagOption,
+    MaxSizeOption,
+    MediaOption,
+    MinSizeOption,
+    RegexOption,
+    SinceOption,
+    UntilOption,
+    collect,
+)
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.core.gateway import ChannelInfo, TelegramGateway
+from tgmirror.engine import preview
 from tgmirror.engine.endpoints import (
     NewChannelSpec,
     find_channel,
@@ -19,6 +36,7 @@ from tgmirror.engine.endpoints import (
     plan_endpoints,
 )
 from tgmirror.engine.jobs import SUPPORTED_MODES, ModeUnsupported, NewJob, create_job
+from tgmirror.filters.model import FilterSpec
 from tgmirror.ui.messages import t
 from tgmirror.ui.tables import channel_label
 
@@ -55,19 +73,50 @@ def new(
             help="Messages per copy call (default: batch_size from config.toml, 20).",
         ),
     ] = None,
+    media: MediaOption = None,
+    hashtag: HashtagOption = None,
+    contains: ContainsOption = None,
+    regex: RegexOption = None,
+    exclude_regex: ExcludeRegexOption = None,
+    exclude_media: ExcludeMediaOption = None,
+    since: SinceOption = None,
+    until: UntilOption = None,
+    min_size: MinSizeOption = None,
+    max_size: MaxSizeOption = None,
+    album: AlbumOption = None,
+    filter_file: FilterFileOption = None,
+    pushdown: Annotated[
+        bool,
+        typer.Option(
+            "--pushdown/--no-pushdown",
+            help="Let Telegram narrow the reading by filter (default). --no-pushdown reads "
+            "everything and filters here: slower, for checking that nothing is missed.",
+        ),
+    ] = True,
+    preview_flag: Annotated[
+        bool | None,
+        typer.Option(
+            "--preview/--no-preview",
+            help="Show how many of the first messages match (default: on a terminal, when "
+            "a filter is set and --yes is not given).",
+        ),
+    ] = None,
     run_now: Annotated[
         bool | None,
         typer.Option("--run/--no-run", help="Run the job right after saving it (default: ask)."),
     ] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
 ) -> None:
-    """Pick a source and a destination (existing, or newly created) and save the job.
+    """Pick a source, a destination (existing, or newly created) and a filter; save the job.
 
     Without --src/--dst/--dst-new it asks; with them it never prompts.
 
     The job only runs if you say so (--run, or yes to the question); else `tgmirror run <job>`.
 
     Example: tgmirror new --src "@my_channel" --dst-new "My channel (copy)" --yes --run
+
+    With a filter: tgmirror new --src "@my_channel" --dst-new "Videos" --media video
+    --hashtag "#news" --since 2024-01-01 --yes
 
     In PowerShell keep the quotes around @names: an unquoted @name is dropped by the shell.
     """
@@ -78,6 +127,20 @@ def new(
             raise UsageProblem("err.conflicting_flags", flags="--dst / --dst-new")
         if mode not in SUPPORTED_MODES:  # before anything is created on the account
             raise ModeUnsupported(mode)
+        filters = collect(
+            media=media,
+            hashtag=hashtag,
+            contains=contains,
+            regex=regex,
+            exclude_regex=exclude_regex,
+            exclude_media=exclude_media,
+            since=since,
+            until=until,
+            min_size=min_size,
+            max_size=max_size,
+            album=album,
+            filter_file=filter_file,
+        )  # a bad filter is a usage error before anything is asked or written
 
         async with authorized(rt) as conn:
             channels = await conn.gateway.list_channels()
@@ -105,6 +168,13 @@ def new(
             for code in plan.warnings:
                 typer.echo(t(f"warn.{code}"), err=True)
 
+            if filters is None:  # no flags: the wizard asks, but only if it asked for the rest too
+                asked = (
+                    rt.interactive and not yes and (src is None or (dst is None and not dst_new))
+                )
+                filters = await wizard.pick_filters(rt.prompter) if asked else FilterSpec()
+            await _preview(rt, conn.gateway, source, filters, preview_flag, yes, pushdown)
+
             if isinstance(plan.dst, NewChannelSpec):
                 await _confirm_creation(rt, plan.dst, yes)
 
@@ -114,7 +184,9 @@ def new(
                 key = "new.dst_created" if endpoints.created else "new.dst"
                 typer.echo(t(key, channel=channel_label(endpoints.dst)))
 
-                options = NewJob(name, mode, batch_size or rt.config().limits.batch_size)
+                options = NewJob(
+                    name, mode, batch_size or rt.config().limits.batch_size, filters, pushdown
+                )
                 job = await create_job(store, conn.gateway, endpoints, options)
                 typer.echo(t("new.saved", id=job.id, name=job.name))
 
@@ -124,6 +196,35 @@ def new(
                     typer.echo(t("new.run_hint", id=job.id))
 
     run(rt, command())
+
+
+async def _preview(
+    rt: Runtime,
+    gateway: TelegramGateway,
+    source: ChannelInfo,
+    spec: FilterSpec,
+    flag: bool | None,
+    yes: bool,
+    pushdown: bool,
+) -> None:
+    """Wizard step 5: a sample of what the filter selects, and (on a terminal) a last yes/no.
+
+    Shown when asked for with ``--preview``, or by default on a terminal with a filter and no
+    ``--yes``. Declining leaves nothing behind: it runs before any channel is created.
+    """
+    shown = flag if flag is not None else (rt.interactive and not yes and not spec.is_empty)
+    if not shown:
+        return
+    result = await preview.sample(gateway, source.id, spec, pushdown=pushdown)
+    if result.scanned == 0:
+        typer.echo(t("new.preview_empty"))
+    else:
+        typer.echo(t("new.preview", matched=result.matched, scanned=result.scanned))
+        for text in result.examples:
+            typer.echo(t("new.preview_example", text=text))
+    if rt.interactive and not yes and not await rt.prompter.confirm(t("new.confirm_save")):
+        typer.echo(t("err.aborted"), err=True)
+        raise typer.Exit(1)
 
 
 async def _confirm_creation(rt: Runtime, spec: NewChannelSpec, yes: bool) -> None:

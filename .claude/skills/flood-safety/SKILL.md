@@ -42,7 +42,7 @@ When adding or changing a code path that can raise flood errors:
 
 - Batch to reduce call count (forward up to `batch_size` ids per call).
 - One account ⇒ one job at a time. Never parallelise sends across jobs on the same session.
-- Read calls are limited too: set `wait_time`, cache entities.
+- Read calls are limited too: set `wait_time`, cache entities. Filters add reads (date-to-id lookups, one unfiltered window per album after content pushdown); phase 4 must put them through the limiter.
 - Default order is chronological (D4). Any reordering option must be opt-in.
 - `tgmirror doctor` and README must say: risk is reduced, not eliminated; use an established account.
 

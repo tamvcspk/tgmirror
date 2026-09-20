@@ -9,7 +9,7 @@ adds reading and copying messages. The limiter is wired in at phase 4 (docs/06-l
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from telethon import TelegramClient, errors, types, utils
@@ -39,6 +39,7 @@ from tgmirror.core.errors import (
     Transient,
 )
 from tgmirror.core.gateway import (
+    ALBUM_MARGIN,
     NO_FILTER,
     ChannelInfo,
     ChatKind,
@@ -50,6 +51,17 @@ from tgmirror.core.gateway import (
 from tgmirror.core.paths import Paths
 
 READ_WAIT = 1.0  # seconds between history pages: reads are rate-limited too (docs/05)
+
+# ``media`` pushdown (docs/03-filters.md): only kinds whose Telegram filter is a superset of ours.
+# ``filters.pushdown.PUSHABLE_MEDIA`` lists the same kinds; a test keeps the two in step.
+_MEDIA_FILTERS: dict[MediaKind, type] = {
+    MediaKind.PHOTO: types.InputMessagesFilterPhotos,
+    MediaKind.VIDEO: types.InputMessagesFilterVideo,
+    MediaKind.AUDIO: types.InputMessagesFilterMusic,
+    MediaKind.VOICE: types.InputMessagesFilterVoice,
+    MediaKind.GIF: types.InputMessagesFilterGif,
+    MediaKind.VIDEO_NOTE: types.InputMessagesFilterRoundVideo,
+}
 
 # ---- error mapping --------------------------------------------------------------------------
 
@@ -233,15 +245,22 @@ def media_kind(message: custom.Message) -> MediaKind:
     return MediaKind.DOCUMENT  # dice, stories, giveaways...: attachments we have no filter name for
 
 
-def src_message(message: object) -> SrcMessage | None:
-    """Reduce a Telethon message to ``SrcMessage``; ``None`` for anything that is not a message.
+def _hashtags(message: custom.Message) -> tuple[str, ...]:
+    """Hashtags from the message entities, lower-cased with ``#`` (not from a text search)."""
+    found = message.get_entities_text(types.MessageEntityHashtag)
+    return tuple(text.split("@", 1)[0].casefold() for _, text in found)  # groups: #tag@channel
 
-    Only what phase 2 needs (id, date, text, media kind, album, service flag). The filter fields
-    (hashtags, size, duration, mime, views) are filled in phase 3 together with their tests.
-    """
+
+def src_message(message: object) -> SrcMessage | None:
+    """Reduce a Telethon message to ``SrcMessage``; ``None`` for anything that is not a message."""
     # Telethon's patched MessageEmpty is a custom.Message too, so it has to be excluded by name
     if not isinstance(message, custom.Message) or isinstance(message, types.MessageEmpty):
         return None
+    size = duration = mime = None
+    # only real attachments: ``message.file`` would also describe a link preview's picture
+    attachment = isinstance(message.media, types.MessageMediaPhoto | types.MessageMediaDocument)
+    if attachment and (file := message.file) is not None:
+        size, duration, mime = file.size, file.duration, file.mime_type
     return SrcMessage(
         id=message.id,
         date=message.date,
@@ -249,6 +268,11 @@ def src_message(message: object) -> SrcMessage | None:
         media=media_kind(message),
         grouped_id=message.grouped_id,
         is_service=message.action is not None,
+        hashtags=_hashtags(message),
+        size=size,
+        duration=duration,
+        mime=mime,
+        views=message.views,
     )
 
 
@@ -340,22 +364,39 @@ class TelethonGateway:
             latest = await self._client.get_messages(peer, limit=1)
         return latest[0].id if latest else 0
 
-    def iter_messages(
+    async def iter_messages(
         self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER
     ) -> AsyncIterator[SrcMessage]:
-        if filters != NO_FILTER:
-            raise NotImplementedError("server-side filters arrive in phase 3")
-        return self._iter_messages(src, min_id)
-
-    async def _iter_messages(self, src: int, min_id: int) -> AsyncIterator[SrcMessage]:
         peer = await self._peer(src)
         with mapped_errors():
-            # reverse=True: oldest first (D4); Telethon starts after min_id (spike 3, docs/06)
-            async for message in self._client.iter_messages(
-                peer, min_id=min_id, reverse=True, wait_time=READ_WAIT
+            low, high = min_id, filters.max_id  # ``high`` is included
+            if filters.since is not None:
+                # one message at (or just after) the date; the margin keeps a boundary album whole
+                first = await self._first_id_after(peer, filters.since - timedelta(seconds=1))
+                if first is None:
+                    return  # nothing that new exists
+                low = max(low, first - 1 - ALBUM_MARGIN)
+            if filters.until is not None and (
+                past := await self._first_id_after(peer, filters.until)
             ):
+                high = min(past + ALBUM_MARGIN, high) if high is not None else past + ALBUM_MARGIN
+            # reverse=True: oldest first (D4); Telethon starts after ``min_id`` and excludes
+            # ``max_id`` itself (spike 3, docs/06). ``filter``/``search`` become a search request.
+            options: dict[str, object] = {"min_id": low, "reverse": True, "wait_time": READ_WAIT}
+            if high is not None:
+                options["max_id"] = high + 1
+            if filters.media is not None:
+                options["filter"] = _MEDIA_FILTERS[filters.media]
+            if filters.search is not None:
+                options["search"] = filters.search
+            async for message in self._client.iter_messages(peer, **options):
                 if (reduced := src_message(message)) is not None:
                     yield reduced
+
+    async def _first_id_after(self, peer: object, moment: datetime) -> int | None:
+        """Id of the oldest message dated after ``moment`` (``None`` when there is none)."""
+        found = await self._client.get_messages(peer, limit=1, offset_date=moment, reverse=True)
+        return found[0].id if found else None
 
     async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]:
         from_peer, to_peer = await self._peer(src), await self._peer(dst)

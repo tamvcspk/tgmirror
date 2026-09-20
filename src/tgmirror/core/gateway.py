@@ -101,17 +101,29 @@ class Unit:
         return self.grouped_id is not None
 
 
+ALBUM_MARGIN = 10  # an album has at most 10 messages, with consecutive ids
+
+
 @dataclass(frozen=True, slots=True)
 class ServerFilter:
     """The part of a filter Telegram can evaluate for us (docs/03-filters.md, "Server pushdown").
 
     It may only *narrow safely*: implementations return a superset of the true matches, and the
     client matcher runs again on the result. ``None`` means "no restriction".
+
+    Two kinds of narrowing need care because an album must stay whole (hard rule 4):
+
+    - ``since``/``until`` are dates, so only the gateway can turn them into positions. It starts
+      ``ALBUM_MARGIN`` ids before the first message at ``since`` and stops ``ALBUM_MARGIN`` ids
+      after the first message at ``until``, so an album on either boundary is returned whole.
+    - ``media``/``search`` drop the members of an album that do not match themselves. The caller
+      (``engine/planner.py``) completes such albums with a second, unfiltered read.
     """
 
     media: MediaKind | None = None
     search: str | None = None
-    since: datetime | None = None  # oldest date to include (Telethon: offset_date + reverse)
+    since: datetime | None = None  # oldest date wanted (inclusive)
+    until: datetime | None = None  # first date not wanted (exclusive)
     max_id: int | None = None  # highest id to include
 
 

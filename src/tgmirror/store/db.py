@@ -308,10 +308,38 @@ class Store:
             await msgmap.confirm_pending(db, job_id, mapping, ts)
             await self._bump(db, job_id, {"done": len(mapping)}, max(mapping), ts)
 
-    async def advance_cursor(self, job_id: int, cursor: int) -> None:
-        """Move the cursor past messages that need no work (already ``done``)."""
+    async def advance_cursor(
+        self, job_id: int, cursor: int, *, extra_stats: Mapping[str, int] | None = None
+    ) -> Job:
+        """Move the cursor past messages that need no work (already ``done``, or filtered out)."""
         async with self._tx() as db:
-            await self._bump(db, job_id, {}, cursor, self._ts())
+            await self._bump(db, job_id, extra_stats or {}, cursor, self._ts())
+        return await self._require(job_id)
+
+    async def replace_filters(self, job_id: int, filters_json: str) -> Job:
+        """``run --refilter``: new filter, read the source again from the start.
+
+        The one place the cursor moves backwards (rule 3 forbids it everywhere else): messages
+        already ``done`` are skipped through ``msg_map`` when the source is scanned again, and the
+        filter-skip counter starts over because that scan counts it again. Refused while another
+        process is running the job.
+        """
+        now = self._now()
+        async with self._tx() as db:
+            cur = await db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+            row = await cur.fetchone()
+            if row is None:
+                raise StoreError(f"job {job_id} does not exist")
+            job = job_from_row(row)
+            if job.status is JobStatus.RUNNING and now - job.updated_at < HEARTBEAT_TIMEOUT:
+                raise JobBusy(job_id)
+            stats = {k: v for k, v in job.stats.items() if k != "skipped_filter"}
+            await db.execute(
+                "UPDATE jobs SET filters_json = ?, cursor_src_id = 0, stats_json = ?, "
+                "updated_at = ? WHERE id = ?",
+                (filters_json, json.dumps(stats, sort_keys=True), now.isoformat(), job_id),
+            )
+        return await self._require(job_id)
 
     async def done_ids(self, job_id: int, ids: Sequence[int]) -> set[int]:
         async with self._lock:

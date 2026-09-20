@@ -208,7 +208,9 @@ def test_wizard_and_flags_end_in_the_same_job_and_the_same_copy(
     flags = runner.invoke(
         app, ["new", "--src", "Source", "--dst", "Copy", "--run", "--yes"], obj=flags_rt
     )
-    prompter = ScriptedPrompter(select=["Source", "Copy"], confirm=[True])  # ... run it now: yes
+    prompter = ScriptedPrompter(
+        select=["Source", "Copy", "No filter"], confirm=[True]
+    )  # ... run it now: yes
     wizard_rt = make_runtime(
         gateway=wizard_gw, prompter=prompter, interactive=True, root=tmp_path / "wizard"
     )
@@ -228,7 +230,7 @@ def test_the_wizard_does_not_run_unless_told_to(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
     _, dst = source_with_messages(gateway)
-    prompter = ScriptedPrompter(select=["Source", "Copy"], confirm=[False])
+    prompter = ScriptedPrompter(select=["Source", "Copy", "No filter"], confirm=[False])
     rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
 
     result = runner.invoke(app, ["new"], obj=rt)

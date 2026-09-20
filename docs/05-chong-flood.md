@@ -21,7 +21,7 @@ Mọi lời gọi gateway đi qua `await limiter.acquire(cost, kind)`.
 - **Jitter**: mỗi lần chờ nhân với `uniform(1 - jitter, 1 + jitter)`.
 - **Long pause**: sau mỗi `long_pause_every` tin, nghỉ ngẫu nhiên trong `long_pause_range` giây.
 - **Daily cap**: đếm tin gửi trong ngày (`limiter_state`); chạm `daily_cap` → job chuyển `waiting_flood` (`reason=daily_cap`) với `resume_at` là 00:00 ngày kế; không phải lỗi.
-- **Cost**: tin gửi tính theo số tin trong batch; lời gọi đọc (`iter_messages`) dùng bucket đọc riêng, nhẹ hơn, đặt `wait_time` rõ ràng.
+- **Cost**: tin gửi tính theo số tin trong batch; lời gọi đọc (`iter_messages`) dùng bucket đọc riêng, nhẹ hơn, đặt `wait_time` rõ ràng. Từ phase 3 filter thêm lời gọi đọc: một lần tra ngày → id cho mỗi đầu của `--since`/`--until`, và (khi đẩy `media`/`search` xuống server) một lần đọc cửa sổ cho mỗi album để hoàn thiện album (`03-filters.md`). Các lời gọi này chưa có bucket riêng (limiter tạm thời chỉ giãn cách batch); tốc độ bị chặn tự nhiên bởi giãn cách batch, nhưng phase 4 phải đưa chúng vào limiter.
 - **Upload**: tin cần upload (strategy B) cộng thêm delay theo dung lượng và `upload_concurrency = 1` mặc định.
 - Trạng thái (`delay`, đếm ngày) được lưu lại để lần chạy sau không "quên" bài học.
 

@@ -48,6 +48,8 @@ from tgmirror.engine.jobs import (
     JobWaiting,
     ModeUnsupported,
 )
+from tgmirror.filters.model import FilterError
+from tgmirror.filters.parser import FilterMix
 from tgmirror.ui.messages import t
 from tgmirror.ui.tables import channel_label
 
@@ -129,6 +131,10 @@ def describe(exc: TgMirrorError) -> str:
             return t(f"err.job_waiting_{exc.reason}", until=until)
         case JobBusy():
             return t("err.job_busy", id=exc.job_id)
+        case FilterMix():
+            return t("err.filter_mix")
+        case FilterError():
+            return t("err.filter", detail=exc.detail)
         case SchemaTooNew():
             return t("err.schema_too_new")
         case StoreError():
@@ -143,7 +149,9 @@ def exit_code(exc: TgMirrorError) -> int:
         exc, NoPermission | ForwardsRestricted | SourceRestricted | DestinationNotWritable
     ):
         return 4
-    if isinstance(exc, UsageError | ConfigError | BadApiCredentials | EndpointError | JobError):
+    if isinstance(
+        exc, UsageError | ConfigError | BadApiCredentials | EndpointError | JobError | FilterError
+    ):
         return 2
     return 1
 

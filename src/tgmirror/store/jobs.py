@@ -47,6 +47,9 @@ class JobOptions:
     # Highest message id of the destination when the job was created. Reconcile reads the
     # destination after ``max(done dst id, dst_base_id)``, so it never scans an old destination.
     dst_base_id: int = 0
+    # False reads the whole source instead of letting Telegram narrow it (docs/03-filters.md):
+    # the escape hatch for checking that pushdown loses nothing on a real account.
+    pushdown: bool = True
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -67,7 +70,7 @@ class JobSpec:
     dst: ChannelInfo
     mode: str = "auto"
     options: JobOptions = field(default_factory=JobOptions)
-    filters_json: str = "{}"  # filters arrive in phase 3
+    filters_json: str = "{}"  # canonical ``FilterSpec.to_json()``; ``{}`` clones everything
     account: str = "default"
 
 
@@ -100,6 +103,10 @@ class Job:
     @property
     def failed(self) -> int:
         return self.stats.get("failed", 0)
+
+    @property
+    def skipped_filter(self) -> int:
+        return self.stats.get("skipped_filter", 0)
 
 
 def job_from_row(row: sqlite3.Row) -> Job:

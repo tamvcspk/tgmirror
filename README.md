@@ -2,7 +2,7 @@
 
 CLI tool that clones a Telegram channel, group or forum you have joined into another one (existing or newly created; forum topics are mapped topic to topic), using your own Telegram API credentials (MTProto, via [Telethon](https://github.com/LonamiWebs/Telethon)).
 
-> Status: **phase 2 (copy, saved jobs, pause/resume) done; tested with fakes and run by hand on a real account with a channel that allows forwarding (albums and kill-then-resume work; a "Restrict saving content" group you do not administer is refused as designed; an admin-owned restricted source is not tried yet)**. `login`, `logout`, `whoami`, `channels`, `new` (saves a job), `run`, `pause` and `stop` exist. Filters, flood auto-wait, delta `sync`, reupload and the TUI come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
+> Status: **phase 3 (filters) done on top of phase 2 (copy, saved jobs, pause/resume). Phase 2 was run by hand on a real account with a channel that allows forwarding (albums and kill-then-resume work; a "Restrict saving content" group you do not administer is refused as designed; an admin-owned restricted source is not tried yet). Filters, including the server-side narrowing, are tested against fakes only: compare a job made with `--no-pushdown` before trusting them on a real channel**. `login`, `logout`, `whoami`, `channels`, `new` (saves a job), `run` (also `--refilter`), `pause` and `stop` exist. Flood auto-wait, delta `sync`, reupload and the TUI come in later phases. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
 
 ## Goals
 
@@ -14,7 +14,7 @@ CLI tool that clones a Telegram channel, group or forum you have joined into ano
 
 ## Usage
 
-Available now (phase 2):
+Available now (phase 3):
 
 ```bash
 tgmirror login                # api_id / api_hash (from my.telegram.org/apps) + account login
@@ -22,14 +22,17 @@ tgmirror whoami | logout
 tgmirror channels [--search TEXT] [--writable] [--json]
 tgmirror new                  # wizard: pick source, pick or create destination, save the job, maybe run it
 tgmirror new --src "@my_channel" --dst-new "My channel (copy)" --yes --run   # keep the quotes in PowerShell
+tgmirror new --src "@my_channel" --dst-new "Videos" --media video --hashtag "#news" --since 2024-01-01 --yes
+tgmirror new --src "@my_channel" --dst "Copy" --filter-file filters.yaml --preview   # YAML: include/exclude/date/id/album
 tgmirror run <job>            # start / resume (id or exact name); Ctrl+C saves and exits
+tgmirror run <job> --refilter --media photo   # change what a job copies, scan again (nothing is copied twice)
 tgmirror pause|stop <job>     # from another terminal: stop after the current batch
 ```
 
 Planned (later phases):
 
 ```bash
-tgmirror new                  # full wizard: source -> destination -> filters
+tgmirror new                  # wizard: also the options step (mode, caption handling)
 tgmirror sync <job>           # delta clone (today `run` on a finished job already picks up new messages)
 tgmirror status | jobs
 ```

@@ -160,6 +160,42 @@ VI: dict[str, str] = {
     ),
     "err.store": "Lỗi cơ sở dữ liệu: {detail}",
     "err.schema_too_new": "Cơ sở dữ liệu do bản tgmirror mới hơn tạo ra. Hãy nâng cấp tgmirror.",
+    "err.filter": "Filter không hợp lệ: {detail}",
+    "err.filter_mix": (
+        "Không dùng --filter-file cùng các cờ lọc khác (--media, --hashtag, --since, ...)."
+    ),
+    "err.refilter_needs_filter": "--refilter cần filter mới: các cờ lọc hoặc --filter-file.",
+    "err.filter_needs_refilter": (
+        "Job đã tạo rồi nên các cờ lọc chỉ dùng được cùng --refilter (đổi filter, quét lại từ đầu)."
+    ),
+    # filters (wizard step 3, preview, refilter)
+    "filter.pick": "Lọc nội dung sao chép?",
+    "filter.none": "Không lọc: sao chép tất cả",
+    "filter.criteria": "Chọn tiêu chí",
+    "filter.file": "Nạp từ file YAML",
+    "filter.ask_media": "Loại media (phím cách để chọn; không chọn gì = tất cả)",
+    "filter.ask_hashtags": "Hashtag, cách nhau bằng dấu phẩy (để trống = không lọc)",
+    "filter.ask_contains": "Từ khóa trong nội dung, cách nhau bằng dấu phẩy (để trống = không lọc)",
+    "filter.ask_since": "Từ ngày YYYY-MM-DD (để trống = từ đầu)",
+    "filter.ask_until": "Đến ngày YYYY-MM-DD, không tính ngày này (để trống = tới hết)",
+    "filter.ask_min_size": "Dung lượng tối thiểu, ví dụ 10MB (để trống = không giới hạn)",
+    "filter.ask_max_size": "Dung lượng tối đa, ví dụ 2GB (để trống = không giới hạn)",
+    "filter.ask_file": "Đường dẫn file YAML",
+    "new.preview": (
+        "Xem trước: {matched} trong {scanned} tin đầu tiên của khoảng đã chọn sẽ được sao chép."
+    ),
+    "new.preview_empty": "Xem trước: nguồn không có tin nào trong khoảng đã chọn.",
+    "new.preview_example": "  · {text}",
+    "new.confirm_save": "Lưu job này?",
+    "run.refiltered": (
+        "Đã đổi filter của job {id}; quét lại nguồn từ đầu. Tin khớp mà chưa sao chép sẽ được "
+        "thêm vào cuối đích (thứ tự ở đích không còn theo thời gian)."
+    ),
+    "run.skipped": "{count} tin bị filter loại.",
+    "run.progress_filtered": (
+        "Job {id}: {done} tin đã sao chép, {skipped} bị filter loại, {failed} lỗi "
+        "(tin nguồn tới id {cursor})."
+    ),
 }
 
 EN: dict[str, str] = {
@@ -311,6 +347,43 @@ EN: dict[str, str] = {
     ),
     "err.store": "Database error: {detail}",
     "err.schema_too_new": "The database was made by a newer tgmirror. Please upgrade tgmirror.",
+    "err.filter": "Invalid filter: {detail}",
+    "err.filter_mix": (
+        "Do not combine --filter-file with the other filter flags (--media, --hashtag, ...)."
+    ),
+    "err.refilter_needs_filter": "--refilter needs the new filter: filter flags or --filter-file.",
+    "err.filter_needs_refilter": (
+        "The job already exists, so filter flags only work together with --refilter "
+        "(replace the filter and scan again from the start)."
+    ),
+    "filter.pick": "Filter what gets copied?",
+    "filter.none": "No filter: copy everything",
+    "filter.criteria": "Pick criteria",
+    "filter.file": "Load from a YAML file",
+    "filter.ask_media": "Media types (space to select; none selected = all)",
+    "filter.ask_hashtags": "Hashtags, comma-separated (empty = no filter)",
+    "filter.ask_contains": "Keywords in the text, comma-separated (empty = no filter)",
+    "filter.ask_since": "From date YYYY-MM-DD (empty = from the start)",
+    "filter.ask_until": "Until date YYYY-MM-DD, that day not included (empty = to the end)",
+    "filter.ask_min_size": "Minimum size, e.g. 10MB (empty = no limit)",
+    "filter.ask_max_size": "Maximum size, e.g. 2GB (empty = no limit)",
+    "filter.ask_file": "Path of the YAML file",
+    "new.preview": (
+        "Preview: {matched} of the first {scanned} messages in the chosen range would be copied."
+    ),
+    "new.preview_empty": "Preview: the source has no messages in the chosen range.",
+    "new.preview_example": "  · {text}",
+    "new.confirm_save": "Save this job?",
+    "run.refiltered": (
+        "Replaced the filter of job {id}; scanning the source again from the start. Messages that "
+        "now match but were not copied are appended to the end of the destination (its order is "
+        "no longer chronological)."
+    ),
+    "run.skipped": "{count} messages were left out by the filter.",
+    "run.progress_filtered": (
+        "Job {id}: {done} messages copied, {skipped} left out by the filter, {failed} failed "
+        "(source up to id {cursor})."
+    ),
 }
 
 

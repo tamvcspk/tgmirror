@@ -24,7 +24,7 @@
 - **gateway**: `TelegramGateway` protocol + `TelethonGateway`. Mọi lời gọi mạng đi qua đây, và đi qua `Limiter`.
 - **engine**: không import Telethon. Làm việc với dataclass riêng (`SrcMessage`, `Unit`, `ChannelInfo`, `ServerFilter`, `MediaKind` định nghĩa trong `core/gateway.py` vì protocol dùng chúng; `Batch` nằm ở engine). `Unit` tự kiểm tra bất biến album (một `grouped_id`, id tăng dần).
 - **store**: chỉ engine và CLI đọc/ghi, qua `Store` (`store/db.py`) với các phương thức theo ý định (`begin_batch`, `commit_batch`, `claim`, `finish`, `set_control`, ...); SQL không rò ra ngoài `store/` (có test).
-- **filters**: thuần logic + một lớp "pushdown" chuyển filter thành tham số `iter_messages`.
+- **filters**: thuần logic, không I/O: `model` (pydantic, chuẩn hóa), `parser` (YAML + cờ), `matcher` (đánh giá một Unit), `pushdown` (`plan_read`: chuyển phần an toàn của filter thành `ReadPlan`/`ServerFilter`). Engine dùng chúng; `engine/preview.py` lấy mẫu để xem trước.
 
 ### `TelegramGateway` (rút gọn)
 
@@ -43,7 +43,7 @@ class TelegramGateway(Protocol):
 
 Đăng nhập cũng là lời gọi mạng nên có protocol riêng, `TelegramAuth` (`core/auth.py`): `account()`, `request_code`, `sign_in_code`, `sign_in_password`, `log_out`. Luồng `login(auth, prompts)` (thử lại tối đa 3 lần cho số điện thoại, mã, mật khẩu; mã hết hạn thì gửi lại một lần) chỉ biết protocol và `LoginPrompts`, nên test được bằng `FakeAuth`. `AccountInfo` cố ý không có số điện thoại.
 
-`ServerFilter(media, search, since, max_id)` là phần Telegram lọc hộ; gateway chỉ được **thu hẹp an toàn** (trả về tập chứa mọi tin khớp), engine luôn chạy lại client matcher (xem `03-filters.md`). `FakeGateway` (`tests/fakes.py`) hiện thực protocol này trong bộ nhớ, có `fail_next(method, error)` để giả lập FloodWait/PeerFlood và `poison(channel, msg_id)` để giả lập một tin làm `copy_messages` ném `PerMessage`.
+`ServerFilter(media, search, since, until, max_id)` là phần Telegram lọc hộ; gateway chỉ được **thu hẹp an toàn** (trả về tập chứa mọi tin khớp), engine luôn chạy lại client matcher (xem `03-filters.md`). `since`/`until` là ngày nên chỉ gateway đổi được thành vị trí (kèm lề `ALBUM_MARGIN` id để album trên biên còn nguyên); `media`/`search` làm rớt các tin anh em trong album nên planner phải hoàn thiện album (một lần đọc không lọc quanh album). `FakeGateway` làm đúng hai điều đó nên test đối chiếu pushdown/quét đầy đủ có nghĩa. `FakeGateway` (`tests/fakes.py`) hiện thực protocol này trong bộ nhớ, có `fail_next(method, error)` để giả lập FloodWait/PeerFlood và `poison(channel, msg_id)` để giả lập một tin làm `copy_messages` ném `PerMessage`.
 
 Hợp đồng của `copy_messages`: kết quả thẳng hàng với `ids`. Lời gọi trả về bình thường là kết luận cuối: `None` nghĩa là Telegram không tạo tin nào cho id đó (đã xóa ở nguồn, không forward được) → `failed('not_copied')`. `PerMessage` nghĩa là Telegram từ chối chính các id (không tạo gì), engine thử lại từng unit. Nếu lời gọi bị ngắt (`Transient`) thì kết quả không rõ, chỉ reconcile mới biết (`04-state-checkpoint.md`).
 
@@ -111,7 +111,7 @@ Chốt 2026-09-19. Chiến lược A (forward phía server) để Telegram giữ
 
 - **Unit**: một tin đơn, hoặc **toàn bộ album** (cùng `grouped_id`). Đơn vị không bao giờ bị tách.
 - **Batch**: tập Unit gửi trong một lời gọi (tổng tin <= `batch_size`). Album lớn hơn `batch_size` vẫn gửi nguyên trong một batch (tối đa 10 tin/album nên không vượt 100).
-- Filter đánh giá trên Unit (xem `03-filters.md`).
+- Filter đánh giá trên Unit (xem `03-filters.md`). Unit không khớp thành một `Skip(count, last_id)` (planner); batcher cộng dồn `Skip` vào `Batch.skipped`/`Batch.upto` của batch đang được phát: con trỏ của batch (`Batch.last_id`) được vượt qua chúng vì chúng đều đứng trước unit chưa vào batch. Một batch đang chờ được phát ra sau mỗi `FLUSH_AFTER` = 500 tin bị loại (kể cả batch chỉ có `Skip`, không unit nào), để quãng dài không có tin khớp vẫn lưu tiến độ và nghe được pause/stop.
 
 ## Vòng lặp runner
 
@@ -140,7 +140,7 @@ for batch in batcher(planner.units(job), job.batch_size):
     ui.update(...)
 ```
 
-`planner.units(job)`: `gw.iter_messages(src, min_id=job.cursor, filters=pushdown(job.filters))` (ascending), gom album, áp `client matcher`, bỏ service message, đưa ra `Unit`.
+`planner.units(...)` (phase 3): `plan = plan_read(filters, job.cursor, pushdown=job.options.pushdown)` rồi `gw.iter_messages(src, min_id=plan.min_id, filters=plan.server)` (ascending), gom album (hoàn thiện album nếu `plan.complete_albums`), áp `Matcher`, bỏ service message, đưa ra `Unit` hoặc `Skip`.
 
 ## Xử lý lỗi
 
@@ -162,10 +162,10 @@ for batch in batcher(planner.units(job), job.batch_size):
 ```
 src/tgmirror/
   core/     gateway.py  auth.py  telethon_gateway.py  limiter.py (tạm thời, phase 2)  errors.py  config.py  paths.py  uploader.py
-  engine/   endpoints.py  jobs.py  planner.py  batcher.py  copy.py  reconcile.py  reupload.py  runner.py
+  engine/   endpoints.py  jobs.py  planner.py  batcher.py  copy.py  reconcile.py  preview.py  reupload.py  runner.py
   filters/  model.py  parser.py  pushdown.py  matcher.py
   store/    schema.sql  db.py  jobs.py  msgmap.py  floodlog.py
-  cli/      app.py  wizard.py  runtime.py  errors.py  interrupt.py  commands/ (auth.py channels.py new.py run.py control.py ...)
+  cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  commands/ (auth.py channels.py new.py run.py control.py ...)
   ui/       messages.py  prompts.py  tables.py  progress.py
 tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integration/
 ```

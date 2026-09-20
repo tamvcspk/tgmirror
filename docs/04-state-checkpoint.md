@@ -16,7 +16,7 @@ CREATE TABLE jobs (
   dst_title     TEXT,
   mode          TEXT NOT NULL,              -- auto|copy|reupload
   filters_json  TEXT NOT NULL,
-  options_json  TEXT NOT NULL,              -- batch_size, dst_base_id (xem dưới); key lạ bị bỏ qua
+  options_json  TEXT NOT NULL,              -- batch_size, dst_base_id, pushdown (xem dưới); key lạ bị bỏ qua
   status        TEXT NOT NULL,              -- created|running|paused|stopped|waiting_flood|done|failed
   control       TEXT NOT NULL DEFAULT 'none', -- none|pause|stop  (do CLI đặt, runner đọc)
   cursor_src_id INTEGER NOT NULL DEFAULT 0, -- id nguồn lớn nhất đã xử lý xong (done/failed/filter-skip)
@@ -71,7 +71,11 @@ CREATE TABLE limiter_state (               -- persist AIMD giữa các lần ch�
 
 `options_json.dst_base_id`: id tin mới nhất của kênh đích lúc tạo job (`gateway.last_message_id`). Reconcile chỉ đọc đích sau `max(dst_msg_id của các hàng done, dst_base_id)`.
 
-Tin bị **filter loại** không được ghi vào `msg_map` (hàng triệu hàng vô ích); chỉ tăng bộ đếm `skipped_filter` và đẩy `cursor_src_id` tiến lên.
+`options_json.pushdown` (mặc định `true`): `false` thì đọc mọi tin sau cursor và chỉ lọc ở máy (`new --no-pushdown`, xem `03-filters.md`).
+
+`jobs.filters_json`: JSON chuẩn hóa của `FilterSpec` (`{}` = không lọc), nạp lại bằng `FilterSpec.from_json` mỗi lần `run`; hỏng thì job `failed` với lý do `FilterError: ...`.
+
+Tin bị **filter loại** không được ghi vào `msg_map` (hàng triệu hàng vô ích); chỉ tăng bộ đếm `stats.skipped_filter` (đếm theo tin, album tính đủ mọi tin) và đẩy `cursor_src_id` tiến lên. Số đếm và con trỏ đi cùng transaction với batch mà chúng được cộng vào (`commit_batch(extra_stats=...)`), hoặc riêng một transaction `advance_cursor(extra_stats=...)` khi batch không có gì để gửi (chỉ có tin bị loại, hoặc mọi unit đã `done`); không bao giờ vượt qua một unit chưa xử lý. Khi Telegram thu hẹp theo nội dung (`media`/`search`) thì tin bị loại ở server không được thấy nên không được đếm và con trỏ chỉ tới unit khớp cuối cùng; lần `run` sau đọc lại từ đó (rẻ, vì vẫn thu hẹp).
 
 Tin **không hỗ trợ** (game, invoice, quiz chưa trả lời, poll khi thiếu `--reset-polls`; xem `01-kien-truc.md`) khác filter: người dùng muốn clone nhưng không thể, nên có ghi `msg_map` với `status='skipped'` + `reason='unsupported:<loại>'` và tăng `skipped_unsupported`. `retry` chỉ thử lại `failed`, không thử `skipped`.
 
@@ -100,10 +104,14 @@ Khi `tgmirror run` khởi động lại job:
    - Số tin, loại media từng tin và cấu trúc album (tin nào cùng album, đánh số theo lần xuất hiện đầu; `grouped_id` ở đích là mới nên không so trực tiếp) đều khớp với batch `pending` → coi là đã gửi, gán `dst_msg_id` theo thứ tự, đánh `done` và đẩy `cursor_src_id` (một transaction).
    - Không có tin mới ở đích → xóa `pending`, gửi lại batch.
    - Mơ hồ (đích có tin mới nhưng không khớp, hoặc một tin `pending` đã biến mất khỏi nguồn nên không so được) → cảnh báo người dùng, xóa `pending` và gửi lại (ưu tiên "không sót" hơn "không trùng"), nên đích có thể có vài tin trùng.
-2. Lặp lại `iter_messages(src, min_id=cursor_src_id, reverse=True)`.
+2. Lặp lại `iter_messages(src, min_id=cursor_src_id, reverse=True)` cùng filter đã lưu (`plan_read`, `03-filters.md`).
 3. Bỏ qua bất kỳ unit nào đã có một `src_msg_id` `done` trong `msg_map` (an toàn khi `--refilter`; một album đã `done` một phần thì phần còn lại là việc của `retry`, không gửi lại cả album). Một batch mà mọi unit đều đã `done` chỉ đẩy `cursor_src_id`, không gọi Telegram, không chờ limiter.
 
 Ngữ nghĩa: **at-least-once có reconcile**; trùng lặp chỉ có thể xảy ra ở cửa sổ crash rất hẹp và được phát hiện ở bước 1.
+
+## Đổi filter (`tgmirror run --refilter`)
+
+`Store.replace_filters(job_id, filters_json)` là **chỗ duy nhất `cursor_src_id` được lùi** (quy tắc 3 chỉ cấm ở mọi nơi khác): một transaction thay `filters_json`, đặt `cursor_src_id = 0` và xóa `stats.skipped_filter` (lần quét lại đếm lại). `done`/`failed` của `msg_map` giữ nguyên: bước 3 của Resume bỏ qua unit đã `done`, nên không sao chép hai lần; tin `failed` khớp filter mới thì được thử lại. Từ chối (`JobBusy`) khi job đang `running` với heartbeat còn mới. Tin khớp mới được thêm vào cuối kênh đích (thứ tự đích không còn theo thời gian).
 
 ## Delta (`tgmirror sync`)
 

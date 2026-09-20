@@ -59,17 +59,17 @@ Avatar copy (optional): download source photo, `client.upload_file(...)`, then `
 
 ```python
 async for m in client.iter_messages(peer, min_id=cursor, reverse=True,
-                                    wait_time=READ_WAIT):   # phase 2: no filter/search yet
+                                    wait_time=READ_WAIT):   # + filter=/search=/max_id= from ServerFilter
     ...
 ```
 
-Implemented in `TelethonGateway.iter_messages`: it resolves the peer with `get_input_entity` (a chat missing from the session cache becomes `NoPermission`, so `tgmirror channels` refreshes it), converts with `src_message`/`media_kind`, and raises `NotImplementedError` for any non-empty `ServerFilter` until phase 3 (never silently ignore a filter). Telethon's `MessageEmpty` is also a `custom.Message`: exclude it by name.
+Implemented in `TelethonGateway.iter_messages`: it resolves the peer with `get_input_entity` (a chat missing from the session cache becomes `NoPermission`, so `tgmirror channels` refreshes it), converts with `src_message`/`media_kind` (which also fills `hashtags` from `MessageEntityHashtag` entities, and `size`/`duration`/`mime` only for real photo/document attachments, `views`), and translates the `ServerFilter`: `media` via `_MEDIA_FILTERS` (kept equal to `filters.pushdown.PUSHABLE_MEDIA` by a test), `search`, `max_id` as `max_id + 1` (Telethon *excludes* its `max_id`), and `since`/`until` by looking up one message with `get_messages(offset_date=..., reverse=True, limit=1)` and turning it into `min_id`/`max_id` with an `ALBUM_MARGIN` margin. Do **not** pass `offset_date` to `iter_messages` together with `search`/`filter`: Telethon sends it as `max_date` and it breaks under `reverse=True`. Telethon's `MessageEmpty` is also a `custom.Message`: exclude it by name.
 
-- `reverse=True` yields oldest → newest (D4). Confirm it composes correctly with `search`/`filter`/`min_id` in a spike; add a regression test using FakeGateway semantics.
+- `reverse=True` yields oldest → newest (D4). That it composes correctly with `search`/`filter`/`min_id` against real Telegram is still unverified (spike 3, `docs/06-lo-trinh.md`); `--no-pushdown` is the way to compare.
 - Set `wait_time` explicitly; read calls are rate-limited too.
 - Skip service messages (`m.action is not None`) and empty messages.
 - Group consecutive messages sharing `grouped_id` into one `Unit`. An album may arrive at a page boundary — buffer until the `grouped_id` changes.
-- Always re-apply the client matcher after server pushdown (`docs/03-filters.md`).
+- Always re-apply the client matcher after server pushdown (`docs/03-filters.md`). A `filter`/`search` read drops album members that do not match themselves: `engine/planner.py` completes the album with one unfiltered read (`complete_albums`).
 
 ## Strategy A — server-side copy
 

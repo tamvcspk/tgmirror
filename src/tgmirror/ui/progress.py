@@ -41,6 +41,14 @@ class LineReporter:
         if self._last is not None and now - self._last < self._interval:
             return
         self._last = now
+        key = "run.progress_filtered" if job.skipped_filter else "run.progress"
         self._emit(
-            t("run.progress", id=job.id, done=job.done, failed=job.failed, cursor=job.cursor_src_id)
+            t(
+                key,
+                id=job.id,
+                done=job.done,
+                skipped=job.skipped_filter,
+                failed=job.failed,
+                cursor=job.cursor_src_id,
+            )
         )

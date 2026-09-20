@@ -1,15 +1,20 @@
 """Units and batches: albums are never split (hard rule 4)."""
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 
 from tests.fakes import FakeGateway
-from tgmirror.core.gateway import MediaKind, Unit
+from tgmirror.core.gateway import ALBUM_MARGIN, MediaKind, ServerFilter, SrcMessage, Unit
 from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
+from tgmirror.engine.planner import Skip
+from tgmirror.filters.matcher import Matcher
+from tgmirror.filters.model import FilterSpec
 
 PHOTO, VIDEO = MediaKind.PHOTO, MediaKind.VIDEO
+DAY = datetime(2024, 1, 1, tzinfo=UTC)
 
 
 async def collect_units(gw: FakeGateway, src: int, min_id: int = 0) -> list[list[int]]:
@@ -124,3 +129,145 @@ async def test_batching_never_loses_or_reorders_messages(
     flat = [i for batch in await sizes(gateway, src, batch_size) for unit in batch for i in unit]
 
     assert flat == [m.id for m in gateway.messages[src]]
+
+
+# ---- filters: skips and album completion ----------------------------------------------------
+
+
+def matcher_for(data: dict) -> Matcher:
+    return Matcher(FilterSpec.from_data(data))
+
+
+async def items(gw: FakeGateway, src: int, data: dict, **kw: object) -> list[Unit | Skip]:
+    return [i async for i in planner.units(gw, src, matcher=matcher_for(data), **kw)]  # type: ignore[arg-type]
+
+
+def shape(found: list[Unit | Skip]) -> list[list[int] | tuple[int, int]]:
+    return [i.ids if isinstance(i, Unit) else (i.count, i.last_id) for i in found]
+
+
+async def test_units_that_fail_the_filter_become_skips_in_order(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    gateway.add_message(src, "keep", hashtags=("#k",))  # 1
+    gateway.add_album(src, [PHOTO, PHOTO, PHOTO], "album")  # 2 3 4: no hashtag, dropped whole
+    gateway.add_message(src, is_service=True)  # 5: ignored, not even a skip
+    gateway.add_message(src, "keep", hashtags=("#k",))  # 6
+    gateway.add_message(src, "other")  # 7
+
+    found = await items(gateway, src, {"include": [{"hashtag": ["#k"]}]})
+
+    assert shape(found) == [[1], (3, 4), [6], (1, 7)]
+
+
+async def test_without_a_matcher_nothing_is_ever_skipped(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    gateway.add_message(src, "a")
+
+    found = [i async for i in planner.units(gateway, src)]
+
+    assert all(isinstance(i, Unit) for i in found) and len(found) == 1
+
+
+async def test_a_server_filter_is_passed_to_the_gateway(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    gateway.add_message(src, "x", media=VIDEO)
+    gateway.add_message(src, "y", media=PHOTO)
+    server = ServerFilter(media=VIDEO)
+
+    found = await items(gateway, src, {"include": [{"media": ["video"]}]}, filters=server)
+
+    assert shape(found) == [[1]]
+    assert gateway.calls_to("iter_messages")[0].args[2] == server
+
+
+async def test_albums_the_server_cut_are_completed_before_they_are_judged(
+    gateway: FakeGateway,
+) -> None:
+    src = gateway.add_channel("S").id
+    gateway.add_message(src, "before")  # 1
+    gateway.add_album(src, [PHOTO, VIDEO, PHOTO], "album")  # 2 3 4: the server keeps 2 and 4
+    gateway.add_message(src, "after")  # 5
+    data = {"include": [{"media": ["photo"]}]}
+
+    found = await items(gateway, src, data, filters=ServerFilter(media=PHOTO), complete_albums=True)
+
+    assert shape(found) == [[2, 3, 4]]  # the video member came back through the unfiltered read
+
+
+async def test_without_completion_the_cut_album_would_be_split(gateway: FakeGateway) -> None:
+    """The reason ``complete_albums`` exists: what the server returns is not a whole album."""
+    src = gateway.add_channel("S").id
+    gateway.add_album(src, [PHOTO, VIDEO, PHOTO])
+
+    found = await items(gateway, src, {}, filters=ServerFilter(media=PHOTO))
+
+    assert shape(found) == [[1, 3]]
+
+
+async def test_completion_reads_only_a_small_window_around_the_album(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    for _ in range(50):
+        gateway.add_message(src, "filler", media=VIDEO)
+    gateway.add_album(src, [PHOTO, VIDEO], "album")  # 51 52
+
+    await items(
+        gateway,
+        src,
+        {},
+        filters=ServerFilter(media=PHOTO),
+        complete_albums=True,
+    )
+
+    window = gateway.calls_to("iter_messages")[1]  # the second read is the completion
+    assert window.args[1] == 51 - 1 - ALBUM_MARGIN
+    assert window.args[2] == ServerFilter(max_id=51 + ALBUM_MARGIN)
+
+
+# ---- batcher: skips ride along with the next batch ------------------------------------------
+
+
+def unit_of(*ids: int) -> Unit:
+    gid = 900 + ids[0] if len(ids) > 1 else None
+    return Unit(tuple(SrcMessage(id=i, date=DAY, grouped_id=gid) for i in ids))
+
+
+async def feed(*entries: Unit | Skip) -> AsyncIterator[Unit | Skip]:
+    for entry in entries:
+        yield entry
+
+
+async def batched(entries: list[Unit | Skip], size: int, **kw: int) -> list[Batch]:
+    return [b async for b in batches(feed(*entries), size, **kw)]
+
+
+async def test_skips_are_credited_to_the_batch_and_move_its_cursor() -> None:
+    (batch,) = await batched([Skip(3, 3), unit_of(4), Skip(2, 6), unit_of(7)], 10)
+
+    assert (batch.ids, batch.skipped, batch.upto, batch.last_id) == ([4, 7], 5, 6, 7)
+
+
+async def test_skips_before_the_unit_that_did_not_fit_go_with_the_full_batch() -> None:
+    first, second = await batched([unit_of(1), Skip(2, 3), unit_of(4)], 1)
+
+    assert (first.ids, first.skipped, first.last_id) == ([1], 2, 3)  # the cursor may pass 2..3
+    assert (second.ids, second.skipped, second.last_id) == ([4], 0, 4)
+
+
+async def test_a_long_stretch_of_skips_flushes_a_batch_that_is_waiting() -> None:
+    first, second = await batched(
+        [unit_of(1), Skip(3, 4), Skip(3, 7), unit_of(8)], 10, flush_after=5
+    )
+
+    assert (first.ids, first.skipped, first.last_id) == ([1], 6, 7)
+    assert second.ids == [8]
+
+
+async def test_only_skips_make_a_progress_only_batch() -> None:
+    flushed, tail = await batched([Skip(4, 4), Skip(3, 9), Skip(2, 12)], 10, flush_after=5)
+
+    assert (flushed.units, flushed.skipped, flushed.last_id) == ((), 7, 9)
+    assert (tail.units, tail.skipped, tail.last_id, tail.ids, tail.size) == ((), 2, 12, [], 0)
+
+
+async def test_no_skips_and_no_units_make_no_batches() -> None:
+    assert await batched([], 10) == []

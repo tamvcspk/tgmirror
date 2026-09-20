@@ -1,7 +1,10 @@
-"""Telethon boundary, phase 2: reducing messages, reading history, forwarding. No network."""
+"""Telethon boundary: reducing messages, reading history (with server filters), forwarding.
+
+No network: a stub client records what the gateway asks of it.
+"""
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -15,14 +18,16 @@ from tgmirror.core.errors import (
     PeerFlood,
     PerMessage,
 )
-from tgmirror.core.gateway import MediaKind, ServerFilter, SrcMessage
+from tgmirror.core.gateway import ALBUM_MARGIN, MediaKind, ServerFilter, SrcMessage
 from tgmirror.core.telethon_gateway import (
+    _MEDIA_FILTERS,
     READ_WAIT,
     TelethonGateway,
     map_exception,
     media_kind,
     src_message,
 )
+from tgmirror.filters.pushdown import PUSHABLE_MEDIA
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -118,6 +123,8 @@ class HistoryClient:
         self.forward_result: list[Any] = []
         self.raises: BaseException | None = None
         self.unknown: set[int] = set()
+        self.after: list[list[Any]] = []  # answers to "first message after <date>", in order
+        self.lookups: list[dict[str, Any]] = []
 
     async def get_input_entity(self, ref: int) -> str:
         if ref in self.unknown:
@@ -137,7 +144,10 @@ class HistoryClient:
             raise self.raises
         return self.forward_result
 
-    async def get_messages(self, peer: Any, limit: int) -> list[Any]:
+    async def get_messages(self, peer: Any, limit: int, **kwargs: Any) -> list[Any]:
+        if "offset_date" in kwargs:
+            self.lookups.append({"limit": limit, **kwargs})
+            return self.after.pop(0)
         return self.history[-limit:]
 
 
@@ -173,9 +183,190 @@ async def test_iter_messages_maps_errors_and_unknown_chats() -> None:
         _ = [m async for m in gateway_on(client).iter_messages(-1002)]
 
 
-def test_server_side_filters_are_not_implemented_before_phase_3() -> None:
-    with pytest.raises(NotImplementedError):
-        gateway_on(HistoryClient()).iter_messages(-1001, filters=ServerFilter(search="x"))
+def call_of(client: HistoryClient) -> dict[str, Any]:
+    (call,) = client.iter_calls
+    return call
+
+
+async def read(client: HistoryClient, min_id: int = 0, **filters: Any) -> list[SrcMessage]:
+    stream = gateway_on(client).iter_messages(-1001, min_id=min_id, filters=ServerFilter(**filters))
+    return [m async for m in stream]
+
+
+async def test_a_media_filter_and_a_search_become_telethon_arguments() -> None:
+    client = HistoryClient()
+
+    await read(client, media=MediaKind.PHOTO, search="#news")
+
+    call = call_of(client)
+    assert call["filter"] is types.InputMessagesFilterPhotos and call["search"] == "#news"
+    assert "max_id" not in call and call["reverse"] is True
+
+
+async def test_max_id_is_included_although_telethon_excludes_its_max_id() -> None:
+    client = HistoryClient()
+
+    await read(client, max_id=200)
+
+    assert call_of(client)["max_id"] == 201
+
+
+async def test_since_becomes_a_position_with_an_album_margin() -> None:
+    client = HistoryClient([message(90)])
+    client.after = [[message(80)]]  # the first message dated after (since - 1 second)
+    since = datetime(2024, 1, 1, tzinfo=UTC)
+
+    await read(client, since=since)
+
+    (lookup,) = client.lookups
+    assert lookup == {"limit": 1, "offset_date": since - timedelta(seconds=1), "reverse": True}
+    assert call_of(client)["min_id"] == 80 - 1 - ALBUM_MARGIN
+
+
+async def test_since_never_lowers_the_cursor() -> None:
+    client = HistoryClient()
+    client.after = [[message(80)]]
+
+    await read(client, min_id=500, since=NOW)
+
+    assert call_of(client)["min_id"] == 500
+
+
+async def test_nothing_after_since_means_nothing_to_read() -> None:
+    client = HistoryClient([message(5)])
+    client.after = [[]]
+
+    assert await read(client, since=NOW) == []
+    assert client.iter_calls == []  # not even a history request
+
+
+async def test_until_becomes_a_bound_with_a_margin_and_combines_with_max_id() -> None:
+    client = HistoryClient()
+    client.after = [[message(300)]]  # the first message dated after `until`
+
+    await read(client, until=NOW)
+
+    assert call_of(client)["max_id"] == 300 + ALBUM_MARGIN + 1
+    assert client.lookups[0]["offset_date"] == NOW
+
+    tighter = HistoryClient()
+    tighter.after = [[message(300)]]
+    await read(tighter, until=NOW, max_id=120)
+    assert call_of(tighter)["max_id"] == 121  # the explicit bound is tighter
+
+
+async def test_until_past_the_end_of_the_channel_adds_no_bound() -> None:
+    client = HistoryClient()
+    client.after = [[]]
+
+    await read(client, until=NOW)
+
+    assert "max_id" not in call_of(client)
+
+
+async def test_errors_while_looking_up_a_date_are_mapped() -> None:
+    client = HistoryClient()
+
+    async def flood(*args: Any, **kwargs: Any) -> list[Any]:
+        raise errors.FloodWaitError(None, capture=7)
+
+    client.get_messages = flood  # type: ignore[method-assign]
+
+    with pytest.raises(FloodWait):
+        await read(client, since=NOW)
+
+
+def test_every_pushable_media_kind_has_a_telegram_filter_and_only_those() -> None:
+    """``filters.pushdown`` decides what is safe, the gateway knows how: they must agree."""
+    assert set(_MEDIA_FILTERS) == set(PUSHABLE_MEDIA)
+
+
+# ---- the fields the filters need ------------------------------------------------------------
+
+
+def with_entities(text: str, *spans: tuple[int, int]) -> Any:
+    entities = [types.MessageEntityHashtag(offset=o, length=n) for o, n in spans]
+    return message(1, message=text, entities=entities)
+
+
+def test_hashtags_come_from_entities_lower_cased() -> None:
+    reduced = src_message(with_entities("Look #News and #Sport now", (5, 5), (15, 6)))
+
+    assert reduced is not None and reduced.hashtags == ("#news", "#sport")
+
+
+def test_a_hash_in_the_text_without_an_entity_is_not_a_hashtag() -> None:
+    reduced = src_message(message(1, message="see #news"))
+
+    assert reduced is not None and reduced.hashtags == ()
+
+
+def test_a_hashtag_suffixed_with_its_channel_keeps_only_the_tag() -> None:
+    reduced = src_message(with_entities("#tag@mychannel", (0, 14)))
+
+    assert reduced is not None and reduced.hashtags == ("#tag",)
+
+
+def test_hashtag_offsets_count_utf16_units_like_telegram_does() -> None:
+    reduced = src_message(with_entities("😀 #tag", (3, 4)))  # the emoji is two UTF-16 units
+
+    assert reduced is not None and reduced.hashtags == ("#tag",)
+
+
+def test_file_details_come_from_the_document() -> None:
+    doc = types.Document(
+        id=1,
+        access_hash=1,
+        file_reference=b"",
+        date=NOW,
+        mime_type="video/mp4",
+        size=5_000_000,
+        dc_id=1,
+        attributes=[types.DocumentAttributeVideo(duration=95, w=1, h=1)],
+    )
+
+    reduced = src_message(message(1, media=types.MessageMediaDocument(document=doc), views=1234))
+
+    assert reduced is not None
+    assert (reduced.size, reduced.duration, reduced.mime, reduced.views) == (
+        5_000_000,
+        95,
+        "video/mp4",
+        1234,
+    )
+
+
+def test_a_text_message_has_no_file_details() -> None:
+    reduced = src_message(message(1, message="hi"))
+
+    assert reduced is not None
+    assert (reduced.size, reduced.duration, reduced.mime, reduced.views) == (None, None, None, None)
+
+
+def photo_of(*sizes: int) -> types.Photo:
+    return types.Photo(
+        id=1,
+        access_hash=1,
+        file_reference=b"",
+        date=NOW,
+        sizes=[types.PhotoSize(type="x", w=1, h=1, size=n) for n in sizes],
+        dc_id=1,
+    )
+
+
+def test_a_link_previews_picture_is_not_the_messages_file() -> None:
+    page = types.WebPage(id=1, url="https://e.x", display_url="e.x", hash=0, photo=photo_of(999))
+
+    reduced = src_message(message(1, media=types.MessageMediaWebPage(webpage=page)))
+
+    assert reduced is not None and reduced.media is MediaKind.WEBPAGE
+    assert reduced.size is None and reduced.mime is None
+
+
+def test_a_photo_reports_its_largest_size() -> None:
+    reduced = src_message(message(1, media=types.MessageMediaPhoto(photo=photo_of(100, 900))))
+
+    assert reduced is not None and reduced.size == 900 and reduced.mime == "image/jpeg"
 
 
 async def test_copy_messages_forwards_without_the_author_and_aligns_results() -> None:

@@ -5,12 +5,13 @@ both end in the same ``create_job`` call with the same arguments.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from tgmirror.core.errors import TgMirrorError
 from tgmirror.core.gateway import TelegramGateway
 from tgmirror.engine.endpoints import Endpoints
+from tgmirror.filters.model import FilterSpec
 from tgmirror.store.db import Store
 from tgmirror.store.jobs import Job, JobOptions, JobSpec, JobStatus
 
@@ -63,6 +64,8 @@ class NewJob:
     name: str | None = None  # default: "<source> → <destination>"
     mode: str = "auto"
     batch_size: int = 20
+    filters: FilterSpec = field(default_factory=FilterSpec)  # default: clone everything
+    pushdown: bool = True  # False: read the whole source instead of narrowing it server-side
 
 
 async def create_job(
@@ -81,8 +84,11 @@ async def create_job(
         dst=dst,
         mode=new.mode,
         options=JobOptions(
-            batch_size=new.batch_size, dst_base_id=await gateway.last_message_id(dst.id)
+            batch_size=new.batch_size,
+            dst_base_id=await gateway.last_message_id(dst.id),
+            pushdown=new.pushdown,
         ),
+        filters_json=new.filters.to_json(),
     )
     return await store.create_job(spec)
 

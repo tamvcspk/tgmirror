@@ -7,7 +7,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 - [x] Phase 0 — Scaffold (2026-09-19)
 - [x] Phase 1 — Login, channels, tạo kênh (2026-09-19)
 - [x] Phase 2 — Copy + state + pause/resume (2026-09-20; đã chạy được trên Telegram thật với kênh cho phép forward, kênh `noforwards` mới thử phía không phải admin, xem "Phase 2 — ghi chú")
-- [ ] Phase 3 — Filters
+- [x] Phase 3 — Filters (2026-09-20; pushdown và cơ chế giữ album nguyên vẹn được kiểm bằng `FakeGateway`, chưa thử trên Telegram thật, xem "Phase 3 — ghi chú")
 - [ ] Phase 4 — Limiter & flood
 - [ ] Phase 5 — Delta sync
 - [ ] Phase 6 — Reupload
@@ -60,13 +60,27 @@ Các lựa chọn khi làm (không phải D1–D9):
 - `get_input_entity(marked id)` trong `run` dựa vào cache entity trong file session (do `iter_dialogs` của `new`/`channels` ghi). Nếu thiếu, gateway báo `NoPermission` "not accessible": chạy `tgmirror channels` để làm mới.
 - Spike 7 (poll, quiz, ... khi forward) vẫn mở: phase 2 chuyển mọi tin, không tiền kiểm theo loại.
 
+### Phase 3 — ghi chú
+
+Đã có: package `filters/` (`model`, `parser`, `matcher`, `pushdown`), `engine/preview.py`, `Skip`/`Batch.skipped` ở planner/batcher, `ServerFilter.until`, `TelethonGateway.iter_messages` với pushdown thật và `src_message` điền `hashtags`/`size`/`duration`/`mime`/`views`, `Store.replace_filters`, cờ lọc của `new` và `run --refilter`, `--preview`, `--no-pushdown`, bước 3 của wizard (`Prompter.checkbox`). Thêm dependency `pyyaml` (file `--filter-file`) và `regex` (timeout chống regex bùng nổ mà `re` không có). Tiêu chí "bộ test filter + so sánh pushdown với quét đầy đủ": `tests/unit/test_filter_*.py` và `tests/integration/test_pushdown_equivalence.py` (kênh ngẫu nhiên có album, 17 filter × 12 kênh; đã thử đột biến: bỏ hoàn thiện album hoặc bỏ lề id thì đỏ), cùng `tests/integration/test_runner_filters.py` (kill/resume, pause trong quãng dài không khớp, `--refilter`).
+
+Các lựa chọn khi làm (không phải D1–D9; chi tiết ở `03-filters.md`):
+
+- **Pushdown không được cắt album**: lề `ALBUM_MARGIN` cho ranh giới id/date; khi đẩy `media`/`search` thì planner hoàn thiện album bằng một lần đọc không lọc. Không đẩy `contains` (search theo từ, matcher theo chuỗi con) và `document`/`sticker`/`webpage`.
+- **Ngày → id ở gateway** (`get_messages(offset_date=..., reverse=True, limit=1)`), thêm `ServerFilter.until` để `--until` cũng giảm số tin phải đọc.
+- **Cursor và `skipped_filter`**: tin bị loại được cộng vào batch đang phát; batcher phát batch sau mỗi 500 tin bị loại (`FLUSH_AFTER`) nên quãng dài không khớp vẫn lưu tiến độ và nghe được pause/stop. Tin bị server loại (pushdown) không được đếm.
+- **`--refilter` là cách duy nhất đổi filter** vì mỗi cặp nguồn/đích chỉ một job và `rm` là phase 5; nó là chỗ duy nhất cursor lùi.
+- Sửa một lỗi phát hiện khi viết test: `size` được chuẩn hóa thành số byte trần nhưng số trần bị từ chối khi nạp, nên filter đã lưu không nạp lại được; nay lưu dạng `"<byte>B"`.
+
+Chưa kiểm chứng (người dùng chạy tay): tất cả hành vi thật của Telegram ở spike 3 (`search` + `filter` + `reverse` + `min_id`, `get_messages(offset_date, reverse)`, tokenize hashtag, entity hashtag của tin trong group).
+
 Lưu ý cho phase 2 (đã áp dụng): schema đã có `jobs.src_kind`, `msg_map.src_topic_id`, `topic_map` (xem `04-state-checkpoint.md`) để phase 8 không cần migration. Đường code phase 1–7 vẫn viết với `kind` trong đầu, dù chỉ kiểm thử với broadcast.
 
 ## Việc cần xác minh sớm (spike, phase 0–1)
 
 1. ~~Phiên bản Telethon cài đặt có tham số `drop_author` của `forward_messages` không?~~ **Xong 2026-09-19:** có. Telethon 1.45.0 `forward_messages(..., drop_author=, drop_media_captions=, as_album=)`. `pyproject.toml` đặt `telethon>=1.45` nên không cần fallback `ForwardMessagesRequest`.
 2. ~~Forward một danh sách id có giữ nguyên album khi `drop_author=True` không?~~ **Xong 2026-09-20:** có, người dùng đã thử trên tài khoản thật (chưa đo riêng từng cỡ album).
-3. `iter_messages(..., reverse=True, search=..., filter=...)` kết hợp `min_id` cho kết quả đúng thứ tự tăng dần? *(phase 2 chỉ dùng `min_id` + `reverse=True`, đọc mã Telethon thì `offset_id = min_id + 1`; chưa kết hợp `search`/`filter`, việc của phase 3)*
+3. `iter_messages(..., reverse=True, search=..., filter=...)` kết hợp `min_id` cho kết quả đúng thứ tự tăng dần? *(đọc mã Telethon 1.45: `min_id` thành `offset_id = min_id + 1`, `max_id` **loại trừ**; `search`/`filter` chuyển thành `messages.search` với `add_offset` âm, và `offset_date` trở thành `max_date` nên hỏng khi `reverse=True`, vì vậy ngày được đổi thành id bằng một lời gọi riêng. **Chưa thử trên Telegram thật**: chạy cùng một job với `--pushdown` và `--no-pushdown` rồi so số tin đã sao chép)*
 4. Hành vi thực tế của quyền để xác định `can_post` và `is_admin` (broadcast, supergroup, group). **Phase 1** suy từ entity (`creator`, `admin_rights`, `banned_rights`, `default_banned_rights`, có xét `until_date`) thay vì `get_permissions`, vì gọi `get_permissions` cho từng dialog là một request mỗi kênh; đã khớp trên account thật với kênh broadcast, còn cần đối chiếu supergroup/group/forum trước khi tick.
 5. Cách phát hiện `noforwards` đáng tin cậy (`Channel.noforwards`, và `Message.noforwards`). Phase 1 đọc `Channel.noforwards`/`Chat.noforwards` trong `channel_info`; `Message.noforwards` chưa dùng.
 6. Số tin/lời gọi và delay nào chạy êm trên một account thử (đo, không đoán).
@@ -101,6 +115,7 @@ Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và l
 - 2026-09-19: Chốt: đích có sẵn phải cùng loại nguồn; không thêm tên người gửi; có cờ `--placeholder` gửi tin text thay thế cho tin bị bỏ vì không hỗ trợ.
 - 2026-09-19: Chốt xử lý tin đặc thù cho chiến lược B: poll/quiz/location/contact giữ (poll mất vote, opt-in), game/invoice bỏ + cảnh báo. Thêm trạng thái `msg_map.status='skipped'`. Đoạn code mẫu trong ghi chú nguồn (`PollAnswerSyntax`, tự lắp `InputMediaPoll`) **không dùng**: `PollAnswerSyntax` không tồn tại trong Telethon 1.45; dùng `send_message(file=message.media)`.
 
+- 2026-09-20: Phase 3 xong. Không đổi D1–D9. Thêm dependency `pyyaml` và `regex`. Các lựa chọn nhỏ ghi ở "Phase 3 — ghi chú" và `03-filters.md`: `date` nửa mở, thiếu thuộc tính thì predicate sai, không đẩy `contains`, `--refilter` là cách đổi filter.
 - 2026-09-20: Phase 2 xong. Không đổi D1–D9. Các lựa chọn nhỏ ghi ở "Phase 2 — ghi chú": limiter tạm thời, FloodWait dừng job thay vì chờ (cho tới phase 4), một job cho mỗi cặp nguồn/đích, `run` chạy được với job `done`, `last_message_id` vào protocol.
 - 2026-09-19: Thêm skill `doc-sync` và luật "mỗi task đều xét cập nhật docs/skills" (CLAUDE.md, luật 9).
 - 2026-09-19: Bản thiết kế đầu tiên. D3 đổi so với brainstorm ban đầu (brainstorm cho phép reupload cho mọi kênh `noforwards`; bản này tôn trọng cài đặt bảo vệ nội dung của chủ kênh).

@@ -4,16 +4,16 @@ CLI app (`tgmirror`) that clones a Telegram channel, group or forum (with topic 
 
 ## Stack
 
-Python >= 3.11, `uv`, Telethon + `cryptg`, Typer (CLI), questionary (prompts), Rich (progress/TUI), aiosqlite, pydantic (config/filters), platformdirs (paths), tenacity (non-Telegram retries), pytest + pytest-asyncio, ruff. Config is read with stdlib `tomllib`. Dev commands: `uv sync`, `uv run pytest`, `uv run ruff check .` / `uv run ruff format .` (ruff ignores `*.md`).
+Python >= 3.11, `uv`, Telethon + `cryptg`, Typer (CLI), questionary (prompts), Rich (progress/TUI), aiosqlite, pydantic (config/filters), PyYAML (`--filter-file`), `regex` (filter regexes, with a timeout), platformdirs (paths), tenacity (non-Telegram retries), pytest + pytest-asyncio, ruff. Config is read with stdlib `tomllib`. Dev commands: `uv sync`, `uv run pytest`, `uv run ruff check .` / `uv run ruff format .` (ruff ignores `*.md`).
 
 ## Layout (`src/tgmirror/`; packages are added phase by phase, see `docs/06-lo-trinh.md`)
 
 ```
 core/     gateway (Telegram wrapper), auth (login flow), telethon_gateway (only Telethon importer), limiter (interim until phase 4), errors, config, paths
-engine/   endpoints (source/destination rules), jobs (create/resolve/vet), planner, batcher, strategies (copy / reupload), reconcile, runner
-filters/  model, parser (YAML + flags), server pushdown, client matcher
+engine/   endpoints (source/destination rules), jobs (create/resolve/vet), planner, batcher, preview, strategies (copy / reupload), reconcile, runner
+filters/  model, parser (YAML + flags), pushdown (`plan_read`), matcher (pure, client side)
 store/    schema.sql, db (`Store`: the only place with SQL), jobs, msgmap, floodlog
-cli/      app, wizard, runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), commands/
+cli/      app, wizard, filter_options (shared filter flags), runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), commands/
 ui/       messages (all user strings), prompts, tables, progress (plain-line reporter; Rich TUI is phase 7)
 ```
 

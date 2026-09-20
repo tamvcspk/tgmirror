@@ -38,6 +38,10 @@ class Prompter(Protocol):
         """Pick one; typing filters long lists."""
         ...
 
+    async def checkbox(self, message: str, choices: Sequence[Choice[T]]) -> list[T]:
+        """Pick any number (none is allowed); space toggles."""
+        ...
+
 
 class QuestionaryPrompter:
     def say(self, message: str) -> None:
@@ -60,3 +64,10 @@ class QuestionaryPrompter:
             use_jk_keys=False,  # j/k would clash with the search filter
         ).unsafe_ask_async()
         return choices[index].value
+
+    async def checkbox(self, message: str, choices: Sequence[Choice[T]]) -> list[T]:
+        picked = await questionary.checkbox(
+            message,
+            choices=[questionary.Choice(title=c.label, value=i) for i, c in enumerate(choices)],
+        ).unsafe_ask_async()
+        return [choices[i].value for i in picked]

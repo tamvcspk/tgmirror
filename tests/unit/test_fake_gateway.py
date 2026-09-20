@@ -4,7 +4,7 @@ import pytest
 
 from tests.fakes import FakeGateway
 from tgmirror.core.errors import FloodWait, ForwardsRestricted, NoPermission, PeerFlood
-from tgmirror.core.gateway import MediaKind, ServerFilter, TelegramGateway, Unit
+from tgmirror.core.gateway import ALBUM_MARGIN, MediaKind, ServerFilter, TelegramGateway, Unit
 
 
 async def collect(gateway: FakeGateway, src: int, **kwargs):
@@ -40,13 +40,26 @@ async def test_iter_messages_server_filter(gateway: FakeGateway) -> None:
     searched = await collect(gateway, src.id, filters=ServerFilter(search="#NEWS"))
     assert [m.id for m in searched] == [1, 2]
 
-    recent = await collect(
-        gateway, src.id, filters=ServerFilter(since=datetime(2024, 1, 1, tzinfo=UTC))
-    )
-    assert [m.id for m in recent] == [2, 3]
-
     bounded = await collect(gateway, src.id, filters=ServerFilter(max_id=2))
     assert [m.id for m in bounded] == [1, 2]
+
+
+async def test_date_bounds_are_positions_with_an_album_margin(gateway: FakeGateway) -> None:
+    """Like the real gateway: the server may return up to ALBUM_MARGIN ids more, never fewer."""
+    src = gateway.add_channel("src")
+    for day in range(1, 31):  # ids 1..30, one per day of June 2024
+        gateway.add_message(src.id, f"d{day}", date=datetime(2024, 6, day, tzinfo=UTC))
+    june_15, june_20 = datetime(2024, 6, 15, tzinfo=UTC), datetime(2024, 6, 20, tzinfo=UTC)
+
+    window = await collect(gateway, src.id, filters=ServerFilter(since=june_15, until=june_20))
+    ids = [m.id for m in window]
+
+    assert set(range(15, 20)) <= set(ids)  # everything in [15th, 20th)
+    assert ids[0] == 15 - ALBUM_MARGIN and ids[-1] == 20 + ALBUM_MARGIN
+    assert (
+        await collect(gateway, src.id, filters=ServerFilter(since=datetime(2025, 1, 1, tzinfo=UTC)))
+        == []
+    )
 
 
 async def test_album_messages_share_grouped_id(gateway: FakeGateway) -> None:

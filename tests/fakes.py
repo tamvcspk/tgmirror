@@ -24,6 +24,7 @@ from tgmirror.core.errors import (
     PerMessage,
 )
 from tgmirror.core.gateway import (
+    ALBUM_MARGIN,
     NO_FILTER,
     ChannelInfo,
     ChatKind,
@@ -93,6 +94,9 @@ class FakeGateway:
         is_service: bool = False,
         hashtags: tuple[str, ...] = (),
         size: int | None = None,
+        duration: float | None = None,
+        mime: str | None = None,
+        views: int | None = None,
         date: datetime | None = None,
     ) -> SrcMessage:
         msg_id = self._alloc_id(channel)
@@ -105,6 +109,9 @@ class FakeGateway:
             is_service=is_service,
             hashtags=hashtags,
             size=size,
+            duration=duration,
+            mime=mime,
+            views=views,
         )
         self.messages[channel].append(msg)
         return msg
@@ -149,13 +156,25 @@ class FakeGateway:
     ) -> AsyncIterator[SrcMessage]:
         self._enter("iter_messages", src, min_id, filters)
         self._channel(src)
-        for msg in list(self.messages[src]):
+        history = list(self.messages[src])
+        max_id = filters.max_id
+        # Like the real gateway: dates become positions, with a margin so that an album on the
+        # boundary is returned whole.
+        if filters.since is not None:
+            first = next((m.id for m in history if m.date >= filters.since), None)
+            if first is None:
+                return
+            min_id = max(min_id, first - 1 - ALBUM_MARGIN)
+        if filters.until is not None:
+            past = next((m.id for m in history if m.date >= filters.until), None)
+            if past is not None:
+                bound = past + ALBUM_MARGIN
+                max_id = bound if max_id is None else min(max_id, bound)
+        for msg in history:
             if msg.id <= min_id:
                 continue
-            if filters.max_id is not None and msg.id > filters.max_id:
+            if max_id is not None and msg.id > max_id:
                 break
-            if filters.since is not None and msg.date < filters.since:
-                continue
             if filters.media is not None and msg.media != filters.media:
                 continue
             if filters.search is not None and filters.search.lower() not in msg.text.lower():
@@ -311,11 +330,13 @@ class ScriptedPrompter:
         secret: Sequence[str] = (),
         confirm: Sequence[bool] = (),
         select: Sequence[str] = (),
+        checkbox: Sequence[Sequence[str]] = (),
     ) -> None:
         self._text = deque(text)
         self._secret = deque(secret)
         self._confirm = deque(confirm)
         self._select = deque(select)
+        self._checkbox = deque(checkbox)
         self.asked: list[tuple[str, str]] = []  # (kind, message)
         self.said: list[str] = []
         self.select_labels: list[list[str]] = []
@@ -343,3 +364,14 @@ class ScriptedPrompter:
             if wanted in choice.label:
                 return choice.value
         raise AssertionError(f"no choice containing {wanted!r} in {[c.label for c in choices]}")
+
+    async def checkbox(self, message: str, choices: Sequence[Choice[Any]]) -> list[Any]:
+        """Ticks the choices whose label is in the next queued list (none when the queue is dry)."""
+        self.asked.append(("checkbox", message))
+        wanted = self._checkbox.popleft() if self._checkbox else ()
+        unknown = set(wanted) - {c.label for c in choices}
+        if unknown:
+            raise AssertionError(
+                f"no checkbox choice {sorted(unknown)} in {[c.label for c in choices]}"
+            )
+        return [c.value for c in choices if c.label in wanted]

@@ -14,7 +14,7 @@ import contextlib
 import random
 import threading
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Protocol
 
@@ -33,6 +33,9 @@ from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
 from tgmirror.engine.copy import copy_batch
 from tgmirror.engine.reconcile import Outcome, judge
+from tgmirror.filters.matcher import Matcher
+from tgmirror.filters.model import FilterSpec
+from tgmirror.filters.pushdown import plan_read
 from tgmirror.store.db import Clock, Store, utc_now
 from tgmirror.store.jobs import Control, Job, JobStatus
 from tgmirror.store.msgmap import MessageResult
@@ -141,16 +144,26 @@ class Runner:
 
     async def _loop(self, job: Job) -> JobStatus:
         assert self._limiter is not None
+        spec = FilterSpec.from_json(job.filters_json)
+        plan = plan_read(spec, job.cursor_src_id, pushdown=job.options.pushdown)
+        read = planner.units(
+            self._gateway,
+            job.src_id,
+            min_id=plan.min_id,
+            filters=plan.server,
+            matcher=None if spec.is_empty else Matcher(spec),
+            complete_albums=plan.complete_albums,
+        )
         async with (
-            aclosing(planner.units(self._gateway, job.src_id, min_id=job.cursor_src_id)) as units,
+            aclosing(read) as units,
             aclosing(batches(units, job.options.batch_size)) as stream,
         ):
             async for batch in stream:
                 if (ctl := await self._requested(job.id)) is not None:
                     return _CONTROL_STATUS[ctl]
                 todo = await self._without_done(job.id, batch)
-                if todo is None:
-                    await self._store.advance_cursor(job.id, batch.last_id)
+                if not todo.units:  # nothing to send: only the cursor and the filter count move
+                    await self._advance(job, todo)
                     continue
                 await self._limiter.acquire(todo.size)
                 if (ctl := await self._requested(job.id)) is not None:  # arrived while sleeping
@@ -158,13 +171,22 @@ class Runner:
                 await self._send(job, todo)
         return JobStatus.DONE
 
-    async def _without_done(self, job_id: int, batch: Batch) -> Batch | None:
-        """Drop units that already have a ``done`` row (resume, step 4). ``None``: nothing left."""
+    async def _without_done(self, job_id: int, batch: Batch) -> Batch:
+        """Drop units that already have a ``done`` row (resume, step 4); may leave it empty.
+
+        The cursor still passes the dropped units: ``last_id`` of the result is that of ``batch``.
+        """
         done = await self._store.done_ids(job_id, batch.ids)
         if not done:
             return batch
         todo = tuple(u for u in batch.units if not any(i in done for i in u.ids))
-        return Batch(todo) if todo else None
+        return replace(batch, units=todo, upto=batch.last_id)
+
+    async def _advance(self, job: Job, batch: Batch) -> None:
+        stats = {"skipped_filter": batch.skipped} if batch.skipped else None
+        updated = await self._store.advance_cursor(job.id, batch.last_id, extra_stats=stats)
+        if batch.skipped:  # a long stretch without matches still shows a sign of life
+            self._reporter.progress(updated)
 
     async def _send(self, job: Job, batch: Batch) -> None:
         batch_id = await self._store.begin_batch(job.id, batch.units)  # write-ahead
@@ -185,17 +207,22 @@ class Runner:
         except GatewayError:
             await self._store.discard_batch(job.id, batch_id)  # rejected: nothing was created
             raise
-        updated = await self._store.commit_batch(job.id, batch_id, results, batch.last_id)
+        extra = {"skipped_filter": batch.skipped} if batch.skipped else None
+        updated = await self._store.commit_batch(
+            job.id, batch_id, results, batch.last_id, extra_stats=extra
+        )
         self._calling = "iter_messages"  # back to reading; an error above keeps the label
         self._reporter.progress(updated)
 
     async def _send_units_apart(self, job: Job, batch: Batch) -> None:
         assert self._limiter is not None
-        for unit in batch.units:
+        last = len(batch.units) - 1
+        for i, unit in enumerate(batch.units):
             if await self._requested(job.id) is not None:
                 return  # the units not sent yet are read again on the next run
             await self._limiter.acquire(len(unit.messages))
-            await self._send(job, Batch((unit,)))
+            # the filter count and the cursor past the skipped messages go with the last unit
+            await self._send(job, replace(batch, units=(unit,)) if i == last else Batch((unit,)))
 
     # ---- flood ----------------------------------------------------------------------------
 
