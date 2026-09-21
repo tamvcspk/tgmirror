@@ -367,6 +367,18 @@ MUTATIONS = [
         "            else await self._download_sender()\n",
         "            else self._client._sender  # noqa: SLF001\n",
     ),
+    Mutation(
+        "fewer upload connections than asked for go unsaid",
+        "src/tgmirror/core/telethon_gateway.py",
+        "            if failure is not None:\n",
+        "            if False:\n",
+    ),
+    Mutation(
+        "a download connection that cannot be made goes unsaid",
+        "src/tgmirror/core/telethon_gateway.py",
+        '                log.warning(\n                    "download connection could not be made',
+        '                (lambda *a: None)(\n                    "download connection could not be made',
+    ),
 ]
 
 

@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import copy
 import itertools
+import logging
 import math
 import os
 import re
@@ -90,6 +91,8 @@ def _quiet_hachoir() -> None:
 
 
 _quiet_hachoir()
+
+log = logging.getLogger(__name__)  # ``tgmirror.core.telethon_gateway``: shown by the CLI
 
 READ_WAIT = 1.0  # seconds between history pages: reads are rate-limited too (docs/05)
 
@@ -972,12 +975,19 @@ class TelethonGateway:
 
     async def _download_sender(self) -> Any:
         """The connection downloads use: one of their own, made once and kept. If it cannot be
-        made the main one is used, which works but shares it with everything else."""
+        made the main one is used, which works but shares it with everything else (said aloud:
+        a transfer that runs on fewer connections than asked for is otherwise a slow mystery)."""
         if self._down_sender is None:
             try:
                 self._down_sender = await self._new_sender()
                 self._owned.append(self._down_sender)
-            except Exception:  # noqa: BLE001 - the main connection is the fallback
+            except Exception as exc:  # noqa: BLE001 - the main connection is the fallback
+                log.warning(
+                    "download connection could not be made (%s: %s); downloads share the main "
+                    "connection, which is slower",
+                    type(exc).__name__,
+                    exc,
+                )
                 self._down_sender = self._client._sender  # noqa: SLF001
         return self._down_sender
 
@@ -985,16 +995,33 @@ class TelethonGateway:
         """The connections an upload is spread over: ``upload_connections`` of their own to the
         account's data centre (they share its auth key), made once and kept for the next file.
         One that cannot be made is left out; with none, the main connection is used, which works
-        but shares it with everything else."""
+        but shares it with everything else. Either way it is said aloud, once: one connection
+        uploads at ~3 MB/s and two or more at 18-28 (docs/06, spike 2026-09-21), so silently
+        making fewer than asked for is the first suspect when an upload is slow."""
         if self._extra_senders is None:
             self._extra_senders = []
-            for _ in range(self._transfer.upload_connections):
+            wanted = self._transfer.upload_connections
+            failure: Exception | None = None
+            for _ in range(wanted):
                 try:
                     sender = await self._new_sender()
-                except Exception:  # noqa: BLE001 - fewer connections is the fallback
+                except Exception as exc:  # noqa: BLE001 - fewer connections is the fallback
+                    failure = exc
                     break
                 self._extra_senders.append(sender)
                 self._owned.append(sender)
+            if failure is not None:
+                made = len(self._extra_senders)
+                log.warning(
+                    "upload connections: only %d of %d could be made (%s: %s); %s",
+                    made,
+                    wanted,
+                    type(failure).__name__,
+                    failure,
+                    "uploads are slower than they should be"
+                    if made
+                    else "uploads share the main connection, which is much slower",
+                )
         return list(self._extra_senders) or [self._client._sender]  # noqa: SLF001
 
     async def _new_sender(self) -> MTProtoSender:

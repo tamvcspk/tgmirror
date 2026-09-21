@@ -30,6 +30,7 @@ from tgmirror.core.telethon_gateway import (
 
 DOWN, UP = TransferPhase.DOWNLOAD, TransferPhase.UPLOAD
 MIB = 1024 * 1024
+WARN_LOGGER = "tgmirror.core.telethon_gateway"
 
 
 def big_video(size: int, *, dc_id: int = 1) -> types.MessageMediaDocument:
@@ -193,7 +194,7 @@ async def test_a_download_uses_a_connection_of_its_own_and_not_the_main_one(
 
 
 async def test_a_download_falls_back_to_the_main_connection_if_it_cannot_make_one(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     blob = os.urandom(2 * MIB)
     clip = clip_of(len(blob))
@@ -204,10 +205,13 @@ async def test_a_download_falls_back_to_the_main_connection_if_it_cannot_make_on
 
     gw._new_sender = refuses  # type: ignore[method-assign]
 
-    prepared = await gw.prepare(1, unit_of(clip), tmp_path)
+    with caplog.at_level("WARNING", logger=WARN_LOGGER):
+        prepared = await gw.prepare(1, unit_of(clip), tmp_path)
 
     assert content(prepared.files[0]) == blob
     assert {sender for sender, _ in stub.requests} == {"main"}
+    (record,) = caplog.records
+    assert "download connection could not be made (ConnectionError: no)" in record.getMessage()
 
 
 async def test_a_file_on_another_data_centre_uses_the_borrowed_connection(tmp_path: Path) -> None:
@@ -428,7 +432,9 @@ async def test_the_parts_of_an_upload_are_spread_over_connections_of_their_own(
 
 
 @pytest.mark.usefixtures("small_big_files")
-async def test_an_extra_connection_that_cannot_be_made_is_left_out(tmp_path: Path) -> None:
+async def test_an_extra_connection_that_cannot_be_made_is_left_out(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     clip = clip_of(2 * MIB)
     gw, stub = pooled(clip, blob=os.urandom(2 * MIB))
 
@@ -436,12 +442,57 @@ async def test_an_extra_connection_that_cannot_be_made_is_left_out(tmp_path: Pat
         raise ConnectionError("no")
 
     gw._new_sender = refuses  # type: ignore[method-assign]
-    prepared = await gw.prepare(1, unit_of(clip), tmp_path)
-
-    await gw.send_prepared(2, prepared, KEEP)
+    with caplog.at_level("WARNING", logger=WARN_LOGGER):
+        prepared = await gw.prepare(1, unit_of(clip), tmp_path)
+        await gw.send_prepared(2, prepared, KEEP)
 
     assert {s for s, r in stub.requests if isinstance(r, SaveBigFilePartRequest)} == {"main"}
     assert len(stub.sent) == 1
+    # not silent: the download and the upload each say they fell back to the main connection
+    assert len(caplog.records) == 2
+    down, up = (r.getMessage() for r in caplog.records)
+    assert "download connection could not be made" in down and "ConnectionError: no" in down
+    assert "only 0 of 2" in up and "ConnectionError: no" in up and "main connection" in up
+
+
+@pytest.mark.usefixtures("small_big_files")
+async def test_fewer_upload_connections_than_asked_for_is_a_warning_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    clip = clip_of(2 * MIB)
+    gw, stub = pooled(clip, blob=os.urandom(2 * MIB))
+    real = gw._new_sender
+
+    async def second_refuses() -> Any:
+        if len(stub.made) == 2:  # the download's and the first upload connection exist
+            raise ConnectionError("Server closed the connection")
+        return await real()
+
+    gw._new_sender = second_refuses  # type: ignore[method-assign]
+    with caplog.at_level("WARNING", logger=WARN_LOGGER):
+        prepared = await gw.prepare(1, unit_of(clip), tmp_path)
+        await gw.send_prepared(2, prepared, KEEP)
+        await gw.send_prepared(3, prepared, KEEP)  # the connections are kept: nothing new to say
+
+    (record,) = caplog.records
+    text = record.getMessage()
+    assert "only 1 of 2" in text and "Server closed the connection" in text
+    assert "main connection" not in text  # one of its own is still there
+    used = {repr(s) for s, r in stub.requests if isinstance(r, SaveBigFilePartRequest)}
+    assert used == {"conn2"}
+
+
+@pytest.mark.usefixtures("small_big_files")
+async def test_all_connections_made_is_not_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    clip = clip_of(2 * MIB)
+    gw, _ = pooled(clip, blob=os.urandom(2 * MIB))
+
+    with caplog.at_level("WARNING", logger=WARN_LOGGER):
+        await gw.send_prepared(2, await gw.prepare(1, unit_of(clip), tmp_path), KEEP)
+
+    assert caplog.records == []
 
 
 @pytest.mark.usefixtures("small_big_files")
