@@ -300,8 +300,10 @@ MUTATIONS = [
     Mutation(
         "pool: a FloodWait is swallowed and the part repeated",
         "src/tgmirror/core/pool.py",
-        "                    budget.pressure()\n                    raise\n                else:",
-        "                    budget.pressure()\n                else:",
+        "                except FloodWait as exc:\n"
+        "                    budget.pressure(str(exc))\n"
+        "                    raise\n",
+        "                except FloodWait as exc:\n                    budget.pressure(str(exc))\n",
     ),
     Mutation(
         "pool: the other workers are not cancelled when one fails",
