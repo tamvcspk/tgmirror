@@ -14,9 +14,10 @@ import pytest
 from telethon import errors, types
 from telethon.errors.common import InvalidBufferError
 from telethon.tl import custom
+from telethon.tl.functions.messages import UploadMediaRequest
 from telethon.tl.functions.upload import GetFileRequest, SaveBigFilePartRequest
 
-from tests.unit.test_telethon_reupload import KEEP, NOW, VIDEO, Stub, message, unit_of
+from tests.unit.test_telethon_reupload import KEEP, NOW, VIDEO, Stub, message, photo, unit_of
 from tgmirror.core import telethon_gateway
 from tgmirror.core.errors import FloodWait, Transient
 from tgmirror.core.gateway import TransferPhase
@@ -521,26 +522,30 @@ async def test_without_the_pool_a_video_goes_up_by_its_path_as_before(tmp_path: 
 
 
 @pytest.mark.usefixtures("small_big_files")
-async def test_a_photo_and_an_album_keep_telethons_upload(tmp_path: Path) -> None:
-    members = [
-        custom.Message(
-            id=i,
-            peer_id=types.PeerChannel(1),
-            date=NOW,
-            message="",
-            media=big_video(2 * MIB),
-            grouped_id=9,
-        )
-        for i in (7, 8)
-    ]
-    gw, stub = pooled(*members, blob=os.urandom(2 * MIB))
-    prepared = await gw.prepare(1, unit_of(*members), tmp_path)
+async def test_an_albums_big_document_goes_through_the_pool_a_small_photo_does_not(
+    tmp_path: Path,
+) -> None:
+    small = custom.Message(
+        id=7, peer_id=types.PeerChannel(1), date=NOW, message="", media=photo(), grouped_id=9
+    )
+    big = custom.Message(
+        id=8,
+        peer_id=types.PeerChannel(1),
+        date=NOW,
+        message="",
+        media=big_video(2 * MIB),
+        grouped_id=9,
+    )
+    gw, stub = pooled(small, big, blob=os.urandom(2 * MIB))
+    prepared = await gw.prepare(1, unit_of(small, big), tmp_path)
 
     await gw.send_prepared(2, prepared, KEEP)
 
-    ((_, files, _),) = stub.sent
-    assert isinstance(files, list) and all(isinstance(f, str) for f in files)
-    assert not [r for _, r in stub.requests if isinstance(r, SaveBigFilePartRequest)]
+    assert [r for _, r in stub.requests if isinstance(r, SaveBigFilePartRequest)]  # the video
+    assert stub.uploaded == [str(tmp_path / "7.jpg")]  # the photo: Telethon's own connection
+    kinds = {type(c.media) for c in stub.calls if isinstance(c, UploadMediaRequest)}
+    assert kinds == {types.InputMediaUploadedPhoto, types.InputMediaUploadedDocument}
+    assert stub.sent == []  # posted through SendMultiMediaRequest, not Telethon's send_file
 
 
 @pytest.mark.usefixtures("small_big_files")

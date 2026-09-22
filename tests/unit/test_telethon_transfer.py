@@ -239,18 +239,16 @@ async def test_a_single_photo_reports_too(tmp_path: Path) -> None:
 
 
 async def test_an_album_reports_as_a_whole_under_its_first_message(tmp_path: Path) -> None:
-    """Telethon counts an album in files (``1.5`` of ``2``); the callback turns that into bytes."""
+    """Each member uploads (and reports) on its own; the album folds that into one running byte
+    total under the album's first message id, not the member's own."""
     members = [
-        message(7, media=document(mime="application/pdf"), grouped_id=9),
-        message(8, media=document(mime="application/pdf"), grouped_id=9),
+        message(7, media=document(mime="application/pdf", size=4), grouped_id=9),
+        message(8, media=document(mime="application/pdf", size=4), grouped_id=9),
     ]
-    gw, stub = gateway(*members)
+    gw, _ = gateway(*members)
     events, on_transfer = collector()
     prepared = await gw.prepare(1, unit_of(*members), tmp_path)
 
-    await gw.send_prepared(2, prepared, KEEP, on_transfer)
-    callback = stub.sent[0][2]["progress_callback"]
-    callback(1, 2)  # one file of two is sent
-    callback(2, 2)
+    await gw.send_prepared(2, prepared, KEEP, on_transfer)  # the stub's files are 4 bytes each
 
-    assert events == [(UP, 7, 1, 2), (UP, 7, 2, 2)]  # the two documents are 1 byte each in the stub
+    assert events == [(UP, 7, 4, 8), (UP, 7, 8, 8)]  # 8 = the declared size of both members

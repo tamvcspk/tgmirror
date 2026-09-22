@@ -28,7 +28,7 @@ from telethon.errors.common import InvalidBufferError
 from telethon.network import MTProtoSender
 from telethon.tl import custom
 from telethon.tl.functions.channels import CreateChannelRequest
-from telethon.tl.functions.messages import SearchRequest
+from telethon.tl.functions.messages import SearchRequest, SendMultiMediaRequest, UploadMediaRequest
 from telethon.tl.functions.upload import GetFileRequest, SaveBigFilePartRequest
 
 from tgmirror.core.auth import AccountInfo
@@ -490,22 +490,16 @@ def _media_reusable() -> Iterator[None]:
 
 
 def _reporting(
-    on_transfer: OnTransfer | None, phase: TransferPhase, msg_id: int, share: int | None = None
+    on_transfer: OnTransfer | None, phase: TransferPhase, msg_id: int
 ) -> Callable[[float, float], None] | None:
-    """Telethon's ``progress_callback(done, total)`` as a call to ``on_transfer``.
-
-    For an album Telethon counts files, not bytes (``done`` is the number of files sent, with a
-    fraction for the one in flight); ``share`` is the album's size in bytes, and the callback then
-    scales that fraction to it. A callback that fails must never fail the transfer.
-    """
+    """Telethon's ``progress_callback(done, total)`` as a call to ``on_transfer``. A callback that
+    fails must never fail the transfer."""
     if on_transfer is None:
         return None
 
     def callback(done: float, total: float) -> None:
         if not total:
             return
-        if share is not None:
-            done, total = done / total * share, share
         with contextlib.suppress(Exception):
             on_transfer(phase, msg_id, int(done), int(total))
 
@@ -1255,6 +1249,69 @@ class TelethonGateway:
             raise PerMessage(f"unsupported_media:{type(media).__name__}")
         return int(sent.id)
 
+    async def _upload_one(
+        self, path: Path, on_transfer: OnTransfer | None
+    ) -> types.InputFile | types.InputFileBig:
+        """A file too small to be worth the pool (or a thumbnail, always): Telethon's own
+        single-connection upload. ``on_transfer``, when given, is ``OnTransfer``-shaped already
+        (a caller wrapping a per-item slice of a bigger transfer), not the raw ``(done, total)``
+        Telethon calls its own ``progress_callback`` with."""
+        callback = None
+        if on_transfer is not None:
+
+            def callback(done: float, total: float) -> None:
+                on_transfer(TransferPhase.UPLOAD, 0, int(done), int(total))
+
+        return await self._client.upload_file(str(path), progress_callback=callback)
+
+    def _album_progress(
+        self, on_transfer: OnTransfer | None, msg_id: int, total: int, base: int
+    ) -> OnTransfer | None:
+        """One album item's upload progress folded into the album's running byte total, reported
+        under the album's own first message id (``TransferTracker``'s contract for an album)."""
+        if on_transfer is None or not total:
+            return None
+
+        def callback(phase: TransferPhase, _msg_id: int, done: int, _total: int) -> None:
+            with contextlib.suppress(Exception):
+                on_transfer(phase, msg_id, base + done, total)
+
+        return callback
+
+    async def _album_media(
+        self, peer: object, item: _Item, on_transfer: OnTransfer | None
+    ) -> types.TypeInputMedia:
+        """One album member's bytes, uploaded (through the pool when big enough) and turned into
+        media ``SendMultiMediaRequest`` will actually accept: it refuses a bare
+        ``InputMediaUploadedDocument``/``Photo`` (``MediaInvalidError``), so ``UploadMediaRequest``
+        converts it first, same as Telethon's own album path does."""
+        message = item.message
+        assert item.path is not None
+        kind = media_kind(message)
+        fm: types.TypeInputMedia
+        if kind is MediaKind.PHOTO:
+            handle = await self._upload_one(item.path, on_transfer)
+            fm = types.InputMediaUploadedPhoto(file=handle)
+        else:
+            doc = message.document
+            assert doc is not None
+            if await self._pooled_upload(item):
+                handle = await self._upload_parallel(item.path, message.id, on_transfer)
+            else:
+                handle = await self._upload_one(item.path, on_transfer)
+            thumb = None if item.thumb is None else await self._upload_one(item.thumb, None)
+            fm = types.InputMediaUploadedDocument(
+                file=handle,
+                mime_type=doc.mime_type,
+                attributes=list(doc.attributes),
+                thumb=thumb,
+                force_file=kind is MediaKind.DOCUMENT,
+                nosound_video=True if kind is MediaKind.VIDEO else None,
+            )
+        uploaded = await self._client(UploadMediaRequest(peer, media=fm))
+        got = uploaded.photo if kind is MediaKind.PHOTO else uploaded.document
+        return utils.get_input_media(got)
+
     async def _send_album(
         self,
         peer: object,
@@ -1262,38 +1319,24 @@ class TelethonGateway:
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None = None,
     ) -> list[int]:
-        captions: list[str] = []
-        entity_lists: list[list[object]] = []
+        total = _album_share(items)
+        album_id = items[0].message.id
+        done = 0
+        media: list[types.InputSingleMedia] = []
         for item in items:
             message = item.message
             text, entities = rewrite_caption(
                 message.message or "", list(message.entities or []), caption, _source_names(message)
             )
-            captions.append(text)
-            entity_lists.append(entities)
-        # Telethon sends every file of an album alike and reads video/audio details from the file
-        # (that needs ``hachoir``). Only an album of plain files is forced to stay files: forcing
-        # anything else (videos, songs) would make Telegram show them as files too.
-        as_documents = all(media_kind(i.message) is MediaKind.DOCUMENT for i in items)
-        sent = await self._client.send_file(
-            peer,
-            [str(i.path) for i in items],
-            caption=captions,
-            formatting_entities=entity_lists,
-            parse_mode=None,
-            force_document=as_documents,
-            supports_streaming=True,
-            **(
-                {"progress_callback": progress}
-                if (
-                    progress := _reporting(
-                        on_transfer, TransferPhase.UPLOAD, items[0].message.id, _album_share(items)
-                    )
-                )
-                else {}
-            ),
-        )
-        return [int(m.id) for m in sent]
+            progress = self._album_progress(on_transfer, album_id, total, done)
+            fm = await self._album_media(peer, item, progress)
+            done += _album_share((item,))
+            media.append(types.InputSingleMedia(fm, message=text, entities=entities or None))
+        result = await self._client(SendMultiMediaRequest(peer, multi_media=media))
+        has_updates = types.Updates | types.UpdatesCombined
+        updates = result.updates if isinstance(result, has_updates) else []
+        id_map = {u.random_id: u.id for u in updates if isinstance(u, types.UpdateMessageID)}
+        return [id_map[m.random_id] for m in media]
 
     async def send_text(self, dst: int, text: str) -> int:
         peer = await self._peer(dst)

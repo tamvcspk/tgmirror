@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from telethon import errors, types
 from telethon.tl import custom
+from telethon.tl.functions.messages import SendMultiMediaRequest, UploadMediaRequest
 
 from tgmirror.core.errors import FileRefExpired, FloodWait, PerMessage
 from tgmirror.core.gateway import CaptionMode, CaptionPolicy, MediaKind, SrcMessage, Unit
@@ -39,14 +40,14 @@ def photo() -> types.MessageMediaPhoto:
     )
 
 
-def document(*attributes: Any, mime: str = "video/mp4", thumbs: Any = None) -> Any:
+def document(*attributes: Any, mime: str = "video/mp4", thumbs: Any = None, size: int = 1) -> Any:
     doc = types.Document(
         id=1,
         access_hash=1,
         file_reference=b"",
         date=NOW,
         mime_type=mime,
-        size=1,
+        size=size,
         dc_id=1,
         attributes=list(attributes),
         thumbs=thumbs,
@@ -71,6 +72,10 @@ def write(file: str) -> None:
     Path(file).write_bytes(b"data")
 
 
+def size_of(file: str) -> int:
+    return len(Path(file).read_bytes())
+
+
 def parts_in(folder: Path) -> list[Path]:
     return list(folder.glob("*.part"))
 
@@ -82,6 +87,8 @@ class Stub:
         self.by_id = {m.id: m for m in messages}
         self.downloads: list[tuple[int, str, Any]] = []
         self.sent: list[tuple[str, Any, dict[str, Any]]] = []
+        self.uploaded: list[str] = []  # paths given to ``upload_file`` (single-connection)
+        self.calls: list[Any] = []  # raw requests given to ``__call__``
         self.next_id = 100
 
     async def get_input_entity(self, ref: int) -> int:
@@ -109,6 +116,43 @@ class Stub:
     async def send_message(self, peer: Any, text: str = "", **kw: Any) -> Any:
         self.sent.append(("message", text, kw))
         return SimpleNamespace(id=self._take())
+
+    async def upload_file(self, file: str, *, progress_callback: Any = None) -> Any:
+        self.uploaded.append(file)
+        size = size_of(file)
+        if progress_callback is not None:
+            progress_callback(size, size)
+        return types.InputFile(id=self._take(), parts=1, name=Path(file).name, md5_checksum="")
+
+    async def __call__(self, request: Any) -> Any:
+        """The one-shot RPCs an album posts with: ``UploadMediaRequest``, then
+        ``SendMultiMediaRequest``. The pool's part requests go through ``_call`` (a sender), not
+        here."""
+        self.calls.append(request)
+        if isinstance(request, UploadMediaRequest):
+            if isinstance(request.media, types.InputMediaUploadedPhoto):
+                got = types.Photo(
+                    id=self._take(), access_hash=1, file_reference=b"", date=NOW, sizes=[], dc_id=1
+                )
+                return types.MessageMediaPhoto(photo=got)
+            doc = types.Document(
+                id=self._take(),
+                access_hash=1,
+                file_reference=b"",
+                date=NOW,
+                mime_type=request.media.mime_type,
+                size=1,
+                dc_id=1,
+                attributes=request.media.attributes,
+            )
+            return types.MessageMediaDocument(document=doc)
+        if isinstance(request, SendMultiMediaRequest):
+            updates = [
+                types.UpdateMessageID(id=self._take(), random_id=m.random_id)
+                for m in request.multi_media
+            ]
+            return types.Updates(updates=updates, users=[], chats=[], date=NOW, seq=0)
+        raise AssertionError(f"unexpected call {request!r}")
 
     def _take(self) -> int:
         self.next_id += 1
@@ -378,15 +422,20 @@ async def test_only_what_was_a_plain_file_is_sent_as_a_file(
     assert kw["attributes"] == attributes and kw["mime_type"] == mime
 
 
-async def test_a_song_album_is_not_forced_to_files_but_a_pdf_album_is(tmp_path: Path) -> None:
-    songs = [message(i, media=document(AUDIO, mime="audio/mpeg"), grouped_id=4) for i in (1, 2)]
-    pdfs = [message(i, media=document(NAME, mime="application/pdf"), grouped_id=5) for i in (3, 4)]
-    gw, stub = gateway(*songs, *pdfs)
+async def test_a_mixed_album_forces_only_its_plain_files(tmp_path: Path) -> None:
+    """Each member is forced to a file or not by its own kind (the album goes up through the
+    pool's ``UploadMediaRequest`` per member); Telethon's own list ``send_file`` could only apply
+    one ``force_document`` to every member, so a document mixed with a song had to pick one."""
+    mixed = [
+        message(1, media=document(AUDIO, mime="audio/mpeg"), grouped_id=4),
+        message(2, media=document(NAME, mime="application/pdf"), grouped_id=4),
+    ]
+    gw, stub = gateway(*mixed)
 
-    await gw.send_prepared(2, await gw.prepare(1, unit_of(*songs), tmp_path), KEEP)
-    await gw.send_prepared(2, await gw.prepare(1, unit_of(*pdfs), tmp_path), KEEP)
+    await gw.send_prepared(2, await gw.prepare(1, unit_of(*mixed), tmp_path), KEEP)
 
-    assert [s[2]["force_document"] for s in stub.sent] == [False, True]
+    uploads = [c for c in stub.calls if isinstance(c, UploadMediaRequest)]
+    assert [u.media.force_file for u in uploads] == [False, True]
 
 
 async def test_the_caption_policy_is_applied_to_the_files_caption(tmp_path: Path) -> None:
@@ -422,11 +471,13 @@ async def test_an_album_goes_out_in_one_call_with_one_caption_per_member(tmp_pat
 
     ids = await gw.send_prepared(2, prepared, CaptionPolicy(CaptionMode.APPEND, "via X"))
 
-    assert ids == [101, 102]  # aligned with the members, in order
-    ((_, files, kw),) = stub.sent
-    assert files == [str(tmp_path / "7.jpg"), str(tmp_path / "8.jpg")]
-    assert kw["caption"] == ["album\n\nvia X", ""] and kw["formatting_entities"] == [[], []]
-    assert kw["force_document"] is False and kw["parse_mode"] is None
+    assert len(ids) == 2 and ids[1] == ids[0] + 1  # aligned with the members, in order
+    assert stub.uploaded == [str(tmp_path / "7.jpg"), str(tmp_path / "8.jpg")]
+    uploads = [c for c in stub.calls if isinstance(c, UploadMediaRequest)]
+    assert all(isinstance(u.media, types.InputMediaUploadedPhoto) for u in uploads)
+    (sent,) = [c for c in stub.calls if isinstance(c, SendMultiMediaRequest)]
+    assert [m.message for m in sent.multi_media] == ["album\n\nvia X", ""]
+    assert [m.entities for m in sent.multi_media] == [None, None]
 
 
 async def test_a_document_album_stays_documents(tmp_path: Path) -> None:
@@ -435,7 +486,25 @@ async def test_a_document_album_stays_documents(tmp_path: Path) -> None:
 
     await gw.send_prepared(2, await gw.prepare(1, unit_of(*members), tmp_path), KEEP)
 
-    assert stub.sent[0][2]["force_document"] is True
+    uploads = [c for c in stub.calls if isinstance(c, UploadMediaRequest)]
+    assert [u.media.force_file for u in uploads] == [True, True]
+
+
+async def test_an_album_video_keeps_its_cover_and_attributes(tmp_path: Path) -> None:
+    """The gap the old ``send_file([...])`` album path had: it never passed a per-item thumbnail
+    (Telethon read the cover from the file itself instead). Going through the pool per member
+    lets each item's own already-downloaded cover (``prepare``) be used directly."""
+    clip = message(2, media=document(VIDEO, thumbs=[COVER]), grouped_id=9)
+    pic = message(3, media=photo(), grouped_id=9)
+    gw, stub = gateway(clip, pic)
+
+    await gw.send_prepared(2, await gw.prepare(1, unit_of(clip, pic), tmp_path), KEEP)
+
+    assert str(tmp_path / "2.thumb.jpg") in stub.uploaded
+    uploads = [c for c in stub.calls if isinstance(c, UploadMediaRequest)]
+    (video_upload,) = [u for u in uploads if isinstance(u.media, types.InputMediaUploadedDocument)]
+    assert video_upload.media.attributes == [VIDEO] and video_upload.media.mime_type == "video/mp4"
+    assert video_upload.media.thumb is not None and video_upload.media.nosound_video is True
 
 
 async def test_text_goes_out_as_text_and_is_never_parsed_as_markdown(tmp_path: Path) -> None:
