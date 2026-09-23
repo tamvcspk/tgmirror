@@ -343,6 +343,65 @@ def test_run_keeps_the_filter_and_the_options_of_that_run(
     assert "Using the filter of the previous run" in again.output
 
 
+def test_run_with_two_pairs_and_no_number_asks_which_to_continue(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """Without this step, a bare `run` would silently pick pair B (the latest run overall,
+    started second below); picking "#1" proves the wizard, not the old default, decided this."""
+    src_a, dst_a = source_with_messages(gateway, 1)
+    src_b, dst_b = gateway.add_channel("Source2"), gateway.add_channel("Copy2")
+    gateway.add_message(src_b.id, "n1")
+
+    prompter = ScriptedPrompter(select=["#1"])
+    rt = make_runtime(gateway=gateway, interactive=True, prompter=prompter)
+    runner.invoke(app, CLONE, obj=rt)  # pair A -> run 1
+    runner.invoke(app, ["clone", "--src", "Source2", "--dst", "Copy2", "--yes"], obj=rt)  # run 2
+    gateway.add_message(src_a, "m2")
+    gateway.add_message(src_b.id, "n2")
+
+    result = runner.invoke(app, ["run"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst_a) == ["m1", "m2"]  # pair A was continued, not pair B
+    assert texts(gateway, dst_b.id) == ["n1"]  # untouched
+    assert ("select", "Continue which pair? (type to filter)") in prompter.asked
+
+
+def test_run_with_one_pair_and_no_number_asks_nothing(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, dst = source_with_messages(gateway, 1)
+    prompter = ScriptedPrompter()  # a "select" call with nothing queued would fail the test
+    rt = make_runtime(gateway=gateway, interactive=True, prompter=prompter)
+    runner.invoke(app, CLONE, obj=rt)
+    gateway.add_message(src, "m2")
+
+    result = runner.invoke(app, ["run"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst) == ["m1", "m2"]
+    assert ("select", "Continue which pair? (type to filter)") not in prompter.asked
+
+
+def test_run_with_two_pairs_but_no_terminal_keeps_picking_the_latest(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """Non-interactive (a script) must never gain a prompt it did not have before."""
+    src_a, dst_a = source_with_messages(gateway, 1)
+    src_b, dst_b = gateway.add_channel("Source2"), gateway.add_channel("Copy2")
+    gateway.add_message(src_b.id, "n1")
+    rt = make_runtime(gateway=gateway)  # interactive=False by default
+    runner.invoke(app, CLONE, obj=rt)
+    runner.invoke(app, ["clone", "--src", "Source2", "--dst", "Copy2", "--yes"], obj=rt)
+    gateway.add_message(src_b.id, "n2")
+
+    result = runner.invoke(app, ["run"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst_b.id) == ["n1", "n2"]  # the latest run overall (pair B), unasked
+    assert texts(gateway, dst_a) == ["m1"]
+
+
 def test_run_with_no_history_or_an_unknown_number_exits_2(make_runtime: MakeRuntime) -> None:
     rt = make_runtime()
 

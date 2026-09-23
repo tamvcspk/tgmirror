@@ -20,6 +20,7 @@ from tgmirror.engine.endpoints import (
 )
 from tgmirror.filters.model import FilterError, FilterSpec
 from tgmirror.filters.parser import FlagFilters, from_file, from_flags
+from tgmirror.store.runs import Run
 from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import Choice, Prompter
 from tgmirror.ui.tables import channel_label
@@ -59,6 +60,29 @@ async def ask_new_channel(prompter: Prompter) -> NewChannelSpec:
                 raise
             prompter.say(describe(exc))
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+async def pick_run(prompter: Prompter, pairs: Sequence[Run]) -> Run:
+    """``tgmirror run`` with no run number and more than one pair in history: which to continue.
+
+    Only called when there is a real choice (``cli/commands/run.py``); with a single pair, or
+    without a terminal, that one pair is picked without asking, same as before this step existed.
+    """
+    choices = [
+        Choice(
+            t(
+                "run.pick_pair_line",
+                id=p.id,
+                src=p.src_title,
+                dst=p.dst_title,
+                mode=p.mode,
+                status=t(f"status.{p.status}"),
+            ),
+            p,
+        )
+        for p in pairs
+    ]
+    return await prompter.select(t("run.pick_pair"), choices)
 
 
 async def pick_resume(prompter: Prompter, copied: int) -> bool:

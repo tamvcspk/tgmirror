@@ -11,6 +11,12 @@ the two never disagree about a run in flight. ``delay`` and the flood count are 
 ``Reporter`` (they belong to the limiter, which the reporter never sees): this view infers them
 from the ``throttled``/``flood_waiting`` notices it already receives, so a shown delay is only as
 fresh as the last flood (it does not know about a decay back down that caused no notice).
+
+The panel is seeded with the run as it stood when the reporter was built (``TuiReporter.__init__``
+takes it), not left blank until the first ``progress()``: a run of one big file that keeps meeting
+FloodWait can go the whole run without a single batch committing, and a panel that only fills in on
+``progress()`` would just look like it never started (found on a real ``--mode reupload`` run that
+kept hitting transport 429s, 2026-09-23).
 """
 
 import time
@@ -71,26 +77,32 @@ class TuiReporter:
     def __init__(
         self,
         limits: Limits,
+        run: Run,
         *,
-        src: str,
-        dst: str,
         console: Console | None = None,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = utc_now,
     ) -> None:
+        """``run`` is the run as it stands the moment the run starts (``cli/commands/run.py``
+        always has it before building a reporter). Seeding it here, instead of waiting for the
+        first ``progress()``, matters: a run of one big file can go a long time — sometimes the
+        whole run, if it keeps meeting FloodWait — before any batch commits, and until then this
+        was the one thing that made the panel stay blank instead of showing the run has started.
+        """
         self._live = Live(console=console, refresh_per_second=REFRESH, transient=False)
         self._lines = LineReporter(self._live.console.print)  # notices, per-file transfer lines
-        self._src, self._dst = src, dst
+        self._src, self._dst = run.src_title, run.dst_title
         self._delay = limits.min_delay
         self._clock = clock
         self._now = now
         self._floods = 0
         self._last_flood: float | None = None
         self._paused = False
-        self._run: Run | None = None
+        self._run: Run = run
 
     def __enter__(self) -> "TuiReporter":
         self._live.__enter__()
+        self._refresh()  # the seeded run, right away: nothing else may call in for a while
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -116,13 +128,13 @@ class TuiReporter:
 
     def transfer(self, transfer: Transfer) -> None:
         self._lines.transfer(transfer)
+        self._refresh()  # a big file's download/upload can take a while: keep the panel visibly
+        # alive meanwhile, even though it has nothing new to say until the unit's batch commits
 
     def render(self) -> RenderableType:
         """The current view, without touching ``Live``: what ``_refresh`` pushes to it, and what
         a test reads back (a real terminal is never needed to check this)."""
         run = self._run
-        if run is None:
-            return Text("")
         est = estimate(run, now=self._now(), live=not self._paused)
         header = t(
             "tui.header",

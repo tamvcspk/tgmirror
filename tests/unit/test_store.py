@@ -176,6 +176,19 @@ async def test_the_latest_run_of_a_pair_and_the_newest_overall(store: Store) -> 
     assert [r.id for r in await store.list_runs(2)] == [again.id, b.id]
 
 
+async def test_list_pairs_gives_one_row_per_mirror_the_latest_run_first(store: Store) -> None:
+    a1 = (await store.start_run(spec())).run
+    await store.finish(a1.id, RunStatus.DONE)
+    b1 = (await store.start_run(RunSpec(ChannelInfo(-5, "X"), ChannelInfo(-6, "Y")))).run
+    await store.finish(b1.id, RunStatus.DONE)
+    a2 = (
+        await store.start_run(RunSpec(ChannelInfo(a1.src_id, "Src"), ChannelInfo(a1.dst_id, "Dst")))
+    ).run
+
+    assert [r.id for r in await store.list_pairs(10)] == [a2.id, b1.id]  # not a1: superseded
+    assert [r.id for r in await store.list_pairs(1)] == [a2.id]
+
+
 async def test_the_filter_is_remembered_and_a_different_one_restarts_the_read(store: Store) -> None:
     base = spec(filters_json='{"media": ["video"]}')
     first = (await store.start_run(base)).run

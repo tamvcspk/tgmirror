@@ -27,23 +27,26 @@ from tgmirror.core.paths import Paths
 from tgmirror.core.telethon_gateway import telethon_session
 from tgmirror.engine.runner import Reporter
 from tgmirror.store.db import Store
+from tgmirror.store.runs import Run
 from tgmirror.ui.progress import LineReporter
 from tgmirror.ui.prompts import Prompter, QuestionaryPrompter
 from tgmirror.ui.tui import TuiReporter
 
 # ``Runtime.reporter``: how a clone's progress is shown while it runs (p/r/q hotkeys are ``keys``,
-# above — both depend on a real terminal, so both are injectable the same way for tests).
-ReporterFactory = Callable[[Limits, str, str], AbstractContextManager[Reporter]]
+# above — both depend on a real terminal, so both are injectable the same way for tests). Takes the
+# run as it stands when it starts, so a TUI can seed its panel instead of showing nothing until the
+# first batch commits (a run of one big file can go a long time without one).
+ReporterFactory = Callable[[Limits, Run], AbstractContextManager[Reporter]]
 
 
-def plain_reporter(limits: Limits, src: str, dst: str) -> AbstractContextManager[Reporter]:
+def plain_reporter(limits: Limits, run: Run) -> AbstractContextManager[Reporter]:
     """The default: no terminal (or a test), one line at a time (``ui/progress.py``)."""
     return nullcontext(LineReporter(typer.echo))
 
 
-def terminal_reporter(limits: Limits, src: str, dst: str) -> AbstractContextManager[Reporter]:
+def terminal_reporter(limits: Limits, run: Run) -> AbstractContextManager[Reporter]:
     """The Rich Live view (``ui/tui.py``), used while a real terminal is attached."""
-    return TuiReporter(limits, src=src, dst=dst)
+    return TuiReporter(limits, run)
 
 
 @dataclass(frozen=True, slots=True)

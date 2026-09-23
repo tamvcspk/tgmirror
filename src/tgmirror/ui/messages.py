@@ -279,6 +279,8 @@ VI: dict[str, str] = {
     "run.resumed": "Chạy tiếp.",
     "run.continue_hint": "Chạy tiếp sau: tgmirror run {id}",
     "run.resumed_elsewhere": "Lần chạy {id} đang tạm dừng ở terminal khác; đã cho chạy tiếp ở đó.",
+    "run.pick_pair": "Chạy tiếp cặp nào? (gõ để lọc)",
+    "run.pick_pair_line": "#{id}  {src} → {dst}   {mode}   {status}",
     # foreground TUI (Rich Live, ui/tui.py)
     "tui.header": 'tgmirror ▸ lần chạy {id}  "{src} → {dst}"   mode={mode}   delay={delay}s',
     "tui.progress_total": "{handled}/{total} tin (~{percent}%)",
@@ -655,6 +657,8 @@ EN: dict[str, str] = {
     "run.resumed": "Resumed.",
     "run.continue_hint": "Continue with: tgmirror run {id}",
     "run.resumed_elsewhere": "Run {id} was paused in another terminal; it is running again there.",
+    "run.pick_pair": "Continue which pair? (type to filter)",
+    "run.pick_pair_line": "#{id}  {src} → {dst}   {mode}   {status}",
     # foreground TUI (Rich Live, ui/tui.py)
     "tui.header": 'tgmirror ▸ run {id}  "{src} → {dst}"   mode={mode}   delay={delay}s',
     "tui.progress_total": "{handled}/{total} messages (~{percent}%)",

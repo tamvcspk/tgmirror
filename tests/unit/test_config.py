@@ -21,6 +21,9 @@ def test_defaults_without_file_or_env(paths: Paths) -> None:
     assert cfg.limits == Limits()
     assert cfg.limits.batch_size == 20
     assert cfg.limits.long_pause_range == (30.0, 90.0)
+    # download and upload each get their own request budget (docs/06-lo-trinh.md, 2026-09-23):
+    # a real run found download broke at 8 in flight where upload did not
+    assert (cfg.limits.download_requests, cfg.limits.upload_requests) == (4, 8)
 
 
 def test_reads_toml(paths: Paths) -> None:

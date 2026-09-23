@@ -262,7 +262,9 @@ async def test_nothing_to_move_is_nothing_to_do() -> None:
 
 
 async def test_a_second_transfer_shares_the_budget_and_the_first_comes_first() -> None:
-    """One budget for a download and an upload: the upload (priority 0) gets slots ahead of it."""
+    """Two transfers sharing one budget (a generic capability of ``run_parts``/``RequestBudget``;
+    ``core/telethon_gateway.py`` no longer shares one between download and upload, see its module
+    docstring): the lower ``priority`` number's parts go first."""
     budget = RequestBudget(start=2, maximum=2)
     order: list[str] = []
 

@@ -87,7 +87,9 @@ async def no_wait(seconds: float) -> None:
     return None
 
 
-POOL = TransferSettings(max_requests=8, upload_connections=2, min_bytes=1 * MIB)
+POOL = TransferSettings(
+    download_requests=8, upload_requests=8, upload_connections=2, min_bytes=1 * MIB
+)
 
 
 class Conn:
@@ -242,14 +244,18 @@ async def test_a_transport_429_ends_the_transfer_as_a_flood_wait_and_backs_the_b
         await gw.prepare(1, unit_of(clip), tmp_path)
 
     assert caught.value.transport and caught.value.seconds == TRANSPORT_WAIT
-    assert gw._budget is not None and gw._budget.limit == 1  # 2 halved
+    assert gw._download_budget is not None and gw._download_budget.limit == 1  # 2 halved
+    # download and upload no longer share one budget (docs/06-lo-trinh.md, 2026-09-23): pressure
+    # on the download side must never touch the upload side's budget
+    assert gw._upload_budget is not None and gw._upload_budget.limit == 2  # untouched
 
 
 async def test_the_repeat_after_a_flood_takes_up_the_parts_it_already_has(tmp_path: Path) -> None:
     """The guard repeats ``prepare`` after the wait: a 200 MB video must not start again."""
     blob = os.urandom(4 * MIB + 99)
     clip = clip_of(len(blob))
-    gw, stub = pooled(clip, blob=blob, settings=TransferSettings(max_requests=1, min_bytes=MIB))
+    settings = TransferSettings(download_requests=1, upload_requests=1, min_bytes=MIB)
+    gw, stub = pooled(clip, blob=blob, settings=settings)
 
     def flood_on_the_third_part(request: Any) -> None:
         raise InvalidBufferError(struct.pack("<i", -429))
@@ -325,7 +331,9 @@ async def test_a_part_of_the_wrong_length_is_asked_for_again(tmp_path: Path) -> 
 async def test_a_request_that_gets_no_answer_in_time_counts_as_pushback(tmp_path: Path) -> None:
     blob = os.urandom(2 * MIB)
     clip = clip_of(len(blob))
-    settings = TransferSettings(max_requests=8, min_bytes=1 * MIB, request_timeout=0.05)
+    settings = TransferSettings(
+        download_requests=8, upload_requests=8, min_bytes=1 * MIB, request_timeout=0.05
+    )
     gw, stub = pooled(clip, blob=blob, settings=settings)
     stalled = False
     original = stub._call

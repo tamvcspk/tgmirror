@@ -40,14 +40,16 @@ class Limits(BaseModel):
     # one unit at a time — see docs/06-lo-trinh.md, "chạy lại với hình dạng đúng" (2026-09-22).
     prefetch: int = Field(0, ge=0, le=3)
     tmp_budget_mb: int = Field(2048, ge=1)  # disk the downloaded-ahead files may take together
-    # File transfers of strategy B (docs/05): requests in flight at once for the whole process,
-    # shared by downloads and uploads (0 = one request at a time, Telethon's own way). The budget
-    # starts at 2 and grows to this while things go well. 8 connections / 8 requests in flight (one
-    # request per connection), one file at a time with no download running alongside, measured
-    # clean twice in a row (~24-28 MB/s upload); going past either number (more requests than
-    # connections, or more than 8 connections) broke both times it was tried (docs/06-lo-trinh.md,
-    # 2026-09-23). Not a guess: reproduced, unlike the earlier low defaults this replaces.
-    max_requests: int = Field(8, ge=0, le=16)
+    # File transfers of strategy B (docs/05): requests in flight at once, one budget for downloads
+    # and a separate one for uploads (0 = one request at a time, Telethon's own way; each budget
+    # starts at 2 and grows toward its ceiling while things go well). They used to be one shared
+    # number: 8/8 (one request per connection), one file at a time with no download running
+    # alongside, measured clean twice in a row (~24-28 MB/s upload) — but a real ``--mode reupload``
+    # run (2026-09-23) hit repeated transport 429s and dead connections downloading at 8, something
+    # the earlier bench never tried (single file, no real network conditions). Lowered downloads to
+    # 4 on that evidence; uploads stay at 8, unaffected by the same run.
+    download_requests: int = Field(4, ge=0, le=16)
+    upload_requests: int = Field(8, ge=0, le=16)
     upload_connections: int = Field(8, ge=1, le=16)  # connections uploads are spread over
     pool_min_mb: int = Field(10, ge=1)  # smaller files keep Telethon's own transfer
 

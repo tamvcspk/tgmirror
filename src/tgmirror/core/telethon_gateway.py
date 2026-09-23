@@ -102,6 +102,17 @@ BIG_FILE = 10 * 1024 * 1024  # from here Telegram wants the big-file upload
 MAX_UP_PARTS = 4000  # parts of a big file (2 GB; more only for Premium: not pooled)
 START_REQUESTS = 2  # requests in flight a budget starts with
 
+
+def _budget(maximum: int) -> RequestBudget | None:
+    """A download or upload's own ``RequestBudget``, or ``None`` (that direction's pool off,
+    ``download_requests``/``upload_requests`` = 0) — download and upload no longer share one
+    (docs/06-lo-trinh.md, 2026-09-23: a real run found 8 downloads in flight broke on repeated
+    transport 429s and dead connections, while 8 uploads did not; they need to be tunable apart)."""
+    if maximum <= 0:
+        return None
+    return RequestBudget(start=min(START_REQUESTS, maximum), maximum=maximum)
+
+
 # ``media`` pushdown (docs/03-filters.md): only kinds whose Telegram filter is a superset of ours.
 # ``filters.pushdown.PUSHABLE_MEDIA`` lists the same kinds; a test keeps the two in step.
 _MEDIA_FILTERS: dict[MediaKind, type] = {
@@ -621,18 +632,25 @@ class TelethonAuth:
 
 @dataclass(frozen=True, slots=True)
 class TransferSettings:
-    """How files of strategy B move (``[limits]`` ``max_requests``, ``upload_connections``,
-    ``pool_min_mb``). ``max_requests = 0`` (the default here, so tests and one-shot commands
-    are unaffected) leaves them to Telethon: one request at a time."""
+    """How files of strategy B move (``[limits]`` ``download_requests``, ``upload_requests``,
+    ``upload_connections``, ``pool_min_mb``): a separate request budget for each direction, so one
+    can be tuned without the other. ``0`` (the default here, so tests and one-shot commands are
+    unaffected) leaves that direction to Telethon: one request at a time."""
 
-    max_requests: int = 0
+    download_requests: int = 0
+    upload_requests: int = 0
     upload_connections: int = 2
     min_bytes: int = BIG_FILE
     request_timeout: float = 30.0  # a request that gets no answer counts as pushback
 
     @classmethod
     def of(cls, limits: Limits) -> "TransferSettings":
-        return cls(limits.max_requests, limits.upload_connections, limits.pool_min_mb * 1024 * 1024)
+        return cls(
+            limits.download_requests,
+            limits.upload_requests,
+            limits.upload_connections,
+            limits.pool_min_mb * 1024 * 1024,
+        )
 
 
 class _NoPool(Exception):
@@ -652,10 +670,8 @@ class TelethonGateway:
         self._client = client
         self._transfer = transfer or TransferSettings()
         self._sleep = sleep
-        top = self._transfer.max_requests
-        self._budget = (
-            RequestBudget(start=min(START_REQUESTS, top), maximum=top) if top > 0 else None
-        )
+        self._download_budget = _budget(self._transfer.download_requests)
+        self._upload_budget = _budget(self._transfer.upload_requests)
         # Bulk data never shares the main connection with the calls that read and post: the first
         # real run drew a 429 with downloads and uploads on it. Uploads spread over extra
         # connections, a download over one of its own (both to this account's data centre).
@@ -890,9 +906,9 @@ class TelethonGateway:
     # ---- file transfers through the request budget ---------------------------------------
 
     def _pooled(self, message: custom.Message) -> bool:
-        """A document big enough to be worth many requests in flight."""
+        """A document big enough to be worth many requests in flight (download side)."""
         return (
-            self._budget is not None
+            self._download_budget is not None
             and message.document is not None
             and (message.file.size or 0) >= self._transfer.min_bytes
         )
@@ -917,7 +933,7 @@ class TelethonGateway:
         connection of the file's data centre (one connection is enough: spike 12). Each part
         is written where it belongs, so the order they arrive in does not matter. Raises
         ``_NoPool`` for a file this cannot fetch."""
-        assert self._budget is not None
+        assert self._download_budget is not None
         size = int(message.file.size)
         dc_id, location = utils.get_input_location(message.media)
         home = self._client.session.dc_id
@@ -957,9 +973,8 @@ class TelethonGateway:
             await asyncio.to_thread(handle.open)
             if report is not None:
                 report(done, size)
-            await run_parts(
-                math.ceil(size / DOWN_PART), work, self._budget, priority=1, sleep=self._sleep
-            )
+            parts = math.ceil(size / DOWN_PART)
+            await run_parts(parts, work, self._download_budget, sleep=self._sleep)
             self._partial.pop(part, None)
         finally:
             await asyncio.to_thread(handle.close)
@@ -1052,7 +1067,7 @@ class TelethonGateway:
         connections; the result is what ``send_file`` takes instead of the path. Parts may
         arrive in any order, and a file that is uploaded but never posted is discarded by
         Telegram, so a failure part-way leaves nothing behind."""
-        assert self._budget is not None
+        assert self._upload_budget is not None
         size = (await asyncio.to_thread(path.stat)).st_size
         parts = math.ceil(size / UP_PART)
         senders = await self._upload_senders()
@@ -1078,7 +1093,7 @@ class TelethonGateway:
             await asyncio.to_thread(handle.open)
             if report is not None:
                 report(0, size)
-            await run_parts(parts, work, self._budget, priority=0, sleep=self._sleep)
+            await run_parts(parts, work, self._upload_budget, sleep=self._sleep)
         finally:
             await asyncio.to_thread(handle.close)
         return types.InputFileBig(id=file_id, parts=parts, name=path.name)
@@ -1144,7 +1159,7 @@ class TelethonGateway:
 
     async def _pooled_upload(self, item: _Item) -> bool:
         """A single document big enough for the big-file API and the request pool."""
-        if self._budget is None or item.path is None or item.message.document is None:
+        if self._upload_budget is None or item.path is None or item.message.document is None:
             return False
         size = (await asyncio.to_thread(item.path.stat)).st_size
         return (

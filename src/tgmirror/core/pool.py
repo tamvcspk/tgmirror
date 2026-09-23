@@ -4,12 +4,15 @@ Moving a file one request at a time is bound by latency, not bandwidth (docs/06-
 spike 12: 4 MB/s one request at a time, 30 MB/s with eight in flight). Two pieces fix that without
 making the account look like a flood:
 
-- ``RequestBudget`` is the one number of file-transfer requests that may be in flight at once,
-  shared by every download and upload of the process. It starts small, grows a step at a time while
-  things go well, and is halved when the server pushes back. 8 connections / 8 requests in flight
-  (one per connection), one file at a time, measured clean twice in a row; going past either number
-  broke both times it was tried (docs/06-lo-trinh.md, 2026-09-23) — so that stays the ceiling.
-- ``run_parts`` runs the parts of one file under that budget: workers take the next part, whoever is
+- ``RequestBudget`` is the number of file-transfer requests that may be in flight at once. It
+  starts small, grows a step at a time while things go well, and is halved when the server pushes
+  back. It can be shared by several transfers at once (``priority`` says which gets a slot first),
+  but ``core/telethon_gateway.py`` keeps one *per direction* instead — download and upload were
+  found to break at different points on a real run (a video download at 8 in flight hit repeated
+  transport 429s and dead connections; 8 in flight uploading did not), so they need separate
+  ceilings, not one shared number (docs/06-lo-trinh.md, 2026-09-23; download defaults to 4, upload
+  stays at 8).
+- ``run_parts`` runs the parts of one file under a budget: workers take the next part, whoever is
   free, so a slow connection simply does fewer parts. A part that meets pushback is repeated after a
   wait; a FloodWait ends the whole transfer (the caller's ``FloodGuard`` sits it out and repeats).
 

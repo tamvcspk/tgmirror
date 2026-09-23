@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 
+from tgmirror.cli import wizard
 from tgmirror.cli.errors import UsageProblem, run
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
@@ -21,6 +22,7 @@ from tgmirror.ui.tables import channel_label
 from tgmirror.ui.tui import TuiReporter
 
 EXIT_INTERRUPTED = 130
+PAIR_CHOICES = 10  # how many recently active pairs the wizard offers when none was named
 
 
 def run_clone(
@@ -67,6 +69,9 @@ def run_clone(
     Uses the filter and options of that run. If that clone is paused in another terminal, this
     resumes it there instead. Ctrl+C stops it, saving progress; keys: p pause, r resume, q stop.
 
+    No run number, a terminal, and more than one pair in `tgmirror history`: asks which to
+    continue. With one pair, or no terminal, the latest run is picked without asking, as before.
+
     A FloodWait up to [limits] max_auto_wait seconds is waited out and the same batch is sent
     again. A longer one ends the run as waiting (exit code 3) unless --wait is given. The daily
     cap ([limits] daily_cap) always ends it until the next midnight.
@@ -80,7 +85,7 @@ def run_clone(
 
     async def command() -> None:
         async with opened_store(rt) as store:
-            target = await resolve_run(store, number)
+            target = await _pick_target(rt, store, number)
             live = await store.active_run()
             if (
                 live is not None
@@ -116,6 +121,16 @@ def run_clone(
                 await execute(rt, store, conn.gateway, started, wait=wait)
 
     run(rt, command())
+
+
+async def _pick_target(rt: Runtime, store: Store, number: str | None) -> Run:
+    """The run ``tgmirror run`` continues: ``number`` when given, else the wizard's choice among
+    recently active pairs when there is a real one to make, else the latest run as before."""
+    if number is None and rt.interactive:
+        pairs = await store.list_pairs(PAIR_CHOICES)
+        if len(pairs) > 1:
+            return await wizard.pick_run(rt.prompter, pairs)
+    return await resolve_run(store, number)
 
 
 def pair_of(earlier: Run) -> tuple[ChannelInfo, ChannelInfo]:
@@ -190,7 +205,7 @@ async def execute(
         if started.filters is FilterChange.SAME and current.filters_json != "{}":
             typer.echo(t("run.filter_reused"))
     with (
-        rt.reporter(limits, current.src_title, current.dst_title) as reporter,
+        rt.reporter(limits, current) as reporter,
         stop_on_interrupt(control, lambda: typer.echo(t("run.stopping"), err=True)) as interrupt,
         rt.keys(control) as listening,
     ):

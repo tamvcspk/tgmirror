@@ -289,6 +289,20 @@ class Store:
             cur = await self._conn.execute(RUN_SELECT + " ORDER BY r.id DESC LIMIT ?", (limit,))
             return [run_from_row(r) for r in await cur.fetchall()]
 
+    async def list_pairs(self, limit: int = 10) -> list[Run]:
+        """The latest run of each distinct pair (mirror), most recently active first.
+
+        For ``run``'s wizard step: which pair to continue when none was named and more than one
+        exists.
+        """
+        async with self._lock:
+            cur = await self._conn.execute(
+                RUN_SELECT + " WHERE r.id IN (SELECT MAX(id) FROM runs GROUP BY mirror_id) "
+                "ORDER BY r.id DESC LIMIT ?",
+                (limit,),
+            )
+            return [run_from_row(r) for r in await cur.fetchall()]
+
     async def active_run(self) -> Run | None:
         """The run some process holds right now (``running``/``paused`` with a fresh heartbeat)."""
         now = self._now()
