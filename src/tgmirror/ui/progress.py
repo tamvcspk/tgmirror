@@ -2,13 +2,14 @@
 (implements ``engine.runner.Reporter``).
 
 Works without a terminal: no ANSI, one line at most every ``interval`` seconds, and notices
-(reconcile results, flood stop) always. The Rich live view with keys is phase 7
-(docs/06-lo-trinh.md); ``docs/02-cli-ux.md`` describes it.
+(reconcile results, flood stop) always. This is ``Runtime.reporter``'s default
+(``cli/runtime.py::plain_reporter``); with a real terminal attached, the Rich Live view
+(``ui/tui.py::TuiReporter``) is used instead and reuses this module's ``duration``/notice text.
 """
 
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from tgmirror.core.gateway import TransferPhase
 from tgmirror.engine.transfer import Transfer
@@ -25,6 +26,16 @@ def _plain(value: object) -> object:
     if isinstance(value, datetime):
         return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
     return value
+
+
+def duration(span: timedelta) -> str:
+    """``1 giờ 5 phút``, ``44 phút``, ``38 giây``: the two largest units are enough for an ETA."""
+    seconds = max(int(span.total_seconds()), 0)
+    if seconds >= 3600:
+        return t("duration.hours", hours=seconds // 3600, minutes=seconds % 3600 // 60)
+    if seconds >= 60:
+        return t("duration.minutes", minutes=seconds // 60)
+    return t("duration.seconds", seconds=seconds)
 
 
 def size(count: float) -> str:

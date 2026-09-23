@@ -87,7 +87,7 @@ tgmirror clone --src ... --dst ... --mode reupload \
 
 ## Điều khiển khi đang chạy
 
-Khi `clone`/`run` đang chạy trong một terminal (foreground), dòng chữ thường (không ANSI, dùng được khi chuyển hướng): `Lần chạy 3: 4,180 tin đã sao chép, 3 lỗi (tin nguồn tới id …)` tối đa một dòng mỗi 5 giây (thêm số tin bị filter loại khi có, và một dòng tổng kết cuối), cộng các thông báo (reconcile, flood, tạm dừng) và một dòng kết quả. Có terminal thì in thêm một dòng nhắc phím.
+Khi `clone`/`run` đang chạy (foreground): có terminal thật thì hiện TUI (Rich Live, xem dưới), phím đã hoạt động và hiện ngay trong khung nên không có dòng nhắc riêng. Không có terminal (chuyển hướng, chạy từ script, test) thì phím cũng không hoạt động, và tiến độ là dòng chữ thường (không ANSI, dùng được khi chuyển hướng): `Lần chạy 3: 4,180 tin đã sao chép, 3 lỗi (tin nguồn tới id …)` tối đa một dòng mỗi 5 giây (thêm số tin bị filter loại khi có, và một dòng tổng kết cuối), cộng các thông báo (reconcile, flood, tạm dừng) và một dòng kết quả.
 
 | Cách | Tác dụng |
 |---|---|
@@ -97,9 +97,9 @@ Khi `clone`/`run` đang chạy trong một terminal (foreground), dòng chữ th
 | Ctrl+C | Như `q` nhưng thoát mã 130; lần hai thoát ngay (batch dở dang được xử lý theo quy tắc reconcile ở `04-state-checkpoint.md`) |
 | `tgmirror pause` / `run` / `stop` từ terminal khác | Như `p` / `r` / `q` (qua cờ `control` trong DB) |
 
-Dùng phím thường (không phải Ctrl+P/Ctrl+R) vì terminal tích hợp của VS Code giữ hai tổ hợp đó cho chính nó nên chúng không tới được chương trình. Phím chỉ hoạt động khi có terminal; Windows dùng `msvcrt`, POSIX dùng `termios` ở chế độ cbreak (Ctrl+C vẫn là SIGINT). Chúng và các lệnh `pause`/`stop`/`run` cùng điều khiển một `RunControl` (`engine/runner.py`), nên giao diện Rich sau này chỉ cần gọi cùng ba việc.
+Dùng phím thường (không phải Ctrl+P/Ctrl+R) vì terminal tích hợp của VS Code giữ hai tổ hợp đó cho chính nó nên chúng không tới được chương trình. Phím chỉ hoạt động khi có terminal; Windows dùng `msvcrt`, POSIX dùng `termios` ở chế độ cbreak (Ctrl+C vẫn là SIGINT). Chúng và các lệnh `pause`/`stop`/`run` cùng điều khiển một `RunControl` (`engine/runner.py`), nên TUI Rich (dưới) chỉ cần gọi cùng ba việc, không có đường riêng.
 
-Foreground TUI (Rich Live, phase 7) — chỉ còn phần hiển thị, các phím đã có ở trên:
+Foreground TUI (Rich Live) — đã làm (2026-09-23, `ui/tui.py::TuiReporter`, xem `06-lo-trinh.md` "Phase 7 — ghi chú"), dùng khi có terminal thật (không có thì dùng dòng chữ thường ở trên):
 
 ```
 tgmirror ▸ lần chạy 7  "Kenh A → Kenh A (copy)"   mode=copy   delay=2.4s
@@ -187,7 +187,7 @@ Mọi số là **ước lượng**: `status` chỉ đọc DB (clone đang chạy
 
 ### Trong lúc chạy (`clone`/`run`)
 
-Đầu lần chạy có một dòng "Ước tính: tối đa N tin cần xem xét" (và một dòng về cap ngày nếu tốn hơn một ngày). Dòng tiến độ theo batch là `Lần chạy 7: 1200/9800 tin (~12%): 1150 đã sao chép, 50 bị filter loại, 0 lỗi.` (không có tổng thì dạng cũ). Với file ≥ 8 MB (chiến lược B) có thêm dòng riêng: `Tải xuống tin 42: 45% (12.3 MB / 27.4 MB, 3.2 MB/s).` và `Tải lên tin 42: ...`, in lúc bắt đầu, khi tiến thêm 5% (cách nhau ít nhất 5 giây), hoặc sau 30 giây dù chưa tiến nhiều, và khi xong (chưa xong thì không hiện 100%). Giao diện Rich (phase 7) dùng cùng dữ liệu (`Reporter.progress`, `Reporter.transfer`) cho thanh tiến độ và hai dòng tải xuống / tải lên.
+Đầu lần chạy có một dòng "Ước tính: tối đa N tin cần xem xét" (và một dòng về cap ngày nếu tốn hơn một ngày). Dòng tiến độ theo batch là `Lần chạy 7: 1200/9800 tin (~12%): 1150 đã sao chép, 50 bị filter loại, 0 lỗi.` (không có tổng thì dạng cũ). Với file ≥ 8 MB (chiến lược B) có thêm dòng riêng: `Tải xuống tin 42: 45% (12.3 MB / 27.4 MB, 3.2 MB/s).` và `Tải lên tin 42: ...`, in lúc bắt đầu, khi tiến thêm 5% (cách nhau ít nhất 5 giây), hoặc sau 30 giây dù chưa tiến nhiều, và khi xong (chưa xong thì không hiện 100%). Giao diện Rich (`ui/tui.py`, đã làm) dùng cùng dữ liệu (`Reporter.progress`, `Reporter.transfer`) cho thanh tiến độ và hai dòng tải xuống / tải lên.
 
 ## Làm lại từ đầu (`--fresh`)
 

@@ -5,7 +5,7 @@ holds the session. Progress, speed and ETA are estimates (``engine/status.py`` s
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Annotated
 
 import typer
@@ -17,6 +17,7 @@ from tgmirror.engine.status import StatusReport, build_report
 from tgmirror.store.db import utc_now
 from tgmirror.store.runs import RunStatus
 from tgmirror.ui.messages import t
+from tgmirror.ui.progress import duration
 
 
 def status(
@@ -46,16 +47,6 @@ def status(
         )
 
     run(rt, command())
-
-
-def duration(span: timedelta) -> str:
-    """``1 giờ 5 phút``, ``44 phút``, ``38 giây``: the two largest units are enough for an ETA."""
-    seconds = max(int(span.total_seconds()), 0)
-    if seconds >= 3600:
-        return t("duration.hours", hours=seconds // 3600, minutes=seconds % 3600 // 60)
-    if seconds >= 60:
-        return t("duration.minutes", minutes=seconds // 60)
-    return t("duration.seconds", seconds=seconds)
 
 
 def _local(value: datetime) -> str:

@@ -17,8 +17,8 @@ from tgmirror.engine.runs import RunRequest, begin_run, check_runnable, resolve_
 from tgmirror.store.db import Store, utc_now
 from tgmirror.store.runs import Control, FilterChange, Run, RunStatus, StartedRun
 from tgmirror.ui.messages import t
-from tgmirror.ui.progress import LineReporter
 from tgmirror.ui.tables import channel_label
+from tgmirror.ui.tui import TuiReporter
 
 EXIT_INTERRUPTED = 130
 
@@ -157,15 +157,7 @@ async def execute(
     """
     current = started.run
     control = RunControl()
-    runner = Runner(
-        store,
-        gateway,
-        rt.config().limits,
-        reporter=LineReporter(typer.echo),
-        control=control,
-        wait=wait,
-        tmp_dir=rt.paths.tmp_dir,
-    )
+    limits = rt.config().limits
     if current.options.protected_ack:  # decision D3: the user answers for this copy
         typer.echo(t("warn.responsibility"), err=True)
     retry_of = current.options.retry_of
@@ -198,10 +190,15 @@ async def execute(
         if started.filters is FilterChange.SAME and current.filters_json != "{}":
             typer.echo(t("run.filter_reused"))
     with (
+        rt.reporter(limits, current.src_title, current.dst_title) as reporter,
         stop_on_interrupt(control, lambda: typer.echo(t("run.stopping"), err=True)) as interrupt,
         rt.keys(control) as listening,
     ):
-        if listening:
+        runner = Runner(
+            store, gateway, limits, reporter=reporter, control=control, wait=wait,
+            tmp_dir=rt.paths.tmp_dir,
+        )  # fmt: skip
+        if listening and not isinstance(reporter, TuiReporter):  # the TUI shows the keys itself
             typer.echo(t("run.keys_hint"))
         final = await runner.run(current)
     typer.echo(

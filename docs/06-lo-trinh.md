@@ -13,7 +13,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 - [x] Phase 5 — `retry`, `status` (2026-09-20; kịch bản retry được kiểm bằng `FakeGateway` và SQLite thật, kể cả kill giữa chừng; chưa thử trên Telegram thật, xem "Phase 5 — ghi chú"; delta đã có từ việc tái thiết)
 - [x] Phase 6 — Reupload (2026-09-20; kịch bản tải lên lại được kiểm bằng `FakeGateway`, client Telethon giả và SQLite thật; trên Telegram thật người dùng đã xác nhận **video tin đơn được tải lên lại đúng là video** (sau khi sửa lỗi `force_document`); phần còn lại và tiêu chí "clone kênh thử có video lớn" chưa thử, xem "Phase 6 — ghi chú"). **Còn một lỗi mở**: wizard `clone` không hỏi mode tải lên lại, xem "Việc còn lại sau phase 6"
 - [x] Phase 6b — Analyze (đếm số tin), tiến độ truyền file, trần cho việc tải trước (2026-09-20; kiểm bằng `FakeGateway`, client Telethon giả và SQLite thật; chưa thử trên Telegram thật, xem "Phase 6b — ghi chú"). **Còn lại của đợt tăng tốc** (bước 1–5 của "Kế hoạch tăng tốc" đều đã làm): relay theo part (bước 6), đo `flood_log` thật để chỉnh mặc định (bước 7) — xem "Kế hoạch tăng tốc"
-- [ ] Phase 7 — TUI, doctor, đóng gói
+- [ ] Phase 7 — TUI, doctor, đóng gói. **TUI xong (2026-09-23)**, xem "Phase 7 — ghi chú"; `doctor` và đóng gói chưa làm
 - [ ] Phase 8 — Group, supergroup, forum topics
 
 ## Lộ trình
@@ -86,7 +86,7 @@ Các lựa chọn khi làm (không phải D1–D9):
 - **Batch bị `PerMessage`** (Telegram từ chối chính các id): xóa `pending` của batch rồi gửi lại từng unit một, để một tin hỏng không kéo theo cả batch. Unit đơn lẻ vẫn lỗi thì ghi `failed` cả unit (cả album).
 - **Lời gọi bị ngắt (`Transient`)**: giữ nguyên `pending`, job `failed('transient')`; lần `run` sau reconcile.
 - **`last_message_id`**: thêm vào protocol để `new` ghi `options.dst_base_id` (id tin mới nhất của đích lúc tạo job); reconcile chỉ đọc đích sau `max(dst_msg_id đã done, dst_base_id)`, không quét cả kênh đích cũ.
-- **Tiến độ** là dòng chữ thường (`ui/progress.py`, không ANSI, tối đa một dòng/5 giây). TUI Rich có phím `p`/`q` là phase 7. Ctrl+C lần một: xong batch hiện tại, lưu, thoát mã 130; lần hai: thoát ngay.
+- **Tiến độ** là dòng chữ thường (`ui/progress.py`, không ANSI, tối đa một dòng/5 giây). ~~TUI Rich có phím `p`/`q` là phase 7~~ — phím là `p`/`r`/`q` (ba phím, không phải hai), có từ đợt "Tái thiết luồng job"; TUI Rich (`ui/tui.py`) đã làm 2026-09-23, xem "Phase 7 — ghi chú". Ctrl+C lần một: xong batch hiện tại, lưu, thoát mã 130; lần hai: thoát ngay.
 - `MediaKind` thêm `geo`, `contact`, `game`, `invoice` cho khớp danh sách giá trị `media` của `03-filters.md`; loại lạ (dice, ...) tạm xếp vào `document`.
 
 Đã kiểm chứng (2026-09-20, người dùng chạy tay): `new`/`run` copy được từ một kênh cho phép forward. Cũng đã chạy đúng trên tài khoản thật: **album** (forward cả danh sách id giữ nguyên album ở đích, xong spike 2) và **kill giữa chừng rồi resume** (reconcile trên đích thật, không trùng/sót). Nguồn `noforwards` là group mà user không phải admin: `new` từ chối đúng như thiết kế (thông báo `err.source_restricted`, D3, mã 4), tức là `Chat.noforwards`/`Channel.noforwards` được nhận ra ở group. Chưa thử: nguồn `noforwards` mà user là admin (cảnh báo `noforwards_admin`, rồi `run` gặp `ForwardsRestricted` → mã 4 mới chỉ test bằng fake). Còn lại chưa kiểm chứng (người dùng chạy tay):
@@ -122,7 +122,7 @@ Các lựa chọn khi làm (không phải D1–D9; chi tiết ở `05-chong-floo
 - **`--wait`** chỉ áp cho FloodWait, không cho daily cap (cap là ngân sách tự đặt: người dùng muốn chạy tiếp thì tăng `daily_cap`).
 - **Daily cap**: không gửi batch làm `sent_today` vượt cap, trừ batch đầu tiên của ngày; job `waiting_flood` với `fail_reason='daily_cap'` (cột `fail_reason` dùng cho lý do nghỉ); ngày tính theo giờ máy; bộ đếm theo account.
 - **SlowMode** giữ nguyên xử lý như FloodWait nhưng ghi `flood_log.kind='slow_mode'` (`FloodWait.slow_mode`).
-- **Chưa làm, để phase 7**: đếm ngược động khi chờ (hiện một dòng thông báo); `status` hiển thị delay/flood 24h (phase 5).
+- **Chưa làm, để phase 7**: ~~đếm ngược động khi chờ (hiện một dòng thông báo)~~; ~~`status` hiển thị delay/flood 24h (phase 5)~~ — `status` đã làm ở phase 5 (`status.line_limiter`/`status.line_floods`); đếm ngược động thì **không làm** ở đợt TUI 2026-09-23 (ngoài mock của `02-cli-ux.md`, xem "Phase 7 — ghi chú"): lúc vào FloodWait vẫn chỉ có một dòng thông báo tĩnh (`run.flood_waiting`), như `LineReporter`.
 - **Không qua limiter** (một lần, do người dùng khởi động): các lệnh phase 1, `last_message_id` khi tạo job, `--preview`. FloodWait ở đó vẫn in một câu và thoát mã 3.
 
 Chưa kiểm chứng (người dùng chạy tay): mọi hành vi thật của Telegram. Chạy một job đủ lớn để chạm FloodWait thật, rồi xem `flood_log` (spike 6) trước khi tin vào các số mặc định; kiểm tra thêm rằng khi `FloodWait` ném ở giữa `iter_messages` thật thì Telethon không để lại trạng thái lạ và lần đọc lại từ `min_id` cho đúng tin kế tiếp.
@@ -391,6 +391,16 @@ Thứ tự đề xuất, mỗi bước xin duyệt khi đổi hành vi:
 
 Lưu ý cho phase 2 (đã áp dụng): schema đã có `jobs.src_kind`, `msg_map.src_topic_id`, `topic_map` (xem `04-state-checkpoint.md`) để phase 8 không cần migration. Đường code phase 1–7 vẫn viết với `kind` trong đầu, dù chỉ kiểm thử với broadcast.
 
+### Phase 7 — ghi chú
+
+**TUI (Rich Live) — đã làm (2026-09-23).** Các phím `p`/`r`/`q` và `RunControl` đã có sẵn từ đợt "Tái thiết luồng job", nên việc còn lại đúng như `02-cli-ux.md` đã ghi: chỉ phần hiển thị. Thêm `ui/tui.py::TuiReporter`: cùng ba lời gọi `Reporter` (`notice`/`progress`/`transfer`) như `LineReporter`, vẽ đúng mock trong `02-cli-ux.md` ("Foreground TUI") bằng `rich.live.Live` (dòng đầu, thanh tiến độ, dòng đếm, dòng phím). Tiến độ/tốc độ/ETA dùng lại đúng `engine.status.estimate` (hàm thuần, không cần Store) nên `status` và TUI không bao giờ lệch số cho cùng một lần chạy. `delay` và số lần bị giới hạn không thuộc `Reporter` (đó là việc của limiter, mà `Reporter` không thấy): TUI suy ra chúng từ các `notice("throttled"/"flood_waiting", ...)` mà nó vốn đã nhận, nên `delay` hiển thị chỉ mới tới lần flood gần nhất — không biết khi delay đã giảm trở lại mà không có flood nào xảy ra kể từ đó.
+
+Chọn TUI hay `LineReporter` **không** dùng lại `Runtime.interactive`: cờ đó nghĩa là "có thể hỏi" (wizard), và bộ test wizard đặt `interactive=True` trên một `CliRunner` không phải terminal thật — nếu TUI theo cùng cờ, các test đó vô tình nhận luôn TUI và làm lệch phép so `flags.output == wizard.output` (`test_cli_clone.py`, `test_cli_run.py`; phát hiện khi chạy `pytest` sau khi nối dây lần đầu). Sửa bằng thêm `Runtime.reporter: ReporterFactory`, giống hệt cách `Runtime.keys: KeyProvider` đã tách khỏi `interactive` từ trước cho cùng lý do (hotkeys cũng chỉ có ý nghĩa khi có terminal thật): `default_runtime()` nối `terminal_reporter` khi có terminal thật, còn `make_runtime`/mọi test giữ mặc định `plain_reporter` (`LineReporter`) trừ khi tự yêu cầu khác.
+
+Windows: đã thử qua PowerShell thật (không phải Bash tool của Claude Code — thử lần đầu qua đó dựng nhầm một `UnicodeEncodeError`, hoá ra là do giả lập console của git-bash, không phải lỗi thật). Chữ có dấu hiển thị đúng, không crash. Một chỗ phải sửa: `Live` không tự xuống dòng khi thoát, nên dòng `run.result` in ngay sau sẽ dính vào dòng cuối của khung TUI trừ khi `TuiReporter.__exit__` tự in thêm một dòng trống trước.
+
+**Chưa làm**: `tgmirror doctor`, đóng gói (pipx/uv tool), tài liệu người dùng — phase 7 vẫn `[ ]` cho tới khi xong cả ba.
+
 ## Việc cần xác minh sớm (spike, phase 0–1)
 
 1. ~~Phiên bản Telethon cài đặt có tham số `drop_author` của `forward_messages` không?~~ **Xong 2026-09-19:** có. Telethon 1.45.0 `forward_messages(..., drop_author=, drop_media_captions=, as_album=)`. `pyproject.toml` đặt `telethon>=1.45` nên không cần fallback `ForwardMessagesRequest`.
@@ -429,6 +439,7 @@ Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đ�
 
 Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và lý do ở đây.
 
+- 2026-09-23: Phần TUI của phase 7 xong (xem "Phase 7 — ghi chú"). Không đổi D1–D9. Người dùng yêu cầu bắt đầu (đã hỏi lại phạm vi: làm trọn Rich TUI theo đúng roadmap, không phải một công cụ nhỏ chỉ để test tay). Việc phát sinh không lường trước: `Runtime.interactive` không đủ để chọn TUI vì test wizard mượn cờ đó cho một `CliRunner` không phải terminal thật; giải quyết bằng `Runtime.reporter` (tách giống `Runtime.keys` đã làm).
 - 2026-09-20: Đợt tăng tốc và tiến độ (Phase 6b, xem "Phase 6b — ghi chú"). Không đổi D1–D9. **Đảo lại một lựa chọn của phase 6**: "chỉ pipeline tải trước, không nhiều kết nối kiểu FastTelethon" (ghi cùng ngày) — người dùng nay chọn có nhiều request/kết nối trong một ngân sách chung, vì đã hiểu chi phí (API private của Telethon, khó kiểm bằng fake, chờ số đo); skill `telethon-engine` sửa theo. Người dùng chốt: analyze chỉ đếm (mặc định), không IPC, nhiều file cùng lúc miễn không vượt trần request (dùng theo dung lượng), tải nhanh hơn gửi phải có trần cứng, cho phép spike. Đợt này làm phần rủi ro thấp (đếm, tiến độ, trần tải trước, script spike); đổi pace/write-ahead và bộ lập lịch request chờ duyệt riêng và số đo.
 - 2026-09-20: **Đổi D3.** Trước: nguồn `noforwards` mà tài khoản không phải admin thì từ chối bất kể cờ; admin thì `--mode reupload` kèm xác nhận. Sau: mặc định vẫn tôn trọng `noforwards`, nhưng user có thể tự tuyên bố và **chịu hoàn toàn trách nhiệm** bằng `--mode reupload --yes-i-administer-this-channel`, và cờ này cho qua **cả tài khoản không phải admin** (lý do của user: chủ kênh thường có nhiều tài khoản, tài khoản đang chạy tgmirror có thể không phải cái đứng tên admin). Đi kèm: mỗi lần chạy dựa trên lời tuyên bố in `warn.responsibility`; `--yes` vẫn không thay được cờ; câu hỏi tương tác vẫn chỉ cho tài khoản là admin; tgmirror không kiểm tra được quyền sở hữu và nói rõ điều đó; lời tuyên bố (`RunOptions.protected_ack`) theo cả cặp, `run`/`retry` dùng lại. CLAUDE.md luật 5, `docs/00`, `01`, `02` và các skill đã sửa theo. Người dùng yêu cầu đổi (không phải suy diễn của Claude).
 

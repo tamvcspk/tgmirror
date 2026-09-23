@@ -71,7 +71,7 @@ Client tạo với `flood_sleep_threshold=0` nên Telethon **luôn raise** `Floo
 
 1. Ghi `flood_log` (method, seconds, delay hiện tại, batch_size).
 2. `on_flood(seconds)` → tăng delay (AIMD).
-3. `seconds <= max_auto_wait`: in một dòng thông báo (đếm ngược động là phase 7), ngủ `seconds + uniform(1, 5)`, rồi retry **cùng lời gọi** (batch vẫn `pending`, không dựng lại, con trỏ không nhúc nhích). Ghi (`copy_messages`) và đọc (`iter_messages`) đều vậy; đọc bị cắt giữa chừng thì đọc tiếp từ tin đã trao cuối cùng, nên không sót, không lặp, album không bị tách.
+3. `seconds <= max_auto_wait`: in một dòng thông báo tĩnh (`run.flood_waiting`; đếm ngược động không được làm ở đợt TUI 2026-09-23, ngoài phạm vi mock của `02-cli-ux.md`, xem `06-lo-trinh.md` "Phase 7 — ghi chú"), ngủ `seconds + uniform(1, 5)`, rồi retry **cùng lời gọi** (batch vẫn `pending`, không dựng lại, con trỏ không nhúc nhích). Ghi (`copy_messages`) và đọc (`iter_messages`) đều vậy; đọc bị cắt giữa chừng thì đọc tiếp từ tin đã trao cuối cùng, nên không sót, không lặp, album không bị tách.
 4. `seconds > max_auto_wait`: xóa `pending` của batch bị từ chối (Telegram không tạo gì), đặt `waiting_flood` + `resume_at = now + seconds`, thoát mã 3. Với `run --wait`: vẫn ngủ tiếp (ngắt được bằng pause/stop/Ctrl+C).
    Cùng một lời gọi bị FloodWait liền 5 lần (`MAX_FLOODS_PER_CALL`) thì cũng dừng như trên, thay vì ngủ vô hạn (lựa chọn khi cài đặt, không phải D1–D9).
    Ngủ luôn ngắt được bởi stop: `stop`/phím `q`/Ctrl+C trong lúc chờ kết thúc lần chạy `stopped`, batch chưa gửi được xóa khỏi `pending`. `pause` không cắt ngang lúc chờ: nó có hiệu lực sau lượt chờ, ở ranh giới batch kế tiếp.
