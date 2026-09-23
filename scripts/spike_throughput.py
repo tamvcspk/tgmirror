@@ -29,12 +29,18 @@ message ever uses (Telegram discards it), so nothing appears in any chat. Both m
 transfer. They use private Telethon calls (borrowed senders), as the real pool would have to.
 
 ``files`` is the "several files at once" shape (down a few, then up a few, never both directions
-together — see ``both`` for that): ``--files`` of them move at once, each on its own
-``--connections`` connections, but every request across every one of them shares a single budget of
-``--max-requests`` in flight (like ``core/pool.py``'s ``RequestBudget``, minus the AIMD growth and
-shrink). ``download`` needs one message id per file (a comma list, ``--files`` picks the largest N
-of them); ``upload`` invents its files, same as ``upload`` above. Answers: does moving several files
-at once, sharing one budget, reach the per-file speed seen alone, and at what budget does it 429?
+together — see ``both`` for that): ``--files`` of them move at once over **one shared set** of
+``--connections`` connections, made once and kept for the whole scan — the way
+``core/telethon_gateway.py``'s ``_upload_senders``/``_download_sender`` actually keep theirs for the
+next file, not a fresh set per file (an earlier version of this spike opened fresh connections per
+file; that measured a different, less realistic shape — see docs/06-lo-trinh.md, 2026-09-22). Up to
+``--max-requests`` of their parts move at once, round-robined over those connections, the way
+``core/pool.py``'s ``run_parts`` spreads workers over a fixed ``senders`` list (no AIMD here:
+fixed).
+``download`` needs one message id per file (a comma list, ``--files`` picks the largest N of them,
+and they must share one DC); ``upload`` invents its files, same as ``upload`` above. Answers: does
+moving several files at once, sharing the same small connection pool, reach the per-file speed seen
+alone, and at what point does it 429?
 
 Paste the table back into the chat, with your line speed if you know it.
 """
@@ -42,6 +48,7 @@ Paste the table back into the chat, with your line speed if you know it.
 import argparse
 import asyncio
 import contextlib
+import itertools
 import math
 import os
 import random
@@ -127,41 +134,42 @@ async def pool(
     return elapsed, note
 
 
-async def pool_shared(
+async def pool_files(
     client: TelegramClient,
     dc_id: int,
-    parts: int,
+    jobs: list[tuple[int, int]],
     connections: int,
-    budget: asyncio.Semaphore,
-    request: Callable[[int], Any],
+    max_requests: int,
+    request: Callable[[int, int], Any],
 ) -> tuple[float, str]:
-    """Like ``pool``, but one file among several moving at once: its own ``connections`` (one
-    request in flight per connection, the shape that came out clean earlier), except every request
-    also waits for a slot in ``budget`` — shared with every other file running alongside it, the
-    way ``core/pool.py``'s ``RequestBudget`` is shared by every transfer of the process (here fixed,
-    no AIMD)."""
+    """Every ``(file_index, part_index)`` in ``jobs`` (several files' parts, combined and
+    interleaved), moved over **one** set of ``connections`` connections made once and shared —
+    the shape ``core/telethon_gateway.py``'s ``_upload_senders``/``_download_sender`` actually use
+    (a connection made once and kept for the next file), not a fresh set per file. Up to
+    ``max_requests`` workers pull from the combined queue at once, each picking its connection by
+    round robin, the way ``core/pool.py``'s ``run_parts`` spreads workers over a fixed ``senders``
+    list (``min(count, budget.maximum)`` tasks there; no AIMD here, ``max_requests`` is fixed)."""
     senders: list[MTProtoSender] = []
-    todo = iter(range(parts))
+    todo = iter(jobs)
     note = ""
+    rotation = itertools.count()
 
-    async def worker(n: int) -> None:
+    async def worker() -> None:
         nonlocal note
-        sender = senders[n % len(senders)]
-        for index in todo:
-            async with budget:
-                try:
-                    await client._call(sender, request(index))  # noqa: SLF001
-                except errors.FloodWaitError as exc:
-                    note = f"FLOOD_WAIT {exc.seconds}s"
-                    return
+        for file_index, part_index in todo:
+            sender = senders[next(rotation) % len(senders)]
+            try:
+                await client._call(sender, request(file_index, part_index))  # noqa: SLF001
+            except errors.FloodWaitError as exc:
+                note = f"FLOOD_WAIT {exc.seconds}s"
+                return
 
     started = time.monotonic()
     try:
         senders.extend([await new_sender(client, dc_id) for _ in range(connections)])
         started = time.monotonic()
-        await asyncio.wait_for(
-            asyncio.gather(*(worker(n) for n in range(connections))), timeout=TIMEOUT
-        )
+        workers = min(len(jobs), max_requests)
+        await asyncio.wait_for(asyncio.gather(*(worker() for _ in range(workers))), timeout=TIMEOUT)
     except TimeoutError:
         note = f"TIMEOUT after {TIMEOUT}s"
     except Exception as exc:  # noqa: BLE001 - what broke is the answer
@@ -340,10 +348,9 @@ async def both(args: argparse.Namespace) -> None:
 
 
 async def many_files(args: argparse.Namespace) -> None:
-    """``--files`` files moving at once, one direction only, sharing one ``--max-requests`` budget
-    (``pool_shared``); scans that against ``--files`` to find a combination that keeps speed without
-    429s. Each file gets its own ``--connections`` connections, one request in flight per connection
-    (the shape that ran clean alone in the ``upload`` spike)."""
+    """``--files`` files moving at once, one direction only, over one shared, reused connection
+    pool (``pool_files``) — see the module docstring for why this replaced an earlier version that
+    gave each file its own fresh connections (docs/06-lo-trinh.md, 2026-09-22)."""
     async with session() as (client, _):
         part_size = DOWN_PART if args.direction == "download" else UP_PART
         if args.direction == "download":
@@ -356,50 +363,45 @@ async def many_files(args: argparse.Namespace) -> None:
                 if not size or size < 8 * 1024 * 1024:
                     raise SystemExit(f"message {msg_id}: no file of 8 MB or more")
             locations = [utils.get_input_location(m.media) for m in messages]
-            dc_ids = [loc[0] for loc in locations]
+            dc_id = locations[0][0]
+            if any(loc[0] != dc_id for loc in locations):
+                raise SystemExit("all message ids must be on the same DC for this spike")
             size_each = min(min(m.file.size for m in messages), args.mb * 1024 * 1024)
             parts = math.ceil(size_each / part_size)
             available = len(messages)
 
-            def make_request(i: int) -> Callable[[int], Any]:
-                location = locations[i][1]
-                return lambda idx: GetFileRequest(location, offset=idx * DOWN_PART, limit=DOWN_PART)
+            def make_request(file_index: int, part_index: int) -> Any:
+                location = locations[file_index][1]
+                return GetFileRequest(location, offset=part_index * DOWN_PART, limit=DOWN_PART)
         else:
             size_each = args.mb * 1024 * 1024
             parts = math.ceil(size_each / part_size)
             blob = os.urandom(UP_PART)
-            home = client.session.dc_id
+            dc_id = client.session.dc_id
             available = max(args.files)
-            dc_ids = [home] * available
             file_ids = [random.getrandbits(62) for _ in range(available)]
 
-            def make_request(i: int) -> Callable[[int], Any]:
-                return lambda idx: SaveBigFilePartRequest(file_ids[i], idx, parts, blob)
+            def make_request(file_index: int, part_index: int) -> Any:
+                return SaveBigFilePartRequest(file_ids[file_index], part_index, parts, blob)
 
-        print(f"{args.direction}: {mb(size_each)} per file, {args.connections} connections each")
+        print(f"{args.direction}: {mb(size_each)} per file, {args.connections} connections shared")
         for files in args.files:
             if files > available:
                 what = "message ids" if args.direction == "download" else "file slots"
                 print(f"  (skip --files {files}: only {available} {what} given)")
                 continue
             for max_requests in args.max_requests:
-                budget = asyncio.Semaphore(max_requests)
                 runs: list[tuple[float, str]] = []
                 for _ in range(args.repeat):
                     if args.direction == "upload":
                         file_ids[:files] = [random.getrandbits(62) for _ in range(files)]
-                    started = time.monotonic()
-                    results = await asyncio.gather(
-                        *(
-                            pool_shared(
-                                client, dc_ids[i], parts, args.connections, budget, make_request(i)
-                            )
-                            for i in range(files)
-                        )
+                    # part index outer, file index inner: every file's parts are interleaved,
+                    # several files moving at once rather than one after another
+                    jobs = [(f, p) for p in range(parts) for f in range(files)]
+                    elapsed, note = await pool_files(
+                        client, dc_id, jobs, args.connections, max_requests, make_request
                     )
-                    elapsed = time.monotonic() - started
-                    note = " ".join(sorted({n for _, n in results if n}))
-                    runs.append((0.0 if note else elapsed, note))
+                    runs.append((elapsed, note))
                     if note:
                         # broke on this repeat: further repeats would likely just repeat it
                         break
@@ -442,7 +444,7 @@ def main() -> None:
     )
     files_parser.add_argument("--mb", type=int, default=64, help="per file")
     files_parser.add_argument("--repeat", type=int, default=3)
-    files_parser.add_argument("--connections", type=int, default=2, help="each file's own")
+    files_parser.add_argument("--connections", type=int, default=2, help="shared by every file")
     files_parser.add_argument("--files", type=counts, default=[2, 4, 8], help="e.g. 2,4,8")
     files_parser.add_argument(
         "--max-requests", type=counts, default=[4, 8, 16], help="the shared budget, e.g. 4,8,16"

@@ -6,8 +6,9 @@ making the account look like a flood:
 
 - ``RequestBudget`` is the one number of file-transfer requests that may be in flight at once,
   shared by every download and upload of the process. It starts small, grows a step at a time while
-  things go well, and is halved when the server pushes back. The spike found that 16 requests in
-  flight over 3 connections drew a transport-level HTTP 429, so the ceiling is a low number.
+  things go well, and is halved when the server pushes back. 8 connections / 8 requests in flight
+  (one per connection), one file at a time, measured clean twice in a row; going past either number
+  broke both times it was tried (docs/06-lo-trinh.md, 2026-09-23) — so that stays the ceiling.
 - ``run_parts`` runs the parts of one file under that budget: workers take the next part, whoever is
   free, so a slow connection simply does fewer parts. A part that meets pushback is repeated after a
   wait; a FloodWait ends the whole transfer (the caller's ``FloodGuard`` sits it out and repeats).

@@ -144,10 +144,10 @@ long_pause_every = 200
 long_pause_range = [30, 90]
 daily_cap = 5000
 max_auto_wait = 900
-prefetch = 1
+prefetch = 0
 tmp_budget_mb = 2048
-max_requests = 4        # request đang bay khi tải file (0 = tắt pool, cách cũ của Telethon)
-upload_connections = 2  # số kết nối chia cho phần tải lên
+max_requests = 8        # request đang bay khi tải file (0 = tắt pool, cách cũ của Telethon)
+upload_connections = 8  # số kết nối chia cho phần tải lên
 pool_min_mb = 10        # file nhỏ hơn giữ cách tải của Telethon
 ```
 
