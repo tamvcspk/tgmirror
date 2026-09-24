@@ -13,7 +13,7 @@ core/     gateway (Telegram wrapper), auth (login flow), telethon_gateway (only 
 engine/   endpoints (source/destination rules), runs (`begin_run`, resolve, vet), planner (`units`, and `failed_units` for `retry`), batcher, strategy (`Strategy`, `router`: which unit is forwarded, sent again by its file ids, or downloaded and uploaded again), preview, copy (A), reupload (B: `plan_unit`, `send_unit`, `Window`/`Pipeline` that download ahead; `Window` is the hard ceiling on how far downloading runs ahead of uploading), transfer (`TransferTracker`: speed and progress of the file in flight), flood (`FloodGuard`: pacing + FloodWait handling for reads and writes), reconcile, runner, status (progress/ETA estimates for `status`)
 filters/  model, parser (YAML + flags), pushdown (`plan_read`), matcher (pure, client side)
 store/    schema.sql (+ numbered migrations after release), db (`Store`: the only place with SQL), runs (`Run`, `Mirror`), msgmap, floodlog, limiterstate
-cli/      app, wizard, filter_options (shared filter flags), runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), keys (hotkeys p/r/q), commands/ (auth, channels, clone, run, retry, status, control = pause/stop, history)
+cli/      app, wizard, filter_options (shared filter flags), runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), keys (hotkeys p/r/q), commands/ (auth, channels, clone, run, retry, status, control = pause/stop, history, config = get/set `[limits]`)
 ui/       messages (all user strings), prompts (`Prompter`, `run_steps`), tables, progress (plain-line reporter), tui (Rich Live), menu/ (full-screen app of bare `tgmirror`: `MenuPrompter`, screens)
 ```
 

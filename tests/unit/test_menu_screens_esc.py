@@ -13,6 +13,7 @@ from typing import Any
 
 from tgmirror.cli.keys import MenuKey
 from tgmirror.ui.menu.screens.account import AccountScreen, _ConfirmLogout
+from tgmirror.ui.menu.screens.config import ConfigScreen
 from tgmirror.ui.menu.screens.history import HistoryScreen
 from tgmirror.ui.menu.screens.resume import ResumeScreen
 
@@ -42,5 +43,11 @@ async def test_confirm_logout_esc_pops() -> None:
 
 async def test_account_screen_esc_pops_when_logged_in() -> None:
     screen = AccountScreen(_StubApp(account=object()))  # type: ignore[arg-type]
+
+    assert await screen.handle_key(MenuKey.ESC) == "pop"
+
+
+async def test_config_screen_esc_pops() -> None:
+    screen = ConfigScreen(_StubApp())  # type: ignore[arg-type]
 
     assert await screen.handle_key(MenuKey.ESC) == "pop"

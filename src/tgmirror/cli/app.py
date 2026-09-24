@@ -8,7 +8,17 @@ from typing import Annotated
 import typer
 
 from tgmirror import __version__
-from tgmirror.cli.commands import auth, channels, clone, control, history, retry, run, status
+from tgmirror.cli.commands import (
+    auth,
+    channels,
+    clone,
+    config,
+    control,
+    history,
+    retry,
+    run,
+    status,
+)
 from tgmirror.cli.errors import run as run_command
 from tgmirror.cli.runtime import Runtime, default_runtime
 
@@ -111,3 +121,4 @@ app.command("stop")(control.stop)
 app.command("history")(history.history)
 app.command("retry")(retry.retry)
 app.command("status")(status.status)
+app.add_typer(config.config_app, name="config")

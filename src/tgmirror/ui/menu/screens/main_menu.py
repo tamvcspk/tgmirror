@@ -13,6 +13,7 @@ from tgmirror.ui.menu.screen import Screen, ScreenResult
 from tgmirror.ui.menu.screens.account import AccountScreen
 from tgmirror.ui.menu.screens.channels import ChannelsScreen
 from tgmirror.ui.menu.screens.clone import clone_screen
+from tgmirror.ui.menu.screens.config import ConfigScreen
 from tgmirror.ui.menu.screens.history import HistoryScreen
 from tgmirror.ui.menu.screens.login import login_screen
 from tgmirror.ui.menu.screens.resume import ResumeScreen
@@ -21,7 +22,16 @@ from tgmirror.ui.menu.widgets import SelectList
 from tgmirror.ui.messages import t
 
 _Action = Literal[
-    "login", "clone", "resume", "retry", "status", "history", "channels", "account", "quit"
+    "login",
+    "clone",
+    "resume",
+    "retry",
+    "status",
+    "history",
+    "channels",
+    "account",
+    "config",
+    "quit",
 ]
 
 
@@ -50,6 +60,7 @@ class MainMenuScreen(Screen):
                 (t("menu.item_login"), "login"),
                 (t("menu.item_status"), "status"),
                 (t("menu.item_history"), "history"),
+                (t("menu.item_config"), "config"),
                 (t("menu.item_quit"), "quit"),
             ]
         else:
@@ -62,6 +73,7 @@ class MainMenuScreen(Screen):
                 (t("menu.item_history"), "history"),
                 (t("menu.item_channels"), "channels"),
                 (t("menu.item_account"), "account"),
+                (t("menu.item_config"), "config"),
                 (t("menu.item_quit"), "quit"),
             ]
         if [value for _, value in items] != [value for _, value in self._list.items]:
@@ -96,3 +108,5 @@ class MainMenuScreen(Screen):
                 return ("push", ChannelsScreen(self._app))
             case "account":
                 return ("push", AccountScreen(self._app))
+            case "config":
+                return ("push", ConfigScreen(self._app))

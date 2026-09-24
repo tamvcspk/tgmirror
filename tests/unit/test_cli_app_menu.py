@@ -68,8 +68,8 @@ async def test_menu_app_quits_from_the_main_menu_with_code_0(
     app_ = MenuApp(rt, store, Connection(auth, gateway), ACCOUNT, console=console)
     queue: asyncio.Queue[MenuKey | str] = asyncio.Queue()
     # main menu with no run history: Sao chép mới, Trạng thái, Lịch sử, Kênh đã join, Tài khoản,
-    # Thoát — five Down presses land on "Thoát".
-    for _ in range(5):
+    # Cấu hình, Thoát — six Down presses land on "Thoát".
+    for _ in range(6):
         queue.put_nowait(MenuKey.DOWN)
     queue.put_nowait(MenuKey.ENTER)
 
@@ -114,7 +114,7 @@ async def test_new_clone_opens_the_wizard_and_esc_returns_to_the_menu(
     make_runtime: MakeRuntime, tmp_path: Path
 ) -> None:
     """Chặng 2: "Sao chép mới" is a real wizard now; Esc at its first question pops back to the
-    main menu, which still works (five Down presses reach "Thoát")."""
+    main menu, which still works (six Down presses reach "Thoát")."""
     gateway, auth = FakeGateway(), FakeAuth(logged_in=ACCOUNT)
     gateway.add_channel("Source")
     rt = make_runtime(gateway=gateway, auth=auth, interactive=True)
@@ -122,7 +122,7 @@ async def test_new_clone_opens_the_wizard_and_esc_returns_to_the_menu(
     console = Console(file=io.StringIO(), no_color=True, width=200)
     app_ = MenuApp(rt, store, Connection(auth, gateway), ACCOUNT, console=console)
     queue: asyncio.Queue[MenuKey | str] = asyncio.Queue()
-    for key in [MenuKey.ENTER, MenuKey.ESC, *[MenuKey.DOWN] * 5, MenuKey.ENTER]:
+    for key in [MenuKey.ENTER, MenuKey.ESC, *[MenuKey.DOWN] * 6, MenuKey.ENTER]:
         queue.put_nowait(key)
 
     code = await app_.run(queue=queue)

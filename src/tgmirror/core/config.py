@@ -71,6 +71,10 @@ class Config(BaseModel):
     limits: Limits = Limits()
 
 
+LIMIT_KEYS: tuple[str, ...] = tuple(Limits.model_fields)  # ``tgmirror config``'s editable keys
+_LIMITS_TABLE = re.compile(r"^\s*\[(?P<name>[^\]]+)\]")
+
+
 def load_config(paths: Paths, env: Mapping[str, str] | None = None) -> Config:
     """Read ``config.toml`` (if present); ``TGMIRROR_API_ID``/``TGMIRROR_API_HASH`` win over it."""
     env = os.environ if env is None else env
@@ -134,6 +138,118 @@ def save_credentials(paths: Paths, api_id: int, api_hash: str) -> None:
     try:
         tmp.write_text(new_text, encoding="utf-8")
         with contextlib.suppress(OSError):  # not supported on every filesystem (e.g. Windows ACLs)
+            tmp.chmod(0o600)
+        tmp.replace(paths.config_file)
+    except OSError as exc:
+        raise ConfigError(f"cannot write {paths.config_file}: {exc}") from exc
+
+
+def format_limit(value: object) -> str:
+    """How ``tgmirror config get``/the menu show a ``Limits`` value; ``long_pause_range`` (a
+    ``tuple``) as the two numbers separated by a comma, matching what ``set_limit`` parses back."""
+    if isinstance(value, tuple):
+        return ", ".join(format_limit(v) for v in value)
+    return str(value)
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, tuple):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    if isinstance(value, float):
+        return repr(value)
+    return str(value)
+
+
+def _parse_limit_value(key: str, raw: str, current: object) -> object:
+    raw = raw.strip()
+    if isinstance(current, tuple):
+        parts = raw.split(",")
+        if len(parts) != 2:
+            raise ConfigError(f"{key} needs two numbers separated by a comma, e.g. 30,90")
+        try:
+            return (float(parts[0]), float(parts[1]))
+        except ValueError:
+            raise ConfigError(f"{key} needs two numbers separated by a comma, e.g. 30,90") from None
+    if isinstance(current, int):
+        try:
+            return int(raw)
+        except ValueError:
+            raise ConfigError(f"{key} must be a whole number") from None
+    try:
+        return float(raw)
+    except ValueError:
+        raise ConfigError(f"{key} must be a number") from None
+
+
+def set_limit(paths: Paths, key: str, raw: str) -> Limits:
+    """Validate and persist one ``[limits]`` key, keeping every other line of ``config.toml`` as it
+    is (same care as ``save_credentials`` for the top-level keys). Returns the new ``Limits``
+    (validated with the model's cross-field rules too, e.g. ``max_delay >= min_delay``) so a caller
+    can show what was actually saved.
+    """
+    if key not in LIMIT_KEYS:
+        raise ConfigError(f"unknown config key {key!r}; choices: {', '.join(LIMIT_KEYS)}")
+
+    current = load_config(paths).limits
+    parsed = _parse_limit_value(key, raw, getattr(current, key))
+    merged = current.model_dump() | {key: parsed}
+    try:
+        new_limits = Limits.model_validate(merged)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(map(str, e['loc'])) or key}: {e['msg']}" for e in exc.errors()
+        )
+        raise ConfigError(f"invalid configuration: {problems}") from None
+
+    _write_limit(paths, key, _toml_value(getattr(new_limits, key)))
+    return new_limits
+
+
+def _write_limit(paths: Paths, key: str, value_text: str) -> None:
+    try:
+        text = paths.config_file.read_text(encoding="utf-8") if paths.config_file.exists() else ""
+    except OSError as exc:
+        raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
+
+    lines = text.splitlines()
+    key_line = re.compile(rf"^(\s*){re.escape(key)}(\s*=\s*)([^#]*)(.*)$")
+
+    limits_at: int | None = None
+    end_at = len(lines)
+    for i, line in enumerate(lines):
+        m = _LIMITS_TABLE.match(line)
+        if m is None:
+            continue
+        if limits_at is None and m.group("name").strip() == "limits":
+            limits_at = i
+        elif limits_at is not None:
+            end_at = i
+            break
+
+    if limits_at is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines += ["[limits]", f"{key} = {value_text}"]
+    else:
+        for i in range(limits_at + 1, end_at):
+            m = key_line.match(lines[i])
+            if m:
+                lines[i] = f"{m.group(1)}{key}{m.group(2)}{value_text}{m.group(4)}"
+                break
+        else:
+            lines.insert(limits_at + 1, f"{key} = {value_text}")
+
+    new_text = "\n".join(lines) + "\n"
+    try:
+        tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"refusing to write an invalid {paths.config_file.name}: {exc}") from exc
+
+    paths.config_dir.mkdir(parents=True, exist_ok=True)
+    tmp = paths.config_file.with_suffix(".toml.tmp")
+    try:
+        tmp.write_text(new_text, encoding="utf-8")
+        with contextlib.suppress(OSError):
             tmp.chmod(0o600)
         tmp.replace(paths.config_file)
     except OSError as exc:

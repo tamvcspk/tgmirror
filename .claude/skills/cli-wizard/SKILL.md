@@ -50,7 +50,7 @@ Every wizard outcome must be expressible with flags/YAML, and both paths call th
 - Non-TTY (`plain_reporter`, the default): `LineReporter`, plain line logging every N seconds, no ANSI.
 - `TuiReporter(limits, run, ...)` takes the run as it stands when the reporter is built (`ReporterFactory = Callable[[Limits, Run], AbstractContextManager[Reporter]]`) and seeds its panel with it immediately (`__enter__` refreshes right away) — do not go back to waiting for the first `progress()` call to fill it in. Bug found on a real `--mode reupload` run (2026-09-23): a unit that is one big file and keeps meeting FloodWait can occupy the *whole* run without a single batch ever committing, and until this seed existed the panel stayed blank the entire time, indistinguishable from the TUI never having started. `transfer()` also refreshes the panel now, for the same reason: a long download between two `notice()`s must not look frozen.
 
-## Full-screen menu (`ui/menu/`, Chặng 1 and 2 done 2026-09-24)
+## Full-screen menu (`ui/menu/`, Chặng 1, 2 and 3 done 2026-09-24)
 
 Bare `tgmirror` on a real terminal (`cli/app.py::_bare_invocation`, `Runtime.interactive`) launches `ui/menu/app.py::launch(rt)` instead of showing help — see `docs/02-cli-ux.md` ("Giao diện full-screen (menu)") and `docs/06-lo-trinh.md` ("Kế hoạch giao diện full-screen (menu)") for the full design and decision history. Not a daemon: the loop is exactly this process's lifetime.
 
@@ -65,7 +65,8 @@ Bare `tgmirror` on a real terminal (`cli/app.py::_bare_invocation`, `Runtime.int
 - In a flow, check `prompter.asking` (not `question is not None`) to know a question is open — an answered one stays set until the flow task runs again.
 - Typed characters never reach the debug log (`<char>`); `secret` is never drawn; a `MenuPrompter(private_text=True)` keeps typed text (a phone number) out of the answers list (CLAUDE.md rule 6).
 - The app owns the Telegram connection (`MenuApp.open_connection`/`close_connection`) and opens logged out; screens that need Telegram are only offered with `app.account` set (`app.gateway` raises `NotLoggedIn` otherwise).
-- **Not yet in the menu**: "Cấu hình" (no `tgmirror config` command yet at all).
+- **"Cấu hình" (`ui/menu/screens/config.py::ConfigScreen`, Chặng 3)**: lists paths (read-only) and every `[limits]` key; Enter on a key pushes a one-question `WizardScreen` (`prompter.text`, old value pre-filled) that calls `core.config.set_limit` directly — the same function `tgmirror config set` uses. No Telegram, so it is offered even logged out. A bad value raises `ConfigError`, which `WizardScreen._outcome()` already turns into an `InfoScreen` like any other flow error — no per-field retry loop needed for a single question.
+- **Not yet in the menu**: nothing (Chặng 1–3 cover every item in "Kế hoạch giao diện full-screen (menu)"'s original brainstorm except the "running elsewhere" badge, tracked in `docs/06-lo-trinh.md`).
 
 ## Language and output
 

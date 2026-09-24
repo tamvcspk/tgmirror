@@ -16,7 +16,7 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 | `tgmirror history [n]` | Nhật ký các lần chạy, mới nhất trước: số lần, lúc bắt đầu, nguồn → đích, trạng thái, số tin đã sao chép/lỗi/bị filter loại (`--limit`, `--json`). `history n`: chi tiết một lần: thời gian, khoảng tin nguồn, filter (lần thử lại: "Thử lại: tin lỗi của lần chạy n" thay cho hai dòng đó), số tin đã xóa ở nguồn, tin lỗi kèm lý do (tối đa 20), các lần Telegram giới hạn (flood) |
 | `tgmirror retry [n]` | Thử lại các tin còn `failed` của lần chạy `n` (mặc định lần gần nhất; xem "Thử lại tin lỗi" dưới). Là một lần chạy riêng (có trong `history`, pause/stop được) trong foreground của terminal này. `--force-takeover`, `--wait` như `run`. Không có tin lỗi nào thì báo và thoát mã 0, không kết nối Telegram |
 | `tgmirror status` | Tiến độ, tốc độ, ETA, số lỗi, delay hiện tại và số lần Telegram giới hạn trong 24 giờ của **lần đang chạy** (không có thì lần gần nhất). Chỉ đọc DB, không kết nối Telegram nên chạy được từ terminal thứ hai trong lúc clone đang giữ session. `--json`. Xem "Xem tiến độ" dưới |
-| `tgmirror config [get\|set]` | Xem/sửa config (`[limits]`, đường dẫn, ...) |
+| `tgmirror config get [KEY]` / `config set KEY VALUE` | Xem (mọi `[limits]` + đường dẫn, hoặc một khóa, `--json`) / sửa một khóa `[limits]`. Không kết nối Telegram; `get` không tham số giống `config get`. `set` kiểm tra giá trị (kể cả luật liên trường như `max_delay >= min_delay`) trước khi ghi, giữ nguyên phần còn lại của `config.toml` (comment, `api_id`/`api_hash`) như `login` đã làm |
 | `tgmirror doctor` | Kiểm tra: session hợp lệ, cryptg đã cài, quyền kênh đích, cảnh báo an toàn |
 
 Tùy chọn chung: `--version`, `--debug` (hiện traceback thay vì một câu lỗi).
@@ -27,15 +27,15 @@ Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, 
 
 Gõ trơn `tgmirror` (không lệnh con) khi có terminal thật mở thẳng một app full-screen (`rich.live.Live(screen=True)`, khung header/footer cố định) thay vì gõ từng lệnh — vòng lặp menu chỉ sống trong đúng tiến trình đó, từ lúc mở tới lúc thoát, không có gì chạy nền hay chạy tiếp sau khi thoát. Không có terminal (chuyển hướng, script, CI) thì gõ trơn vẫn in help như trước.
 
-Điều hướng: ↑/↓ chọn, Enter chọn/xác nhận, Esc lùi lại một bước (menu chính thì không có gì để lùi). Menu chính khi đã đăng nhập: Sao chép mới, Chạy tiếp, Thử lại tin lỗi, Trạng thái, Lịch sử, Kênh đã join, Tài khoản, Thoát — hai mục "Chạy tiếp"/"Thử lại tin lỗi" chỉ hiện khi đã có ít nhất một cặp nguồn/đích. "Chạy tiếp"/"Thử lại tin lỗi" chỉ hỏi chọn cặp khi có hơn một cặp (danh sách trong khung, không phải câu hỏi kiểu wizard), rồi vào thẳng màn hình tiến độ — đúng khung tiến độ đã có ở "Điều khiển khi đang chạy" (dưới), phím `p`/`r`/`q` hoạt động y hệt, Ctrl+C giữa lúc này dừng run **và** thoát hẳn app (không lùi về menu). "Trạng thái" tự làm mới vài giây một lần (giống `tgmirror status` nhưng sống); "Lịch sử" là danh sách cuộn được, Enter xem chi tiết một lần chạy; "Kênh đã join" gõ để lọc tại chỗ; "Tài khoản" xem ai đang đăng nhập và đăng xuất (có hỏi lại).
+Điều hướng: ↑/↓ chọn, Enter chọn/xác nhận, Esc lùi lại một bước (menu chính thì không có gì để lùi). Menu chính khi đã đăng nhập: Sao chép mới, Chạy tiếp, Thử lại tin lỗi, Trạng thái, Lịch sử, Kênh đã join, Tài khoản, Cấu hình, Thoát — hai mục "Chạy tiếp"/"Thử lại tin lỗi" chỉ hiện khi đã có ít nhất một cặp nguồn/đích. "Chạy tiếp"/"Thử lại tin lỗi" chỉ hỏi chọn cặp khi có hơn một cặp (danh sách trong khung, không phải câu hỏi kiểu wizard), rồi vào thẳng màn hình tiến độ — đúng khung tiến độ đã có ở "Điều khiển khi đang chạy" (dưới), phím `p`/`r`/`q` hoạt động y hệt, Ctrl+C giữa lúc này dừng run **và** thoát hẳn app (không lùi về menu). "Trạng thái" tự làm mới vài giây một lần (giống `tgmirror status` nhưng sống); "Lịch sử" là danh sách cuộn được, Enter xem chi tiết một lần chạy; "Kênh đã join" gõ để lọc tại chỗ; "Tài khoản" xem ai đang đăng nhập và đăng xuất (có hỏi lại).
 
-Chưa đăng nhập (hoặc chưa lưu `api_id`/`api_hash`), app vẫn mở, với menu rút gọn: Đăng nhập, Trạng thái, Lịch sử, Thoát.
+Chưa đăng nhập (hoặc chưa lưu `api_id`/`api_hash`), app vẫn mở, với menu rút gọn: Đăng nhập, Trạng thái, Lịch sử, Cấu hình, Thoát.
 
 **Sao chép mới** là đúng wizard của `tgmirror clone` không kèm cờ (cùng câu hỏi, cùng luật, cùng cảnh báo và xác nhận, kể cả câu hỏi D3), vẽ trong khung: danh sách dài gõ để lọc và cuộn theo mục đang chọn, hộp chọn nhiều dùng Space, các câu đã trả lời hiện mờ phía trên. **Esc lùi một câu hỏi**, kể cả sang bước trước (câu trả lời cũ được chọn sẵn); Esc ở câu đầu tiên, hoặc trả lời "Không" ở một câu xác nhận, bỏ wizard và về menu mà không ghi gì. Một lựa chọn bị từ chối (ví dụ tên kênh trống, đích không hợp lệ) hiện lý do và hỏi lại bước đó. Xác nhận xong thì vào thẳng màn hình tiến độ; Esc từ đó về menu chính.
 
 **Đăng nhập** hỏi đúng những gì `tgmirror login` hỏi (`api_id`/`api_hash` nếu chưa có, số điện thoại, mã, mật khẩu hai bước); mã, mật khẩu và `api_hash` không hiện khi gõ, số điện thoại không hiện lại sau khi nhập. Esc bỏ đăng nhập ở bất kỳ câu nào (mỗi câu trả lời đã gửi ngay tới Telegram, nên không lùi từng bước). Đăng xuất từ "Tài khoản" đóng luôn kết nối; đăng nhập lại mở kết nối mới, không cần thoát app.
 
-**Chưa có trong menu**: "Cấu hình" (lệnh `tgmirror config` chưa tồn tại). Chi tiết kiến trúc: `docs/06-lo-trinh.md`, "Kế hoạch giao diện full-screen (menu)".
+**Cấu hình** liệt kê các đường dẫn (`config.toml`, DB, thư mục session, chỉ để xem) rồi mọi khóa `[limits]` với giá trị hiện tại; Enter trên một khóa mở một câu hỏi (giá trị mới, ô đã điền sẵn giá trị cũ) rồi lưu bằng `core.config.set_limit` — đúng hàm `tgmirror config set` dùng, cùng luật kiểm tra trước khi ghi. Không kết nối Telegram nên có cả ở menu rút gọn khi chưa đăng nhập.
 
 ## Wizard `tgmirror clone`
 
@@ -143,7 +143,7 @@ done 4,180 · failed 3 · skipped(filter) 27,911 · flood 2 (last 38s ago)
 <config_dir>/config.toml            api_id, api_hash, [limits]
 ```
 
-`api_id`/`api_hash` có thể lấy từ biến môi trường `TGMIRROR_API_ID` / `TGMIRROR_API_HASH` (ưu tiên hơn file). `tgmirror login` hỏi và ghi hai khóa này lên đầu `config.toml` (giữ nguyên phần còn lại và chú thích của file, không bao giờ in `api_hash`).
+`api_id`/`api_hash` có thể lấy từ biến môi trường `TGMIRROR_API_ID` / `TGMIRROR_API_HASH` (ưu tiên hơn file). `tgmirror login` hỏi và ghi hai khóa này lên đầu `config.toml` (giữ nguyên phần còn lại và chú thích của file, không bao giờ in `api_hash`). `tgmirror config get` xem đường dẫn và mọi khóa `[limits]` (`get KEY` một khóa, `--json` cho cả hai); `config set KEY VALUE` sửa một khóa `[limits]` (kiểm tra qua đúng model `Limits`, kể cả luật liên trường, trước khi ghi) theo cùng lối "chỉ đổi khóa liên quan, giữ nguyên phần còn lại" như `login`; `long_pause_range` nhận hai số cách nhau dấu phẩy (`30,90`). Có cả trong menu full-screen ("Cấu hình").
 
 `TGMIRROR_LANG=en` đổi lời nhắc/thông báo sang tiếng Anh (mặc định tiếng Việt). Đầu ra luôn là UTF-8, kể cả khi bị chuyển hướng trên Windows.
 

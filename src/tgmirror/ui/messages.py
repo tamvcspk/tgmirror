@@ -41,6 +41,14 @@ VI: dict[str, str] = {
     "yes": "có",
     "no": "không",
     "admin": "admin",
+    # config
+    "config.paths_title": "Đường dẫn:",
+    "config.path_config": "config.toml",
+    "config.path_db": "state (SQLite)",
+    "config.path_sessions": "sessions",
+    "config.path_line": "  {label}: {path}",
+    "config.limits_title": "[limits]:",
+    "config.saved": "Đã lưu {name} = {value}.",
     # new (wizard steps 1-2)
     "clone.pick_source": "Chọn kênh/nhóm nguồn (gõ để lọc)",
     "clone.pick_destination": "Chọn đích (gõ để lọc)",
@@ -403,6 +411,7 @@ VI: dict[str, str] = {
     "menu.item_history": "Lịch sử",
     "menu.item_channels": "Kênh đã join",
     "menu.item_account": "Tài khoản",
+    "menu.item_config": "Cấu hình",
     "menu.item_quit": "Thoát",
     "menu.history_counts": "{done} tin, {failed} lỗi",
     "menu.yes": "Có",
@@ -415,6 +424,8 @@ VI: dict[str, str] = {
     "menu.footer_working": "Đang làm… · Ctrl+C thoát",
     "menu.working": "Đang làm…",
     "menu.no_match": "(không có mục nào khớp)",
+    "menu.config_edit_title": "Sửa {name}",
+    "menu.config_prompt_value": "Giá trị mới cho {name}",
 }
 
 EN: dict[str, str] = {
@@ -449,6 +460,13 @@ EN: dict[str, str] = {
     "yes": "yes",
     "no": "no",
     "admin": "admin",
+    "config.paths_title": "Paths:",
+    "config.path_config": "config.toml",
+    "config.path_db": "state (SQLite)",
+    "config.path_sessions": "sessions",
+    "config.path_line": "  {label}: {path}",
+    "config.limits_title": "[limits]:",
+    "config.saved": "Saved {name} = {value}.",
     "clone.pick_source": "Pick the source channel/group (type to filter)",
     "clone.pick_destination": "Pick the destination (type to filter)",
     "clone.create_new": "+ Create a new channel",
@@ -810,6 +828,7 @@ EN: dict[str, str] = {
     "menu.item_history": "History",
     "menu.item_channels": "Joined channels",
     "menu.item_account": "Account",
+    "menu.item_config": "Config",
     "menu.item_quit": "Quit",
     "menu.history_counts": "{done} copied, {failed} failed",
     "menu.yes": "Yes",
@@ -822,6 +841,8 @@ EN: dict[str, str] = {
     "menu.footer_working": "Working... - Ctrl+C quit",
     "menu.working": "Working...",
     "menu.no_match": "(nothing matches)",
+    "menu.config_edit_title": "Edit {name}",
+    "menu.config_prompt_value": "New value for {name}",
 }
 
 

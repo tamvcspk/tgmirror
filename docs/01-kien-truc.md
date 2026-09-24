@@ -211,7 +211,7 @@ src/tgmirror/
   engine/   endpoints.py  runs.py  planner.py  batcher.py  strategy.py  copy.py  reupload.py  flood.py  reconcile.py  preview.py  runner.py  status.py
   filters/  model.py  parser.py  pushdown.py  matcher.py
   store/    schema.sql  db.py  runs.py  msgmap.py  floodlog.py  limiterstate.py
-  cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py clone.py run.py retry.py status.py control.py history.py ...)
+  cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py clone.py run.py retry.py status.py control.py history.py config.py ...)
   ui/       messages.py  prompts.py  tables.py  progress.py  tui.py
             menu/  (app full-screen: app, screen, prompter, widgets, run_screen, screens/)
 tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integration/
