@@ -53,6 +53,7 @@ class RunScreen(Screen):
         intro: list[str] | None = None,
     ) -> None:
         current = started.run
+        self.run_id = current.id  # MenuApp reads this so its "running elsewhere" badge skips it
         self._store = store
         self._gateway = gateway
         self._current = current

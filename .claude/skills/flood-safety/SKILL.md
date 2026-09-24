@@ -9,7 +9,7 @@ Source docs: `docs/05-chong-flood.md` (numbers, rationale) and `docs/01-kien-tru
 
 ## Invariants
 
-1. Every Telegram call a `run` makes goes through the gateway, wrapped by `FloodGuard` (`engine/flood.py`): writes `await guard.pace(cost)` (= `limiter.acquire(cost, "write")`) before the write-ahead and go through `guard.write(...)`; reads go through `guard.reader(gateway)`. A test (`test_architecture.py`) fails if `runner.py` touches the gateway any other way. The user-started one-shot commands (login, channels, `new`, `--preview`) are the documented exception: a flood there is one sentence and exit code 3, no retry.
+1. Every Telegram call a `run` makes goes through the gateway, wrapped by `FloodGuard` (`engine/flood.py`): writes `await guard.pace(cost)` (= `limiter.acquire(cost, "write")`) before the write-ahead and go through `guard.write(...)`; reads go through `guard.reader(gateway)`. A test (`test_architecture.py`) fails if `runner.py` touches the gateway any other way. The user-started one-shot commands (login, channels, `doctor`, `clone`'s `--preview`) are the documented exception: a flood there is one sentence and exit code 3, no retry.
 2. The client has `flood_sleep_threshold=0`. Every `FloodWaitError` must reach `limiter.on_flood(seconds)`. Never catch it and `await asyncio.sleep` locally.
 3. A FloodWait retry re-sends the **same batch** (already `pending` in `msg_map`). Never rebuild the batch, never advance the cursor.
 4. `PeerFloodError` ⇒ end the run (`failed`, `peer_flood`), exit code 3. No retry, no delay reset, no "try again in a minute".

@@ -49,6 +49,35 @@ VI: dict[str, str] = {
     "config.path_line": "  {label}: {path}",
     "config.limits_title": "[limits]:",
     "config.saved": "Đã lưu {name} = {value}.",
+    # doctor
+    "doctor.title": "tgmirror doctor",
+    "doctor.session_missing_credentials": (
+        "Session: chưa có api_id/api_hash (chạy `tgmirror login`)."
+    ),
+    "doctor.session_not_logged_in": "Session: chưa đăng nhập (chạy `tgmirror login`).",
+    "doctor.session_error": "Session: lỗi kết nối — {detail}",
+    "doctor.session_ok": "Session: hợp lệ, đang đăng nhập {who}.",
+    "doctor.cryptg_ok": "cryptg: đã cài (giải mã nhanh hơn).",
+    "doctor.cryptg_missing": (
+        "cryptg: chưa cài — chạy chậm hơn nhưng vẫn hoạt động (uv sync cài lại)."
+    ),
+    "doctor.no_destinations": "Đích: chưa có cặp nguồn/đích nào (chạy `tgmirror clone` trước).",
+    "doctor.destinations_need_session": "Đích: cần đăng nhập để kiểm tra quyền.",
+    "doctor.destination_ok": "Đích {title}: vẫn đăng được.",
+    "doctor.destination_bad": (
+        "Đích {title}: KHÔNG còn đủ quyền đăng (không còn admin hoặc bị cấm)."
+    ),
+    "doctor.destination_error": "Đích {title}: không kiểm tra được — {detail}",
+    "doctor.safety_account": (
+        "An toàn: dùng tài khoản đã có lịch sử; tài khoản mới tinh dễ bị siết."
+    ),
+    "doctor.safety_sessions": (
+        "An toàn: không chạy nhiều tool/nhiều session cùng lúc trên một account."
+    ),
+    "doctor.safety_risk": (
+        "An toàn: tự động hóa user account có rủi ro bị giới hạn. "
+        "tgmirror giảm rủi ro, không loại bỏ hoàn toàn."
+    ),
     # new (wizard steps 1-2)
     "clone.pick_source": "Chọn kênh/nhóm nguồn (gõ để lọc)",
     "clone.pick_destination": "Chọn đích (gõ để lọc)",
@@ -426,6 +455,7 @@ VI: dict[str, str] = {
     "menu.no_match": "(không có mục nào khớp)",
     "menu.config_edit_title": "Sửa {name}",
     "menu.config_prompt_value": "Giá trị mới cho {name}",
+    "menu.running_elsewhere": "đang chạy ở nơi khác",
 }
 
 EN: dict[str, str] = {
@@ -467,6 +497,37 @@ EN: dict[str, str] = {
     "config.path_line": "  {label}: {path}",
     "config.limits_title": "[limits]:",
     "config.saved": "Saved {name} = {value}.",
+    # doctor
+    "doctor.title": "tgmirror doctor",
+    "doctor.session_missing_credentials": (
+        "Session: no api_id/api_hash yet (run `tgmirror login`)."
+    ),
+    "doctor.session_not_logged_in": "Session: not logged in (run `tgmirror login`).",
+    "doctor.session_error": "Session: connection error — {detail}",
+    "doctor.session_ok": "Session: valid, logged in as {who}.",
+    "doctor.cryptg_ok": "cryptg: installed (faster crypto).",
+    "doctor.cryptg_missing": (
+        "cryptg: not installed — slower but still works (uv sync to add it)."
+    ),
+    "doctor.no_destinations": (
+        "Destinations: no source/destination pair yet (run `tgmirror clone`)."
+    ),
+    "doctor.destinations_need_session": "Destinations: need a session to check permissions.",
+    "doctor.destination_ok": "Destination {title}: still writable.",
+    "doctor.destination_bad": (
+        "Destination {title}: NO LONGER writable (not admin, or posting is off)."
+    ),
+    "doctor.destination_error": "Destination {title}: could not check it — {detail}",
+    "doctor.safety_account": (
+        "Safety: use an account with history; a brand-new one gets limited faster."
+    ),
+    "doctor.safety_sessions": (
+        "Safety: do not run several tools/sessions on the same account at once."
+    ),
+    "doctor.safety_risk": (
+        "Safety: automating a user account risks it being limited. "
+        "tgmirror reduces that risk, it does not remove it."
+    ),
     "clone.pick_source": "Pick the source channel/group (type to filter)",
     "clone.pick_destination": "Pick the destination (type to filter)",
     "clone.create_new": "+ Create a new channel",
@@ -843,6 +904,7 @@ EN: dict[str, str] = {
     "menu.no_match": "(nothing matches)",
     "menu.config_edit_title": "Edit {name}",
     "menu.config_prompt_value": "New value for {name}",
+    "menu.running_elsewhere": "running elsewhere",
 }
 
 

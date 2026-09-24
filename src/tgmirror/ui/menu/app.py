@@ -47,6 +47,8 @@ class MenuApp:
         self.store = store
         self.conn = conn
         self.account = account
+        self.own_run_id: int | None = None  # the run *this* process drives, if any (see below)
+        self._badge: str | None = None
         self._conn_stack: AsyncExitStack | None = None  # set when this app opened ``conn``
         self._stack: list[Screen] = [MainMenuScreen(self)]
         self._layout = frame.build_layout()
@@ -117,6 +119,7 @@ class MenuApp:
         debug.log("drive.start", screen=type(self._stack[0]).__name__)
         await self._apply(await self._stack[0].on_enter())
         with self._live:
+            await self._refresh_badge()
             self._redraw()
             iteration = 0
             while self._quit_code is None:
@@ -130,6 +133,8 @@ class MenuApp:
                     key = await asyncio.wait_for(queue.get(), timeout=top.tick_interval)
                 except TimeoutError:
                     key = None
+                if key is None:  # an idle tick: a good, cheap moment to re-check (no key spam)
+                    await self._refresh_badge()
                 debug.log("loop.woke", n=iteration, key=_loggable(key))
                 result = await top.tick() if key is None else await top.handle_key(key)
                 debug.log("loop.result", n=iteration, result=repr(result))
@@ -158,12 +163,23 @@ class MenuApp:
                 await self._apply(("push", screen))
             case ("push", screen):
                 self._stack.append(screen)
+                if screen.run_id is not None:
+                    self.own_run_id = screen.run_id  # this process now holds that run itself
                 debug.log("apply.push", top=type(screen).__name__)
                 await self._apply(await screen.on_enter())  # may itself decide to push/pop again
 
+    async def _refresh_badge(self) -> None:
+        """The "đang chạy ở nơi khác" badge: some *other* process holds an active run right now.
+        Skips the run this very app is driving (``own_run_id``, set when a ``RunScreen`` is
+        pushed) — its progress already has a whole screen, it does not also need a header badge."""
+        live = await self.store.active_run()
+        self._badge = (
+            t("menu.running_elsewhere") if live is not None and live.id != self.own_run_id else None
+        )
+
     def _redraw(self) -> None:
         top = self._stack[-1]
-        self._layout["header"].update(frame.header(self._who(), None))
+        self._layout["header"].update(frame.header(self._who(), self._badge))
         self._layout["body"].update(top.render())
         self._layout["footer"].update(frame.footer(top.footer_hint))
         self._live.refresh()

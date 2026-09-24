@@ -14,6 +14,7 @@ from tgmirror.cli.commands import (
     clone,
     config,
     control,
+    doctor,
     history,
     retry,
     run,
@@ -122,3 +123,4 @@ app.command("history")(history.history)
 app.command("retry")(retry.retry)
 app.command("status")(status.status)
 app.add_typer(config.config_app, name="config")
+app.command("doctor")(doctor.doctor)

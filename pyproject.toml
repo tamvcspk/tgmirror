@@ -3,7 +3,15 @@ name = "tgmirror"
 version = "0.1.0"
 description = "Clone a Telegram channel you joined into another channel (MTProto, Telethon)."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Chat",
+]
 dependencies = [
     "telethon==1.45.0",  # pinned: private APIs; see docs/06-lo-trinh.md, "Nâng cấp Telethon"
     "cryptg>=0.4",
@@ -18,6 +26,9 @@ dependencies = [
     "regex>=2024.11",
     "hachoir>=3.4.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/tamvcspk/tgmirror"
 
 [project.scripts]
 tgmirror = "tgmirror.cli.app:app"
