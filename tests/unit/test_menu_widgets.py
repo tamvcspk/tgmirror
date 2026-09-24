@@ -72,3 +72,13 @@ def test_type_to_filter_ignores_navigation_keys() -> None:
     assert box.handle_key(MenuKey.ENTER) is False
     assert box.handle_key(MenuKey.UP) is False
     assert box.text == ""
+
+
+def test_a_long_list_shows_a_window_around_the_highlighted_item() -> None:
+    widget: SelectList[int] = SelectList(items=[(f"item{i:02}", i) for i in range(30)], index=15)
+
+    lines = plain(widget.render(7)).splitlines()
+
+    assert len(lines) == 7
+    assert lines[0].strip() == lines[-1].strip() == "…"  # more beyond both ends
+    assert "▸ item15" in lines

@@ -56,6 +56,12 @@ from tgmirror.ui.messages import t
 from tgmirror.ui.tables import channel_label
 
 
+class Declined(Exception):  # noqa: N818 - a user's answer, not a failure
+    """The user said no to a confirmation (``err.aborted``, exit code 1). Raised by the shared
+    flows instead of ``typer.Exit`` so the full-screen menu can call them too: ``run`` below turns
+    it into the CLI's message and exit code, the menu just returns to where it was."""
+
+
 class UsageProblem(UsageError):
     """A usage error that already carries its message key and parameters."""
 
@@ -174,6 +180,9 @@ def run(rt: Runtime, coro: Coroutine[Any, Any, T]) -> T:
     except KeyboardInterrupt:
         typer.echo(t("err.aborted"), err=True)
         raise typer.Exit(130) from None
+    except Declined:
+        typer.echo(t("err.aborted"), err=True)
+        raise typer.Exit(1) from None
     except TgMirrorError as exc:
         if rt.debug:
             raise

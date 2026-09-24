@@ -94,7 +94,9 @@ def pump_menu_keys(
         raw = reader.read(POLL)
         reads += 1
         if raw is not None:
-            debug.log("keys.read", raw=raw, decoded=str(decode_menu_key(raw)))
+            decoded = decode_menu_key(raw)
+            # a typed character may be a login code, a password or an api_hash (CLAUDE.md rule 6)
+            debug.log("keys.read", key=str(decoded) if isinstance(decoded, MenuKey) else "<char>")
             loop.call_soon_threadsafe(queue.put_nowait, decode_menu_key(raw))
         if time.monotonic() - last_beat >= 2.0:  # proves the thread is alive, without flooding
             debug.log("keys.alive", reads=reads)
@@ -211,6 +213,9 @@ class _PosixReader:
         if not ready:
             return None
         data = os.read(self._fd, 1)
+        if data and data[0] >= 0xC0:  # a UTF-8 lead byte: read the rest of the character
+            more = 1 if data[0] < 0xE0 else 2 if data[0] < 0xF0 else 3
+            data += os.read(self._fd, more)
         ch = data.decode(errors="ignore")
         if not ch:
             return None

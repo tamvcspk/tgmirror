@@ -1,10 +1,16 @@
-"""The full-screen menu app (Chặng 1, ``docs/06-lo-trinh.md``, "Kế hoạch giao diện full-screen
-(menu)"): one ``Live(screen=True)`` for the app's whole life, entered only when ``tgmirror`` is
-typed bare with a real terminal (``cli/app.py``). Never a daemon: the loop below is exactly this
-process's own lifetime, from ``launch()`` being awaited to it returning an exit code.
+"""The full-screen menu app (``docs/06-lo-trinh.md``, "Kế hoạch giao diện full-screen (menu)"): one
+``Live(screen=True)`` for the app's whole life, entered only when ``tgmirror`` is typed bare with a
+real terminal (``cli/app.py``). Never a daemon: the loop below is exactly this process's own
+lifetime, from ``launch()`` being awaited to it returning an exit code.
+
+The app opens even when nobody is logged in (or no ``api_id``/``api_hash`` is saved yet): the menu
+then offers "Đăng nhập", which asks for what is missing and logs in inside the frame. The Telegram
+connection is the app's to open and close (``open_connection``/``close_connection``): logging out
+ends it (Telethon deletes the session and disconnects), logging in again opens a new one.
 """
 
 import asyncio
+from contextlib import AsyncExitStack
 
 import typer
 from rich.console import Console
@@ -12,8 +18,10 @@ from rich.live import Live
 
 from tgmirror.cli.commands.auth import who
 from tgmirror.cli.keys import MenuKey, menu_key_queue
-from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.cli.runtime import Connection, Runtime, opened_store
 from tgmirror.core.auth import AccountInfo, TelegramAuth
+from tgmirror.core.config import Config
+from tgmirror.core.errors import MissingCredentials, NotLoggedIn
 from tgmirror.core.gateway import TelegramGateway
 from tgmirror.store.db import Store
 from tgmirror.ui.menu import debug, frame
@@ -23,23 +31,23 @@ from tgmirror.ui.messages import t
 
 
 class MenuApp:
-    """Owns the ``Live``/``Layout`` and the stack of ``Screen``s; satisfies ``AppContext``."""
+    """Owns the ``Live``/``Layout``, the stack of ``Screen``s and the Telegram connection;
+    satisfies ``AppContext``."""
 
     def __init__(
         self,
         rt: Runtime,
         store: Store,
-        auth: TelegramAuth,
-        gateway: TelegramGateway,
+        conn: Connection | None,
         account: AccountInfo | None,
         *,
         console: Console | None = None,
     ) -> None:
         self.rt = rt
         self.store = store
-        self.auth = auth
-        self.gateway = gateway
+        self.conn = conn
         self.account = account
+        self._conn_stack: AsyncExitStack | None = None  # set when this app opened ``conn``
         self._stack: list[Screen] = [MainMenuScreen(self)]
         self._layout = frame.build_layout()
         # auto_refresh=False: one writer only. Rich's own background refresh thread would call
@@ -51,6 +59,35 @@ class MenuApp:
             self._layout, console=console, screen=True, transient=True, auto_refresh=False
         )
         self._quit_code: int | None = None
+
+    @property
+    def auth(self) -> TelegramAuth:
+        if self.conn is None:
+            raise NotLoggedIn("no connection")
+        return self.conn.auth
+
+    @property
+    def gateway(self) -> TelegramGateway:
+        if self.conn is None:
+            raise NotLoggedIn("no connection")
+        return self.conn.gateway
+
+    async def open_connection(self, config: Config) -> Connection:
+        """Connect with ``config`` (closing a connection this app opened before)."""
+        await self.close_connection()
+        stack = AsyncExitStack()
+        try:
+            conn = await stack.enter_async_context(self.rt.connect(config))
+        except BaseException:
+            await stack.aclose()
+            raise
+        self._conn_stack, self.conn = stack, conn
+        return conn
+
+    async def close_connection(self) -> None:
+        stack, self._conn_stack, self.conn = self._conn_stack, None, None
+        if stack is not None:
+            await stack.aclose()
 
     def push(self, screen: Screen) -> None:
         self._stack.append(screen)
@@ -93,7 +130,7 @@ class MenuApp:
                     key = await asyncio.wait_for(queue.get(), timeout=top.tick_interval)
                 except TimeoutError:
                     key = None
-                debug.log("loop.woke", n=iteration, key=None if key is None else str(key))
+                debug.log("loop.woke", n=iteration, key=_loggable(key))
                 result = await top.tick() if key is None else await top.handle_key(key)
                 debug.log("loop.result", n=iteration, result=repr(result))
                 await self._apply(result)
@@ -113,6 +150,12 @@ class MenuApp:
                 if len(self._stack) > 1:
                     self._stack.pop()
                     debug.log("apply.pop", top=type(self._stack[-1]).__name__)
+                    # the screen below may show what just changed (a login, a new pair)
+                    await self._apply(await self._stack[-1].on_return())
+            case ("replace", screen):
+                if len(self._stack) > 1:
+                    self._stack.pop()
+                await self._apply(("push", screen))
             case ("push", screen):
                 self._stack.append(screen)
                 debug.log("apply.push", top=type(screen).__name__)
@@ -130,11 +173,26 @@ class MenuApp:
         return who(self.account) if self.account is not None else None
 
 
+def _loggable(key: MenuKey | str | None) -> str | None:
+    """A key for the debug log: named keys as they are, typed characters never (they may be a
+    login code, a password or an api_hash; CLAUDE.md rule 6)."""
+    if key is None or isinstance(key, MenuKey):
+        return None if key is None else str(key)
+    return "<char>"
+
+
 async def launch(rt: Runtime) -> int:
     """Entry point ``cli/app.py`` calls for a bare ``tgmirror`` on a real terminal."""
     debug.init()
     debug.log("launch")
-    async with opened_store(rt) as store, authorized(rt) as conn:
-        account = await conn.auth.account()
-        app = MenuApp(rt, store, conn.auth, conn.gateway, account)
-        return await app.run()
+    async with opened_store(rt) as store:
+        app = MenuApp(rt, store, None, None)
+        try:
+            try:
+                conn = await app.open_connection(rt.config())
+                app.account = await conn.auth.account()
+            except MissingCredentials:  # first run: "Đăng nhập" asks for them
+                pass
+            return await app.run()
+        finally:
+            await app.close_connection()

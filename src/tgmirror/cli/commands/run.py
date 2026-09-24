@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 
 from tgmirror.cli import wizard
-from tgmirror.cli.errors import UsageProblem, run
+from tgmirror.cli.errors import Declined, UsageProblem, run
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
 from tgmirror.core.gateway import ChannelInfo, TelegramGateway
@@ -21,6 +21,7 @@ from tgmirror.engine.runs import RunRequest, begin_run, check_runnable, resolve_
 from tgmirror.store.db import Store, utc_now
 from tgmirror.store.runs import Control, FilterChange, Run, RunStatus, StartedRun
 from tgmirror.ui.messages import t
+from tgmirror.ui.prompts import Prompter
 from tgmirror.ui.tables import channel_label
 from tgmirror.ui.tui import TuiReporter
 
@@ -144,7 +145,7 @@ async def resume_flow(
     whether it is already live elsewhere, and the ``RunRequest`` to start.
 
     Raises nothing of its own but what it calls does (``RunWaiting`` from ``check_runnable``,
-    ``typer.Exit`` from a declined ``confirm_fresh``) — same as before this was factored out of
+    ``Declined`` from a declined ``confirm_fresh``) — same as before this was factored out of
     ``run_clone()``'s body, so the CLI path (``run_clone`` below) is unaffected. The full-screen
     menu (``ui/menu/``) calls this directly (never through ``typer.Exit``-raising code without a
     surrounding ``try``) and turns those exceptions into a dialog instead of exiting the process.
@@ -191,19 +192,29 @@ def pair_of(earlier: Run) -> tuple[ChannelInfo, ChannelInfo]:
     )
 
 
-async def confirm_fresh(rt: Runtime, copied: int, yes: bool, src: str, dst: str) -> None:
+async def confirm_fresh(
+    rt: Runtime,
+    copied: int,
+    yes: bool,
+    src: str,
+    dst: str,
+    *,
+    prompter: Prompter | None = None,
+    interactive: bool | None = None,
+) -> None:
     """The question before a fresh start forgets ``copied`` messages (none: nothing to ask).
 
     ``--yes`` agrees; with no terminal and no ``--yes`` it is a usage error, so a script never
-    starts a second copy of a destination by accident.
+    starts a second copy of a destination by accident. A "no" raises ``Declined``.
+    ``prompter``/``interactive`` default to the runtime's (the menu passes its own).
     """
     if copied == 0 or yes:
         return
-    if not rt.interactive:
+    prompter = prompter or rt.prompter
+    if not (rt.interactive if interactive is None else interactive):
         raise UsageProblem("err.fresh_needs_yes", count=copied)
-    if not await rt.prompter.confirm(t("clone.confirm_fresh", count=copied, src=src, dst=dst)):
-        typer.echo(t("err.aborted"), err=True)
-        raise typer.Exit(1)
+    if not await prompter.confirm(t("clone.confirm_fresh", count=copied, src=src, dst=dst)):
+        raise Declined
 
 
 async def execute(

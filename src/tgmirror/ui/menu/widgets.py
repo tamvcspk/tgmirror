@@ -22,12 +22,23 @@ class SelectList(Generic[T]):
     def __post_init__(self) -> None:
         self.index = min(self.index, max(len(self.items) - 1, 0))
 
-    def render(self) -> RenderableType:
+    def render(self, rows: int | None = None) -> RenderableType:
+        """Every item, or with ``rows`` a window of that many around the highlighted one (the
+        first/last row turns into "…" when more items lie beyond it)."""
         if not self.items:
             return Text("")
+        first, last = 0, len(self.items)
+        if rows is not None and len(self.items) > rows:
+            rows = max(rows, 3)
+            first = min(max(self.index - rows // 2, 0), len(self.items) - rows)
+            last = first + rows
         lines = []
-        for i, (label, _) in enumerate(self.items):
+        for i in range(first, last):
+            if (i == first and first > 0) or (i == last - 1 and last < len(self.items)):
+                lines.append(Text("  …", style="dim"))
+                continue
             marker = "▸ " if i == self.index else "  "
+            label = self.items[i][0]
             lines.append(Text(marker + label, style="bold cyan" if i == self.index else None))
         return Group(*lines)
 

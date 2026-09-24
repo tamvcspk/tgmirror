@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from tests.fakes import ACCOUNT, FakeAuth, FakeGateway
 from tgmirror.cli.app import app
 from tgmirror.cli.keys import MenuKey
-from tgmirror.cli.runtime import Runtime
+from tgmirror.cli.runtime import Connection, Runtime
 from tgmirror.store.db import Store
 from tgmirror.ui.menu.app import MenuApp
 from tgmirror.ui.menu.screens.account import AccountScreen
@@ -65,7 +65,7 @@ async def test_menu_app_quits_from_the_main_menu_with_code_0(
     rt = make_runtime(gateway=gateway, auth=auth, interactive=True)
     store = await Store.open(tmp_path / "t.db")
     console = Console(file=io.StringIO(), no_color=True, width=200)
-    app_ = MenuApp(rt, store, auth, gateway, ACCOUNT, console=console)
+    app_ = MenuApp(rt, store, Connection(auth, gateway), ACCOUNT, console=console)
     queue: asyncio.Queue[MenuKey | str] = asyncio.Queue()
     # main menu with no run history: Sao chép mới, Trạng thái, Lịch sử, Kênh đã join, Tài khoản,
     # Thoát — five Down presses land on "Thoát".
@@ -90,7 +90,7 @@ async def test_menu_app_shows_whoami_on_the_account_screen(
     rt = make_runtime(gateway=gateway, auth=auth, interactive=True)
     store = await Store.open(tmp_path / "t.db")
     console = Console(file=io.StringIO(), no_color=True, width=200)
-    app_ = MenuApp(rt, store, auth, gateway, ACCOUNT, console=console)
+    app_ = MenuApp(rt, store, Connection(auth, gateway), ACCOUNT, console=console)
     queue: asyncio.Queue[MenuKey | str] = asyncio.Queue()
     for _ in range(4):  # Sao chép mới -> Trạng thái -> Lịch sử -> Kênh đã join -> Tài khoản
         queue.put_nowait(MenuKey.DOWN)
@@ -107,4 +107,26 @@ async def test_menu_app_shows_whoami_on_the_account_screen(
     await app_.run(queue=queue)
     await task
 
+    await store.close()
+
+
+async def test_new_clone_opens_the_wizard_and_esc_returns_to_the_menu(
+    make_runtime: MakeRuntime, tmp_path: Path
+) -> None:
+    """Chặng 2: "Sao chép mới" is a real wizard now; Esc at its first question pops back to the
+    main menu, which still works (five Down presses reach "Thoát")."""
+    gateway, auth = FakeGateway(), FakeAuth(logged_in=ACCOUNT)
+    gateway.add_channel("Source")
+    rt = make_runtime(gateway=gateway, auth=auth, interactive=True)
+    store = await Store.open(tmp_path / "t.db")
+    console = Console(file=io.StringIO(), no_color=True, width=200)
+    app_ = MenuApp(rt, store, Connection(auth, gateway), ACCOUNT, console=console)
+    queue: asyncio.Queue[MenuKey | str] = asyncio.Queue()
+    for key in [MenuKey.ENTER, MenuKey.ESC, *[MenuKey.DOWN] * 5, MenuKey.ENTER]:
+        queue.put_nowait(key)
+
+    code = await app_.run(queue=queue)
+
+    assert code == 0
+    assert gateway.calls_to("list_channels")  # the wizard really started
     await store.close()

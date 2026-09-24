@@ -82,15 +82,14 @@ MUTATIONS = [
     Mutation(
         "D3: confirmation skipped on clone",
         "src/tgmirror/cli/commands/clone.py",
-        "            if plan.protected and downloads:\n"
-        "                await _confirm_protected(rt, plan, admin_ack)",
-        "            if False:\n                await _confirm_protected(rt, plan, admin_ack)",
+        "        if plan.protected and downloads:\n            await self._confirm_protected(plan)",
+        "        if False:\n            await self._confirm_protected(plan)",
     ),
     Mutation(
         "D3: --yes answers the question",
         "src/tgmirror/cli/commands/clone.py",
-        "    if acknowledged:\n        return\n    if not rt.interactive:",
-        "    if acknowledged or True:\n        return\n    if not rt.interactive:",
+        "        if self._o.admin_ack:\n            return\n        if not self._interactive:",
+        "        if self._o.admin_ack or True:\n            return\n        if not self._interactive:",
     ),
     Mutation(
         "D3: a run does not read the source again",
@@ -131,8 +130,8 @@ MUTATIONS = [
     Mutation(
         "D3: clone does not record the confirmation",
         "src/tgmirror/cli/commands/clone.py",
-        "                base = replace(base, protected_ack=True)",
-        "                pass",
+        "            base = replace(base, protected_ack=True)",
+        "            pass",
     ),
     Mutation(
         "a reuploaded unit may share a batch",

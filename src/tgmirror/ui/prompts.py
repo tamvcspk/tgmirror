@@ -6,7 +6,7 @@ implementation (questionary) stays in one place. It is async because questionary
 Ctrl+C raises ``KeyboardInterrupt``; the CLI turns it into exit code 130.
 """
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
@@ -41,6 +41,23 @@ class Prompter(Protocol):
     async def checkbox(self, message: str, choices: Sequence[Choice[T]]) -> list[T]:
         """Pick any number (none is allowed); space toggles."""
         ...
+
+
+Step = Callable[[], Awaitable[None]]
+
+
+async def run_steps(prompter: Prompter, steps: Sequence[Step]) -> None:
+    """Run a multi-step flow (``cli/commands/clone.py::CloneFlow.steps``) with ``prompter``.
+
+    One after the other, unless the prompter can go back a step itself (the full-screen menu's
+    ``MenuPrompter.run_steps``: Esc returns to the previous question, across steps too).
+    """
+    driver = getattr(prompter, "run_steps", None)
+    if driver is not None:
+        await driver(steps)
+        return
+    for step in steps:
+        await step()
 
 
 class QuestionaryPrompter:

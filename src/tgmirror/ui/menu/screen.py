@@ -13,8 +13,10 @@ from rich.console import RenderableType
 from tgmirror.cli.keys import MenuKey
 
 Push = tuple[Literal["push"], "Screen"]
+# this screen gives way to another: Esc from that one skips this one (a finished wizard -> its run)
+Replace = tuple[Literal["replace"], "Screen"]
 Quit = tuple[Literal["quit"], int]  # quit with this exit code (bare "quit" below means code 0)
-ScreenResult = Literal["stay", "pop", "quit"] | Push | Quit
+ScreenResult = Literal["stay", "pop", "quit"] | Push | Replace | Quit
 
 
 class Screen:
@@ -33,6 +35,11 @@ class Screen:
         can return a ``ScreenResult`` here too — ``MenuApp`` applies it the same as one from
         ``handle_key``/``tick``, chaining straight into the next screen instead of flashing this
         one first."""
+        return None
+
+    async def on_return(self) -> ScreenResult | None:
+        """Called when the screen above this one pops and this one is on top again (the main
+        menu re-reads what it offers: someone may have logged in, or a new pair may exist)."""
         return None
 
     async def handle_key(self, key: MenuKey | str) -> ScreenResult:

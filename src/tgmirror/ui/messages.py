@@ -408,10 +408,13 @@ VI: dict[str, str] = {
     "menu.yes": "Có",
     "menu.no": "Không",
     "menu.confirm_logout": "Đăng xuất {who}?",
-    "menu.clone_not_yet": (
-        "Chưa làm trong menu (cần dựng lại từng bước hỏi của wizard). "
-        "Thoát menu rồi dùng `tgmirror clone` như trước."
-    ),
+    "menu.item_login": "Đăng nhập",
+    "menu.footer_text": "Gõ rồi Enter · Esc quay lại",
+    "menu.footer_select": "↑↓ chọn · gõ để lọc · Enter chọn · Esc quay lại",
+    "menu.footer_check": "↑↓ di chuyển · Space chọn/bỏ · Enter xong · Esc quay lại",
+    "menu.footer_working": "Đang làm… · Ctrl+C thoát",
+    "menu.working": "Đang làm…",
+    "menu.no_match": "(không có mục nào khớp)",
 }
 
 EN: dict[str, str] = {
@@ -812,10 +815,13 @@ EN: dict[str, str] = {
     "menu.yes": "Yes",
     "menu.no": "No",
     "menu.confirm_logout": "Log out {who}?",
-    "menu.clone_not_yet": (
-        "Not in the menu yet (needs the wizard's steps rebuilt as screens). "
-        "Quit the menu and use `tgmirror clone` for now."
-    ),
+    "menu.item_login": "Log in",
+    "menu.footer_text": "Type, then Enter - Esc back",
+    "menu.footer_select": "up/down select - type to filter - Enter choose - Esc back",
+    "menu.footer_check": "up/down move - Space tick - Enter done - Esc back",
+    "menu.footer_working": "Working... - Ctrl+C quit",
+    "menu.working": "Working...",
+    "menu.no_match": "(nothing matches)",
 }
 
 

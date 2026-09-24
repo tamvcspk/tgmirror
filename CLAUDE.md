@@ -14,7 +14,7 @@ engine/   endpoints (source/destination rules), runs (`begin_run`, resolve, vet)
 filters/  model, parser (YAML + flags), pushdown (`plan_read`), matcher (pure, client side)
 store/    schema.sql (+ numbered migrations after release), db (`Store`: the only place with SQL), runs (`Run`, `Mirror`), msgmap, floodlog, limiterstate
 cli/      app, wizard, filter_options (shared filter flags), runtime (injectable Runtime), errors (exit codes), interrupt (Ctrl+C), keys (hotkeys p/r/q), commands/ (auth, channels, clone, run, retry, status, control = pause/stop, history)
-ui/       messages (all user strings), prompts, tables, progress (plain-line reporter; Rich TUI is phase 7)
+ui/       messages (all user strings), prompts (`Prompter`, `run_steps`), tables, progress (plain-line reporter), tui (Rich Live), menu/ (full-screen app of bare `tgmirror`: `MenuPrompter`, screens)
 ```
 
 ## Hard rules

@@ -50,6 +50,7 @@ class RunScreen(Screen):
         tmp_dir: Path,
         wait: bool = False,
         failed_count: int | None = None,
+        intro: list[str] | None = None,
     ) -> None:
         current = started.run
         self._store = store
@@ -60,7 +61,7 @@ class RunScreen(Screen):
         self._wait = wait
         self._reporter = TuiReporter(limits, current)
         self._control = RunControl()
-        self._lines: list[str] = _start_lines(started, failed_count)
+        self._lines: list[str] = [*(intro or []), *_start_lines(started, failed_count)]
         self._task: asyncio.Task[Run] | None = None
         self._reported = False  # the task's outcome goes into _lines once, not every tick
         self._interrupt_hit = False

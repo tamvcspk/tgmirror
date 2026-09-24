@@ -1,8 +1,7 @@
-""" "Tài khoản": who is logged in, and a confirm-then-log-out.
+""" "Tài khoản": who is logged in, and a confirm-then-log-out; logged out, Enter logs in.
 
-No login form here yet (Chặng 2: needs ``MenuPrompter``'s masked ``text``/``secret`` fields to
-reuse ``core/auth.py``'s login flow safely). After a log out from here the account is gone for the
-rest of this app session; logging back in still means leaving the app and running `tgmirror login`.
+Logging out ends the Telegram connection too (Telethon deletes the session and disconnects); the
+login screen opens a new one.
 """
 
 from rich.console import Group, RenderableType
@@ -13,6 +12,7 @@ from tgmirror.cli.keys import MenuKey
 from tgmirror.ui.menu.context import AppContext
 from tgmirror.ui.menu.screen import Screen, ScreenResult
 from tgmirror.ui.menu.screens.info import InfoScreen
+from tgmirror.ui.menu.screens.login import login_screen
 from tgmirror.ui.menu.widgets import SelectList
 from tgmirror.ui.messages import t
 
@@ -28,8 +28,10 @@ class AccountScreen(Screen):
         return Text(line)
 
     async def handle_key(self, key: MenuKey | str) -> ScreenResult:
-        if self._app.account is None or key != MenuKey.ENTER:
+        if key != MenuKey.ENTER:
             return "pop"
+        if self._app.account is None:
+            return ("replace", login_screen(self._app))
         return ("push", _ConfirmLogout(self._app))
 
 
@@ -58,5 +60,6 @@ class _ConfirmLogout(Screen):
         if account is not None:
             await self._app.auth.log_out()
             self._app.account = None
-            return ("push", InfoScreen([t("logout.ok", who=who(account))]))
+            await self._app.close_connection()
+            return ("replace", InfoScreen([t("logout.ok", who=who(account))]))
         return "pop"
