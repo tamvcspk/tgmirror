@@ -388,6 +388,30 @@ VI: dict[str, str] = {
     "duration.hours": "{hours} giờ {minutes} phút",
     "duration.minutes": "{minutes} phút",
     "duration.seconds": "{seconds} giây",
+    # full-screen menu (ui/menu/, gõ trơn `tgmirror` có terminal thật)
+    "menu.not_logged_in": "chưa đăng nhập",
+    "menu.no_terminal": "Không đọc được bàn phím ở terminal này.",
+    "menu.footer_main": "↑↓ chọn · Enter chọn · Ctrl+C thoát",
+    "menu.footer_pick": "↑↓ chọn · Enter chọn · Esc quay lại",
+    "menu.footer_back": "Nhấn phím bất kỳ để quay lại",
+    "menu.footer_info": "Nhấn phím bất kỳ để tiếp tục",
+    "menu.footer_filter": "Gõ để lọc · Esc quay lại",
+    "menu.item_clone": "Sao chép mới…",
+    "menu.item_resume": "Chạy tiếp",
+    "menu.item_retry": "Thử lại tin lỗi",
+    "menu.item_status": "Trạng thái",
+    "menu.item_history": "Lịch sử",
+    "menu.item_channels": "Kênh đã join",
+    "menu.item_account": "Tài khoản",
+    "menu.item_quit": "Thoát",
+    "menu.history_counts": "{done} tin, {failed} lỗi",
+    "menu.yes": "Có",
+    "menu.no": "Không",
+    "menu.confirm_logout": "Đăng xuất {who}?",
+    "menu.clone_not_yet": (
+        "Chưa làm trong menu (cần dựng lại từng bước hỏi của wizard). "
+        "Thoát menu rồi dùng `tgmirror clone` như trước."
+    ),
 }
 
 EN: dict[str, str] = {
@@ -768,6 +792,30 @@ EN: dict[str, str] = {
     "duration.hours": "{hours} h {minutes} min",
     "duration.minutes": "{minutes} min",
     "duration.seconds": "{seconds} s",
+    # full-screen menu (ui/menu/, launched by a bare `tgmirror` on a real terminal)
+    "menu.not_logged_in": "not logged in",
+    "menu.no_terminal": "Could not read the keyboard on this terminal.",
+    "menu.footer_main": "up/down select - Enter choose - Ctrl+C quit",
+    "menu.footer_pick": "up/down select - Enter choose - Esc back",
+    "menu.footer_back": "Press any key to go back",
+    "menu.footer_info": "Press any key to continue",
+    "menu.footer_filter": "Type to filter - Esc back",
+    "menu.item_clone": "New clone...",
+    "menu.item_resume": "Continue",
+    "menu.item_retry": "Retry failures",
+    "menu.item_status": "Status",
+    "menu.item_history": "History",
+    "menu.item_channels": "Joined channels",
+    "menu.item_account": "Account",
+    "menu.item_quit": "Quit",
+    "menu.history_counts": "{done} copied, {failed} failed",
+    "menu.yes": "Yes",
+    "menu.no": "No",
+    "menu.confirm_logout": "Log out {who}?",
+    "menu.clone_not_yet": (
+        "Not in the menu yet (needs the wizard's steps rebuilt as screens). "
+        "Quit the menu and use `tgmirror clone` for now."
+    ),
 }
 
 

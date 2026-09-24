@@ -23,6 +23,14 @@ Tùy chọn chung: `--version`, `--debug` (hiện traceback thay vì một câu 
 
 Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, file YAML, regex; kiểm tra trước khi hỏi hay ghi gì), `3` lần chạy dừng vì flood/peer_flood/chạm `daily_cap` (hoặc `clone`/`run` bị từ chối vì phải chờ), `4` thiếu quyền (kể cả nguồn cấm forward), `130` Ctrl+C (đã lưu, lần chạy `stopped`). `clone`/`run`/`retry` trả mã của lần chạy (`0` xong hoặc dừng bằng phím `q`/`tgmirror stop`, `3`, `130`, ...).
 
+## Giao diện full-screen (menu)
+
+Gõ trơn `tgmirror` (không lệnh con) khi có terminal thật mở thẳng một app full-screen (`rich.live.Live(screen=True)`, khung header/footer cố định) thay vì gõ từng lệnh — vòng lặp menu chỉ sống trong đúng tiến trình đó, từ lúc mở tới lúc thoát, không có gì chạy nền hay chạy tiếp sau khi thoát. Không có terminal (chuyển hướng, script, CI) thì gõ trơn vẫn in help như trước.
+
+Điều hướng: ↑/↓ chọn, Enter chọn/xác nhận, Esc lùi lại một bước (menu chính thì không có gì để lùi). Menu chính: Sao chép mới (*), Chạy tiếp, Thử lại tin lỗi, Trạng thái, Lịch sử, Kênh đã join, Tài khoản, Thoát — hai mục "Chạy tiếp"/"Thử lại tin lỗi" chỉ hiện khi đã có ít nhất một cặp nguồn/đích. "Chạy tiếp"/"Thử lại tin lỗi" chỉ hỏi chọn cặp khi có hơn một cặp (danh sách trong khung, không phải câu hỏi kiểu wizard), rồi vào thẳng màn hình tiến độ — đúng khung tiến độ đã có ở "Điều khiển khi đang chạy" (dưới), phím `p`/`r`/`q` hoạt động y hệt, Ctrl+C giữa lúc này dừng run **và** thoát hẳn app (không lùi về menu). "Trạng thái" tự làm mới vài giây một lần (giống `tgmirror status` nhưng sống); "Lịch sử" là danh sách cuộn được, Enter xem chi tiết một lần chạy; "Kênh đã join" gõ để lọc tại chỗ; "Tài khoản" xem ai đang đăng nhập và đăng xuất (có hỏi lại).
+
+(*) **Chưa có trong menu**: "Sao chép mới", "Đăng nhập" (cần nhiều bước hỏi/form, để đợt sau) và "Cấu hình" (lệnh `tgmirror config` chưa tồn tại) — dùng `tgmirror clone`/`tgmirror login` gõ lệnh như trước cho tới khi có. Chi tiết kiến trúc và những gì còn thiếu: `docs/06-lo-trinh.md`, "Kế hoạch giao diện full-screen (menu)".
+
 ## Wizard `tgmirror clone`
 
 ```

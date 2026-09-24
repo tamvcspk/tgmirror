@@ -9,12 +9,12 @@ import typer
 
 from tgmirror import __version__
 from tgmirror.cli.commands import auth, channels, clone, control, history, retry, run, status
+from tgmirror.cli.errors import run as run_command
 from tgmirror.cli.runtime import Runtime, default_runtime
 
 app = typer.Typer(
     name="tgmirror",
     help="Clone a Telegram channel you joined into another channel.",
-    no_args_is_help=True,
     add_completion=False,
 )
 
@@ -35,7 +35,7 @@ def _show_version(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
     version: Annotated[
@@ -58,7 +58,23 @@ def main(
         _use_utf8_output()
         rt = default_runtime()
     _show_warnings()
-    ctx.obj = replace(rt, debug=rt.debug or debug)
+    rt = replace(rt, debug=rt.debug or debug)
+    ctx.obj = rt
+    if ctx.invoked_subcommand is None:  # bare `tgmirror`: no `no_args_is_help` any more (below)
+        _bare_invocation(ctx, rt)
+
+
+def _bare_invocation(ctx: typer.Context, rt: Runtime) -> None:
+    """A real terminal: the full-screen menu (``ui/menu/``), instead of typing a subcommand.
+    No terminal (redirected, a script, a test without one): the help ``no_args_is_help`` used to
+    print, so nothing here changes for a script that calls bare ``tgmirror`` by mistake."""
+    if not rt.interactive:
+        typer.echo(ctx.get_help())
+        raise typer.Exit()
+    from tgmirror.ui.menu.app import launch  # local: the menu pulls in Rich's Layout/Live, ui.menu
+
+    code = run_command(rt, launch(rt))
+    raise typer.Exit(code)
 
 
 class _Warnings(logging.Handler):

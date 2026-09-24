@@ -1,9 +1,12 @@
 """``tgmirror run [n]``: run a clone again (delta), or let a paused one carry on.
 
 ``execute`` is shared with ``tgmirror clone``, so both paths run a clone the same way, in the
-foreground of this terminal.
+foreground of this terminal. ``resume_flow`` is the part before ``execute`` (which pair, which
+options), factored out so the full-screen menu (``ui/menu/``) can drive it too without going
+through ``typer.Exit``/``typer.echo`` (see ``resume_flow``'s docstring).
 """
 
+from dataclasses import dataclass
 from typing import Annotated
 
 import typer
@@ -85,39 +88,16 @@ def run_clone(
 
     async def command() -> None:
         async with opened_store(rt) as store:
-            target = await _pick_target(rt, store, number)
-            live = await store.active_run()
-            if (
-                live is not None
-                and live.mirror_id == target.mirror_id
-                and live.status is RunStatus.PAUSED
-                and not force_takeover
-                and not fresh  # --fresh must not be swallowed by a resume: it ends in RunBusy
-            ):  # paused in another terminal: carry on there, do not start a second one
-                await store.set_control(live.id, Control.NONE)
-                typer.echo(t("run.resumed_elsewhere", id=live.id))
-                return
-            if (last := await store.latest_run(target.src_id, target.dst_id)) is not None:
-                check_runnable(last, utc_now())  # before connecting: refuse what Telegram refuses
-            request = RunRequest(
-                mode=target.mode,
-                batch_size=target.options.batch_size,
-                pushdown=target.options.pushdown,
-                force=force_takeover,
-                fresh=fresh,
-                caption=target.options.caption,
-                caption_text=target.options.caption_text,
-                reset_polls=target.options.reset_polls,
-                ignore_unsupported=target.options.ignore_unsupported,
-                placeholder=target.options.placeholder,
-                protected_ack=target.options.protected_ack,
+            result = await resume_flow(
+                rt, store, number=number, force_takeover=force_takeover, fresh=fresh, yes=yes
             )
-            src, dst = pair_of(target)
-            if fresh:
-                copied = await store.count_copied(src.id, dst.id)
-                await confirm_fresh(rt, copied, yes, channel_label(src), channel_label(dst))
+            if isinstance(result, ResumeElsewhere):
+                typer.echo(t("run.resumed_elsewhere", id=result.run_id))
+                return
             async with authorized(rt) as conn:
-                started = await begin_run(store, conn.gateway, src, dst, request)
+                started = await begin_run(
+                    store, conn.gateway, result.src, result.dst, result.request
+                )
                 await execute(rt, store, conn.gateway, started, wait=wait)
 
     run(rt, command())
@@ -131,6 +111,75 @@ async def _pick_target(rt: Runtime, store: Store, number: str | None) -> Run:
         if len(pairs) > 1:
             return await wizard.pick_run(rt.prompter, pairs)
     return await resolve_run(store, number)
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeElsewhere:
+    """Nothing to drive: a paused run of the pair is live in another process and was just told
+    (``Control.NONE``) to carry on there, instead of starting a second one here."""
+
+    run_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReadyToRun:
+    """What ``resume_flow`` found: a pair and the request ``begin_run`` (behind a Telegram
+    connection the caller opens only once it knows it will actually use it) should start."""
+
+    src: ChannelInfo
+    dst: ChannelInfo
+    request: RunRequest
+
+
+async def resume_flow(
+    rt: Runtime,
+    store: Store,
+    *,
+    number: str | None = None,
+    force_takeover: bool = False,
+    fresh: bool = False,
+    yes: bool = False,
+) -> ReadyToRun | ResumeElsewhere:
+    """Everything ``tgmirror run``/the menu's "Chạy tiếp" does before ``execute()``: which pair,
+    whether it is already live elsewhere, and the ``RunRequest`` to start.
+
+    Raises nothing of its own but what it calls does (``RunWaiting`` from ``check_runnable``,
+    ``typer.Exit`` from a declined ``confirm_fresh``) — same as before this was factored out of
+    ``run_clone()``'s body, so the CLI path (``run_clone`` below) is unaffected. The full-screen
+    menu (``ui/menu/``) calls this directly (never through ``typer.Exit``-raising code without a
+    surrounding ``try``) and turns those exceptions into a dialog instead of exiting the process.
+    """
+    target = await _pick_target(rt, store, number)
+    live = await store.active_run()
+    if (
+        live is not None
+        and live.mirror_id == target.mirror_id
+        and live.status is RunStatus.PAUSED
+        and not force_takeover
+        and not fresh  # --fresh must not be swallowed by a resume: it ends in RunBusy
+    ):  # paused in another terminal: carry on there, do not start a second one
+        await store.set_control(live.id, Control.NONE)
+        return ResumeElsewhere(live.id)
+    if (last := await store.latest_run(target.src_id, target.dst_id)) is not None:
+        check_runnable(last, utc_now())  # before connecting: refuse what Telegram refuses
+    request = RunRequest(
+        mode=target.mode,
+        batch_size=target.options.batch_size,
+        pushdown=target.options.pushdown,
+        force=force_takeover,
+        fresh=fresh,
+        caption=target.options.caption,
+        caption_text=target.options.caption_text,
+        reset_polls=target.options.reset_polls,
+        ignore_unsupported=target.options.ignore_unsupported,
+        placeholder=target.options.placeholder,
+        protected_ack=target.options.protected_ack,
+    )
+    src, dst = pair_of(target)
+    if fresh:
+        copied = await store.count_copied(src.id, dst.id)
+        await confirm_fresh(rt, copied, yes, channel_label(src), channel_label(dst))
+    return ReadyToRun(src, dst, request)
 
 
 def pair_of(earlier: Run) -> tuple[ChannelInfo, ChannelInfo]:

@@ -6,7 +6,7 @@ permission · ``130`` interrupted. Tracebacks only with ``--debug``.
 
 import asyncio
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, TypeVar
 
 import typer
 
@@ -159,10 +159,18 @@ def exit_code(exc: TgMirrorError) -> int:
     return 1
 
 
-def run(rt: Runtime, coro: Coroutine[Any, Any, None]) -> None:
-    """Run a command's coroutine, printing errors the CLI way and exiting with the right code."""
+T = TypeVar("T")
+
+
+def run(rt: Runtime, coro: Coroutine[Any, Any, T]) -> T:
+    """Run a command's coroutine, printing errors the CLI way and exiting with the right code.
+
+    Every command ignores the return value (their coroutines return ``None``); the bare
+    ``tgmirror`` menu (``cli/app.py``) is the one caller that uses it, for the exit code
+    ``ui.menu.app.launch`` decides.
+    """
     try:
-        asyncio.run(coro)
+        return asyncio.run(coro)
     except KeyboardInterrupt:
         typer.echo(t("err.aborted"), err=True)
         raise typer.Exit(130) from None
