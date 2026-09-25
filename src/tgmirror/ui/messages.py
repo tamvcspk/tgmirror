@@ -152,6 +152,10 @@ VI: dict[str, str] = {
     "warn.topic_loss": (
         "Nguồn là forum nhưng đích không có topic: cấu trúc topic sẽ bị bỏ hoàn toàn."
     ),
+    "warn.topic_as_hashtag": (
+        "Nguồn là forum nhưng đích không có topic: tên topic được giữ dưới dạng hashtag, nên tin "
+        "trong topic được gửi lại thay vì forward (--no-topic-as-hashtag để bỏ)."
+    ),
     # errors (each says what to do next)
     "err.not_logged_in": "Chưa đăng nhập hoặc phiên đã hết hạn. Chạy `tgmirror login`.",
     "err.missing_credentials": (
@@ -207,8 +211,8 @@ VI: dict[str, str] = {
         "--reset-polls, --ignore-unsupported và --placeholder chỉ có nghĩa với --mode reupload."
     ),
     "err.opt_topic_hashtag_needs_rewrite": (
-        "--topic-as-hashtag chỉ có nghĩa khi lần chạy viết lại được nội dung: --mode reupload, "
-        "hoặc --mode auto cùng --caption khác keep."
+        "--topic-as-hashtag cần gửi lại tin (forward không thêm được hashtag): dùng --mode auto "
+        "hoặc --mode reupload, không dùng --mode copy."
     ),
     "err.unsupported_media": (
         "Tin {id} là {kind}, không sao chép được. Chạy lại với --ignore-unsupported để bỏ qua "
@@ -305,10 +309,10 @@ VI: dict[str, str] = {
     "options.pick_caption": "Caption của tin media?",
     "options.caption_keep": "Giữ nguyên",
     "options.caption_strip-links": (
-        "Bỏ link và mention trỏ về kênh nguồn (phải tải lên lại tin có caption)"
+        "Bỏ link và mention trỏ về kênh nguồn (tin có caption được gửi lại)"
     ),
-    "options.caption_append": "Thêm một đoạn chữ vào cuối (phải tải lên lại tin có caption)",
-    "options.caption_none": "Bỏ caption (phải tải lên lại tin có caption)",
+    "options.caption_append": "Thêm một đoạn chữ vào cuối (tin có caption được gửi lại)",
+    "options.caption_none": "Bỏ caption (tin có caption được gửi lại)",
     "options.ask_caption_text": "Đoạn chữ thêm vào cuối caption:",
     "options.pick_flags": "Với tin không forward được (chọn cái cần):",
     "options.flag_reset_polls": "Tạo lại poll/quiz (mất toàn bộ số vote)",
@@ -320,14 +324,17 @@ VI: dict[str, str] = {
     ),
     "clone.confirm_start": "Sao chép {src} → {dst} ngay bây giờ?",
     "clone.dst_will_be_created": "«{title}» (kênh mới sẽ được tạo)",
-    "clone.topic_as_hashtag": "Giữ tên topic dưới dạng hashtag trong mỗi tin?",
+    "clone.topic_as_hashtag": (
+        "Giữ tên topic dưới dạng hashtag trong mỗi tin? (forward không thêm được hashtag, nên "
+        "các tin trong topic sẽ được gửi lại thay vì forward)"
+    ),
     "clone.confirm_topic_loss": (
-        "Đích không có topic và không có cách nào giữ lại (mode hiện tại không viết lại "
-        "được nội dung): toàn bộ topic sẽ bị bỏ. Tiếp tục?"
+        "Đích không có topic và không có cách nào giữ lại (--mode copy không thêm được "
+        "hashtag): toàn bộ topic sẽ bị bỏ. Tiếp tục?"
     ),
     "err.topic_loss_needs_yes": (
-        "Đích không có topic; toàn bộ topic sẽ bị bỏ vì mode hiện tại không viết lại được "
-        "nội dung. Thêm --yes để đồng ý khi không có terminal."
+        "Đích không có topic; toàn bộ topic sẽ bị bỏ vì --mode copy không thêm được hashtag. "
+        "Thêm --yes để đồng ý (hoặc --no-topic-as-hashtag) khi không có terminal."
     ),
     "run.filter_reused": "Dùng lại filter của lần chạy trước; chỉ lấy tin mới hơn lần trước.",
     "run.filter_changed": (
@@ -622,6 +629,11 @@ EN: dict[str, str] = {
         "The source is a forum but the destination has no topics: the topic structure will be "
         "dropped entirely."
     ),
+    "warn.topic_as_hashtag": (
+        "The source is a forum but the destination has no topics: topic names are kept as "
+        "hashtags, so messages in topics are sent again instead of forwarded "
+        "(--no-topic-as-hashtag to drop them)."
+    ),
     "err.not_logged_in": "Not logged in, or the session expired. Run `tgmirror login`.",
     "err.missing_credentials": (
         "No api_id/api_hash. Run `tgmirror login` (interactive), or set the TGMIRROR_API_ID and "
@@ -675,8 +687,8 @@ EN: dict[str, str] = {
         "--mode reupload."
     ),
     "err.opt_topic_hashtag_needs_rewrite": (
-        "--topic-as-hashtag only means something when the run can rewrite text: --mode reupload, "
-        "or --mode auto with --caption other than keep."
+        "--topic-as-hashtag needs messages sent again (a forward cannot add a hashtag): use "
+        "--mode auto or --mode reupload, not --mode copy."
     ),
     "err.unsupported_media": (
         "Message {id} is a {kind}, which cannot be copied. Run again with --ignore-unsupported "
@@ -772,10 +784,10 @@ EN: dict[str, str] = {
     "options.pick_caption": "Captions of media messages?",
     "options.caption_keep": "Keep them",
     "options.caption_strip-links": (
-        "Remove links and mentions that point at the source (captioned messages are re-uploaded)"
+        "Remove links and mentions that point at the source (captioned messages are sent again)"
     ),
-    "options.caption_append": "Add some text at the end (captioned messages are re-uploaded)",
-    "options.caption_none": "Remove them (captioned messages are re-uploaded)",
+    "options.caption_append": "Add some text at the end (captioned messages are sent again)",
+    "options.caption_none": "Remove them (captioned messages are sent again)",
     "options.ask_caption_text": "Text to add at the end of each caption:",
     "options.pick_flags": "For messages that cannot be forwarded (tick what you want):",
     "options.flag_reset_polls": "Re-create polls and quizzes (they lose all their votes)",
@@ -789,14 +801,17 @@ EN: dict[str, str] = {
     ),
     "clone.confirm_start": "Clone {src} → {dst} now?",
     "clone.dst_will_be_created": "'{title}' (a new channel will be created)",
-    "clone.topic_as_hashtag": "Keep the topic name as a hashtag in each message?",
+    "clone.topic_as_hashtag": (
+        "Keep the topic name as a hashtag in each message? (a forward cannot add one, so "
+        "messages in a topic are sent again instead of forwarded)"
+    ),
     "clone.confirm_topic_loss": (
-        "The destination has no topics and there is no way to keep them (the current mode "
-        "cannot rewrite text): every topic will be dropped. Continue?"
+        "The destination has no topics and there is no way to keep them (--mode copy cannot "
+        "add a hashtag): every topic will be dropped. Continue?"
     ),
     "err.topic_loss_needs_yes": (
-        "The destination has no topics; every topic will be dropped since the current mode "
-        "cannot rewrite text. Add --yes to agree when there is no terminal."
+        "The destination has no topics; every topic will be dropped since --mode copy cannot "
+        "add a hashtag. Add --yes (or --no-topic-as-hashtag) to agree when there is no terminal."
     ),
     "run.filter_reused": (
         "Using the filter of the previous run; only messages newer than last time."

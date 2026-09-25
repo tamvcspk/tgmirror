@@ -13,7 +13,7 @@ from fnmatch import fnmatchcase
 
 import regex
 
-from tgmirror.core.gateway import SrcMessage, Unit
+from tgmirror.core.gateway import GENERAL_TOPIC_ID, SrcMessage, Unit
 from tgmirror.filters.model import (
     CountRange,
     DurationRange,
@@ -71,7 +71,8 @@ def _compile(rule: Rule) -> list[Predicate]:
         checks.append(lambda m: m.from_user_id in senders)
     if rule.topic is not None:
         topics = frozenset(rule.topic)
-        checks.append(lambda m: m.topic_id in topics)
+        # a General message has no topic id of its own; ``topic: 1`` means it
+        checks.append(lambda m: (m.topic_id or GENERAL_TOPIC_ID) in topics)
     return checks
 
 

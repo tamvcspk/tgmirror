@@ -54,6 +54,11 @@ class ChannelInfo:
     can_post: bool = False
 
 
+# A forum's General topic. Its messages carry no ``reply_to`` in Telethon, so their
+# ``SrcMessage.topic_id`` is ``None`` (docs/06-lo-trinh.md, open question 9), not this id.
+GENERAL_TOPIC_ID = 1
+
+
 @dataclass(frozen=True, slots=True)
 class TopicInfo:
     """A forum topic (docs/01-kien-truc.md, "Ánh xạ topic"). ``id`` 1 is always General."""

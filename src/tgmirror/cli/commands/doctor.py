@@ -80,9 +80,7 @@ async def _destination_lines(store: Store, gateway: TelegramGateway | None) -> l
         try:
             dst = await gateway.get_channel(pair.dst_id)
         except TgMirrorError as exc:
-            lines.append(
-                t("doctor.destination_error", title=pair.dst_title, detail=describe(exc))
-            )
+            lines.append(t("doctor.destination_error", title=pair.dst_title, detail=describe(exc)))
             continue
         key = "doctor.destination_ok" if dst.is_admin and dst.can_post else "doctor.destination_bad"
         lines.append(t(key, title=dst.title))

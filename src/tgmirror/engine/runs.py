@@ -84,8 +84,8 @@ class RunRequest:
     ignore_unsupported: bool = False
     placeholder: bool = False
     protected_ack: bool = False  # the user confirmed a source that restricts saving content (D3)
-    # Phase 8: keep a forum's topic as a hashtag when the destination cannot hold topics; only
-    # meaningful for a run that can rewrite text (see ``may_reupload``).
+    # Phase 8: keep a forum's topic as a hashtag when the destination cannot hold topics; a forward
+    # cannot carry it, so ``--mode copy`` refuses it and ``auto`` sends such units again.
     topic_as_hashtag: bool = False
 
 
@@ -105,7 +105,7 @@ def check_options(request: RunRequest) -> None:
     strategy_b = request.reset_polls or request.ignore_unsupported or request.placeholder
     if strategy_b and request.mode != "reupload":
         raise InvalidOptions("reupload_flags_need_reupload")
-    if request.topic_as_hashtag and not may_reupload(request.mode, request.caption):
+    if request.topic_as_hashtag and request.mode == "copy":
         raise InvalidOptions("topic_hashtag_needs_rewrite")
 
 
@@ -126,7 +126,7 @@ async def begin_run(
     request = request or RunRequest()
     check_options(request)
     protected = False
-    if may_reupload(request.mode, request.caption):
+    if may_reupload(request.mode, request.caption, request.topic_as_hashtag):
         protected = await check_source(gateway, src, request)
     previous = await store.latest_run(src.id, dst.id)
     if previous is not None:

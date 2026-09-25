@@ -138,6 +138,15 @@ def test_from_user_and_topic() -> None:
     assert not passes(rule(topic=[7]), broadcast_msg)
 
 
+def test_topic_1_means_general_whose_messages_carry_no_topic_id() -> None:
+    """General messages have no ``reply_to`` in Telethon, so their ``topic_id`` is ``None``; the
+    wizard offers General as topic 1, which must still select them."""
+    general_msg = msg("hi")
+
+    assert passes(rule(topic=[1]), general_msg)
+    assert not passes(rule(topic=[1]), msg("hi", topic_id=7))
+
+
 # ---- rules ----------------------------------------------------------------------------------
 
 

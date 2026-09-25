@@ -6,9 +6,10 @@ live in ``engine/endpoints.py`` and ``filters/``, so both paths end up in the sa
 ``cli-wizard``).
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, TypeVar
 
 from tgmirror.cli.errors import describe
 from tgmirror.core.gateway import CaptionMode, ChannelInfo, MediaKind, TopicInfo
@@ -27,6 +28,8 @@ from tgmirror.ui.tables import channel_label
 
 MAX_TITLE_ATTEMPTS = 3
 MAX_FILTER_ATTEMPTS = 3
+
+T = TypeVar("T")
 
 
 async def pick_source(prompter: Prompter, channels: Sequence[ChannelInfo]) -> ChannelInfo:
@@ -50,13 +53,33 @@ async def pick_destination(
 
 
 async def ask_new_channel(prompter: Prompter) -> NewChannelSpec:
-    for attempt in range(1, MAX_TITLE_ATTEMPTS + 1):
-        title = await prompter.text(t("clone.prompt_title"))
-        about = await prompter.text(t("clone.prompt_about"))
+    """The title, then the description, each asked again on its own when it is refused (a
+    typo in the title does not cost the description already typed, nor the other way round)."""
+    spec = await _ask_valid(
+        prompter, "clone.prompt_title", lambda v: validate_new_channel(NewChannelSpec(v, ""))
+    )
+    return await _ask_valid(
+        prompter,
+        "clone.prompt_about",
+        lambda v: validate_new_channel(NewChannelSpec(spec.title, v)),
+    )
+
+
+async def _ask_valid(
+    prompter: Prompter,
+    key: str,
+    check: Callable[[str], T],
+    *,
+    attempts: int = MAX_TITLE_ATTEMPTS,
+    errors: tuple[type[Exception], ...] = (InvalidChannelTitle,),
+) -> T:
+    """Ask ``key`` until ``check`` accepts the answer; the last refusal propagates."""
+    for attempt in range(1, attempts + 1):
+        answer = await prompter.text(t(key))
         try:
-            return validate_new_channel(NewChannelSpec(title, about))
-        except InvalidChannelTitle as exc:
-            if attempt == MAX_TITLE_ATTEMPTS:
+            return check(answer)
+        except errors as exc:
+            if attempt == attempts:
                 raise
             prompter.say(describe(exc))
     raise AssertionError("unreachable")  # pragma: no cover
@@ -209,17 +232,35 @@ def _words(text: str) -> list[str]:
     return [w.strip() for w in text.split(",") if w.strip()]
 
 
+def _optional(text: str) -> str | None:
+    return text.strip() or None
+
+
 async def _ask_criteria(prompter: Prompter, *, topics: Sequence[TopicInfo] = ()) -> FilterSpec:
     """The same values the flags carry, so ``from_flags`` validates them the same way."""
     media = await prompter.checkbox(
         t("filter.ask_media"), [Choice(kind.value, kind.value) for kind in MediaKind]
     )
-    hashtags = _words(await prompter.text(t("filter.ask_hashtags")))
-    keywords = _words(await prompter.text(t("filter.ask_contains")))
-    since = (await prompter.text(t("filter.ask_since"))).strip()
-    until = (await prompter.text(t("filter.ask_until"))).strip()
-    min_size = (await prompter.text(t("filter.ask_min_size"))).strip()
-    max_size = (await prompter.text(t("filter.ask_max_size"))).strip()
+
+    async def ask(key: str, field: str, value: Callable[[str], object]) -> Any:
+        """One answer, checked on its own right away (``from_flags`` with only that field), so a
+        typo is asked again alone instead of starting every criterion over."""
+
+        def check(answer: str) -> object:
+            parsed = value(answer)
+            from_flags(FlagFilters(**{field: parsed}))  # type: ignore[arg-type]
+            return parsed
+
+        return await _ask_valid(
+            prompter, key, check, attempts=MAX_FILTER_ATTEMPTS, errors=(FilterError,)
+        )
+
+    hashtags = await ask("filter.ask_hashtags", "hashtag", _words)
+    keywords = await ask("filter.ask_contains", "contains", _words)
+    since = await ask("filter.ask_since", "since", _optional)
+    until = await ask("filter.ask_until", "until", _optional)
+    min_size = await ask("filter.ask_min_size", "min_size", _optional)
+    max_size = await ask("filter.ask_max_size", "max_size", _optional)
     picked_topics: list[int] = []
     if topics:
         picked_topics = await prompter.checkbox(
@@ -230,10 +271,10 @@ async def _ask_criteria(prompter: Prompter, *, topics: Sequence[TopicInfo] = ())
             media=",".join(media) or None,
             hashtag=hashtags,
             contains=keywords,
-            since=since or None,
-            until=until or None,
-            min_size=min_size or None,
-            max_size=max_size or None,
+            since=since,
+            until=until,
+            min_size=min_size,
+            max_size=max_size,
             topic=picked_topics,
         )
     )

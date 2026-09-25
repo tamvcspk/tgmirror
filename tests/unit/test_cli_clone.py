@@ -124,9 +124,11 @@ def test_restricted_source_without_admin_is_refused_and_nothing_is_created(
     assert creations(gateway) == []
 
 
-def test_restricted_source_as_admin_warns_but_goes_on(
+def test_restricted_source_as_admin_without_reupload_is_refused_before_creating_anything(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
+    """Telegram refuses to forward out of a protected source, admin or not: a mode that only
+    forwards is refused up front, not after an empty destination was created."""
     gateway.add_channel("Mine", noforwards=True, is_admin=True)
 
     result = runner.invoke(
@@ -135,9 +137,48 @@ def test_restricted_source_as_admin_warns_but_goes_on(
         obj=make_runtime(gateway=gateway),
     )
 
-    assert result.exit_code == 0, result.output
-    assert "Restrict saving content" in result.output  # the warning
-    assert len(creations(gateway)) == 1
+    assert result.exit_code == 4, result.output
+    assert "--mode reupload" in result.output
+    assert creations(gateway) == []
+
+
+def test_a_non_admin_is_not_asked_for_the_statement_when_the_mode_cannot_use_it(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """``--mode copy`` never downloads, so typing ``--yes-i-administer-this-channel`` could not
+    help: the flow refuses (exit 4, with advice) instead of asking for it."""
+    gateway.add_channel("Locked", noforwards=True, is_admin=False)
+    gateway.add_channel("Copy")
+    prompter = ScriptedPrompter()
+    rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+
+    result = runner.invoke(
+        app, ["clone", "--src", "Locked", "--dst", "Copy", "--mode", "copy"], obj=rt
+    )
+
+    assert result.exit_code == 4, result.output
+    assert "--yes-i-administer-this-channel" in result.output  # the advice, not a question
+    assert saved_runs(rt) == []
+
+
+def test_a_busy_pair_is_refused_before_the_strategy_questions(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """The pair's history is checked right after the destination: a pair that cannot run now
+    (here: sitting out a FloodWait) is refused before any mode/caption question is asked."""
+    src = gateway.add_channel("Source")
+    gateway.add_channel("Copy")
+    gateway.add_message(src.id, "m1")
+    gateway.fail_next("copy_messages", FloodWait(3600))
+    prompter = ScriptedPrompter(select=["Source", "Copy"])
+    rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+    flagged = ["clone", "--src", "Source", "--dst", "Copy", "--yes"]
+    assert runner.invoke(app, flagged, obj=rt).exit_code == 3  # the pair now waits out a flood
+
+    result = runner.invoke(app, ["clone"], obj=rt)
+
+    assert result.exit_code == 3, result.output
+    assert [kind for kind, _ in prompter.asked] == ["select", "select"]  # source, destination
 
 
 def test_typing_the_flag_verbatim_lets_a_non_admin_account_through(
@@ -308,6 +349,58 @@ def test_no_topic_as_hashtag_flag_turns_the_default_off(
             "--no-topic-as-hashtag",
             "--yes",
         ],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    (run,) = saved_runs(rt)
+    assert run.options.topic_as_hashtag is False
+
+
+def test_auto_mode_with_caption_keep_defaults_topic_as_hashtag_to_yes(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """The default strategy (auto, caption keep) keeps topics as hashtags too: those messages are
+    sent again rather than forwarded, so nothing needs a caption mode to carry them."""
+    gateway.add_channel("Forum", kind=ChatKind.FORUM)
+    gateway.add_channel("Broadcast")
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, ["clone", "--src", "Forum", "--dst", "Broadcast", "--yes"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    (run,) = saved_runs(rt)
+    assert (run.mode, run.options.caption, run.options.topic_as_hashtag) == ("auto", "keep", True)
+
+
+def test_topics_kept_as_hashtags_without_a_question_are_announced(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """Nobody was asked (``--yes``): a notice says the topics become hashtags, instead of the
+    "topics will be dropped" warning, which would no longer be true."""
+    gateway.add_channel("Forum", kind=ChatKind.FORUM)
+    gateway.add_channel("Broadcast")
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, ["clone", "--src", "Forum", "--dst", "Broadcast", "--yes"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "kept as hashtags" in result.output
+    assert "dropped entirely" not in result.output
+
+
+def test_topic_as_hashtag_into_a_forum_is_dropped_as_needless(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """A forum destination keeps the topics themselves; the flag would only make ``auto`` send
+    every topic message again for nothing."""
+    gateway.add_channel("Forum A", kind=ChatKind.FORUM)
+    gateway.add_channel("Forum B", kind=ChatKind.FORUM)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Forum A", "--dst", "Forum B", "--topic-as-hashtag", "--yes"],
         obj=rt,
     )
 
@@ -489,8 +582,8 @@ def test_wizard_asks_again_after_an_empty_title(
     gateway.add_channel("Source")
     prompter = ScriptedPrompter(
         select=["Source", "Automatic", "No filter"],
-        text=["", "", "Copy", ""],
-        confirm=[False, True],  # title+about twice
+        text=["", "Copy", "About it"],  # only the refused title is asked again
+        confirm=[False, True],
     )
 
     result = runner.invoke(
@@ -498,8 +591,10 @@ def test_wizard_asks_again_after_an_empty_title(
     )
 
     assert result.exit_code == 0, result.output
-    assert creations(gateway) == [("Copy", "")]
+    assert creations(gateway) == [("Copy", "About it")]
     assert "The channel title must not be empty." in prompter.said
+    texts_asked = [message for kind, message in prompter.asked if kind == "text"]
+    assert len(texts_asked) == 3 and texts_asked[0] == texts_asked[1] != texts_asked[2]
 
 
 def test_flags_given_on_a_terminal_still_ask_to_confirm_creation(

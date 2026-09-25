@@ -494,6 +494,24 @@ def rewrite_caption(
     return text, kept
 
 
+def _album_captions(
+    messages: Sequence[custom.Message], policy: CaptionPolicy
+) -> list[tuple[str, list[object]]]:
+    """``rewrite_caption`` for each message of a unit, with the topic hashtag (phase 8) added
+    once: to the first caption left, or the first message when none is. Telegram shows an album's
+    only caption as the album's; a hashtag on every item would bury the real one."""
+    plain = replace(policy, hashtag=None)
+    out = [
+        rewrite_caption(m.message or "", list(m.entities or []), plain, _source_names(m))
+        for m in messages
+    ]
+    if policy.hashtag and out:
+        at = next((i for i, (text, _) in enumerate(out) if text), 0)
+        text, entities = out[at]
+        out[at] = (f"{text}\n{policy.hashtag}" if text else policy.hashtag, entities)
+    return out
+
+
 def _source_names(message: custom.Message) -> set[str]:
     """What links to the message's chat look like: its usernames and, for a private channel, the
     number in ``t.me/c/<number>/...``."""
@@ -765,7 +783,8 @@ class TelethonGateway:
 
     async def list_topics(self, src: int) -> list[TopicInfo]:
         peer = await self._peer(src)
-        topics: list[TopicInfo] = []
+        topics: dict[int, TopicInfo] = {}
+        seen = 0  # entries Telegram returned, deleted topics included: they count in ``count``
         offset_date, offset_id, offset_topic = None, 0, 0
         with mapped_errors():
             while True:
@@ -778,13 +797,21 @@ class TelethonGateway:
                         limit=100,
                     )
                 )
+                seen += len(result.topics)
                 page = [t for t in result.topics if isinstance(t, types.ForumTopic)]
-                topics.extend(TopicInfo(t.id, t.title, closed=bool(t.closed)) for t in page)
-                if len(page) < 100:
+                for topic in page:
+                    topics[topic.id] = TopicInfo(topic.id, topic.title, closed=bool(topic.closed))
+                if not page or seen >= result.count:
                     break
+                # topics come newest activity first: the next page starts after the last one's
+                # top message (its date, not the topic's creation date, orders the list)
                 last = page[-1]
-                offset_date, offset_id, offset_topic = last.date, last.top_message, last.id
-        return topics
+                dates = {m.id: m.date for m in result.messages if hasattr(m, "date")}
+                cursor = (dates.get(last.top_message, last.date), last.top_message, last.id)
+                if cursor == (offset_date, offset_id, offset_topic):
+                    break  # no progress: never loop forever on an odd answer
+                offset_date, offset_id, offset_topic = cursor
+        return list(topics.values())
 
     async def create_topic(self, dst: int, title: str) -> int:
         peer = await self._peer(dst)
@@ -958,15 +985,9 @@ class TelethonGateway:
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
         peer = await self._peer(dst)
-        texts: list[str] = []
-        entity_lists: list[list[object]] = []
-        for item in fetched.items:
-            message = item.message
-            text, entities = rewrite_caption(
-                message.message or "", list(message.entities or []), caption, _source_names(message)
-            )
-            texts.append(text)
-            entity_lists.append(entities)
+        captions = _album_captions([item.message for item in fetched.items], caption)
+        texts = [text for text, _ in captions]
+        entity_lists = [entities for _, entities in captions]
         media = [item.message.media for item in fetched.items]
         with mapped_errors(), _media_reusable():
             if len(media) > 1:
@@ -1455,11 +1476,8 @@ class TelethonGateway:
         album_id = items[0].message.id
         done = 0
         media: list[types.InputSingleMedia] = []
-        for item in items:
-            message = item.message
-            text, entities = rewrite_caption(
-                message.message or "", list(message.entities or []), caption, _source_names(message)
-            )
+        captions = _album_captions([item.message for item in items], caption)
+        for item, (text, entities) in zip(items, captions, strict=True):
             progress = self._album_progress(on_transfer, album_id, total, done)
             fm = await self._album_media(peer, item, progress)
             done += _album_share((item,))

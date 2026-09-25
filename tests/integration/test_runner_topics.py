@@ -143,3 +143,43 @@ async def test_non_forum_destination_drops_the_topic_silently_without_the_flag(r
 
     (sent,) = rig.gw.messages[rig.dst.id]
     assert sent.text == "hello there"  # forwarded as is; no hashtag can be added
+
+
+async def test_auto_mode_sends_every_topic_message_again_to_carry_its_hashtag(rig: Rig) -> None:
+    """``auto`` with ``--caption keep`` would forward everything, and a forward cannot add the
+    hashtag: with ``topic_as_hashtag`` a forum unit outside General is sent again instead, even
+    with no caption of its own. A poll (nowhere to put it) and General stay forwarded."""
+    rig.dst = rig.gw.add_channel("Broadcast copy")  # not a forum
+    topic = rig.gw.add_topic(rig.src.id, "News")
+    rig.gw.add_message(rig.src.id, "text", topic_id=topic.id)
+    rig.gw.add_message(rig.src.id, "", media=MediaKind.PHOTO, size=10, topic_id=topic.id)
+    rig.gw.add_album(rig.src.id, [MediaKind.PHOTO, MediaKind.PHOTO], topic_id=topic.id)
+    rig.gw.add_message(rig.src.id, "q?", media=MediaKind.POLL, topic_id=topic.id)
+    rig.gw.add_message(rig.src.id, "general")  # no topic: nothing to add
+    store = await rig.store()
+
+    run = await Runner(store, rig.gw, LIMITS).run(await begin(rig, store, topic_as_hashtag=True))
+
+    assert run.done == 6
+    assert [m.text for m in rig.gw.messages[rig.dst.id]] == [
+        "text\n#news",
+        "#news",
+        "#news",  # the album gets it once, as its only caption
+        "",
+        "q?",  # forwarded: a poll has no caption
+        "general",
+    ]
+    assert [list(c.args[2]) for c in rig.gw.calls_to("copy_messages")] == [[5], [6]]
+
+
+async def test_album_gets_the_hashtag_once_on_its_caption(rig: Rig) -> None:
+    rig.dst = rig.gw.add_channel("Broadcast copy")
+    topic = rig.gw.add_topic(rig.src.id, "News")
+    rig.gw.add_album(rig.src.id, [MediaKind.PHOTO, MediaKind.PHOTO], "look", topic_id=topic.id)
+    store = await rig.store()
+
+    await Runner(store, rig.gw, LIMITS).run(
+        await begin(rig, store, mode="reupload", topic_as_hashtag=True)
+    )
+
+    assert [m.text for m in rig.gw.messages[rig.dst.id]] == ["look\n#news", ""]

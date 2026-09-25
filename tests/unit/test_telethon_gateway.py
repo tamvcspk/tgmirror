@@ -410,20 +410,70 @@ async def test_list_topics_maps_forum_topics_and_paginates() -> None:
             notify_settings=types.PeerNotifySettings(),
         )
     ]
+    last_activity = datetime(2026, 9, 1, tzinfo=UTC)
+    top = SimpleNamespace(id=100, date=last_activity)  # page 1's last topic's newest message
     client = StubClient()
-    client.results.extend([SimpleNamespace(topics=page1), SimpleNamespace(topics=page2)])
+    client.results.extend(
+        [
+            SimpleNamespace(topics=page1, count=101, messages=[top]),
+            SimpleNamespace(topics=page2, count=101, messages=[]),
+        ]
+    )
 
     topics = await TelethonGateway(client).list_topics(-1001)  # type: ignore[arg-type]
 
     assert [t.id for t in topics] == list(range(1, 102))
     assert topics[2].closed is True and topics[0].closed is False
-    first_request = client.requests[0]
+    first_request, second_request = client.requests
     assert isinstance(first_request, GetForumTopicsRequest)
     assert (first_request.offset_date, first_request.offset_id, first_request.offset_topic) == (
         None,
         0,
         0,
     )
+    # Telegram orders topics by their latest message: the next page starts from its date, not
+    # from the topic's own creation date
+    assert (second_request.offset_date, second_request.offset_id, second_request.offset_topic) == (
+        last_activity,
+        100,
+        100,
+    )
+
+
+async def test_list_topics_keeps_paging_past_deleted_topics() -> None:
+    """A page shortened by deleted topics is not the last one: ``count`` says how many exist."""
+    deleted = [types.ForumTopicDeleted(id=i) for i in range(1, 51)]
+    alive = [
+        types.ForumTopic(
+            id=i,
+            date=None,
+            peer=types.PeerChannel(1),
+            title=f"T{i}",
+            icon_color=0,
+            top_message=i,
+            read_inbox_max_id=0,
+            read_outbox_max_id=0,
+            unread_count=0,
+            unread_mentions_count=0,
+            unread_reactions_count=0,
+            unread_poll_votes_count=0,
+            from_id=types.PeerUser(user_id=1),
+            notify_settings=types.PeerNotifySettings(),
+        )
+        for i in range(51, 102)
+    ]
+    client = StubClient()
+    client.results.extend(
+        [
+            SimpleNamespace(topics=deleted + alive[:50], count=101, messages=[]),
+            SimpleNamespace(topics=alive[50:], count=101, messages=[]),
+        ]
+    )
+
+    topics = await TelethonGateway(client).list_topics(-1001)  # type: ignore[arg-type]
+
+    assert [t.id for t in topics] == list(range(51, 102))
+    assert len(client.requests) == 2
 
 
 async def test_create_topic_reads_the_new_id_from_updates() -> None:

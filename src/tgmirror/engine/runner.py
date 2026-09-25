@@ -49,6 +49,7 @@ from tgmirror.core.errors import (
 )
 from tgmirror.core.gateway import (
     CaptionMode,
+    ChatKind,
     MessageReader,
     SrcMessage,
     TelegramGateway,
@@ -74,7 +75,7 @@ from tgmirror.engine.reupload import (
     send_unit_by_reference,
 )
 from tgmirror.engine.runs import DAILY_CAP
-from tgmirror.engine.strategy import Strategy, router
+from tgmirror.engine.strategy import Strategy, may_reupload, router
 from tgmirror.engine.topics import TopicResolver, TopicRoute
 from tgmirror.engine.transfer import Transfer, TransferTracker
 from tgmirror.filters.matcher import Matcher
@@ -318,7 +319,12 @@ class Runner:
                 batches(
                     units,
                     lambda: limiter.batch_size(run.options.batch_size),
-                    route=router(run.mode, caption, by_reference=not run.options.src_protected),
+                    route=router(
+                        run.mode,
+                        caption,
+                        by_reference=not run.options.src_protected,
+                        topic_hashtag=_topic_hashtag(run),
+                    ),
                 )
             ) as stream,
             aclosing(self._ready(run, stream)) as ready_stream,
@@ -342,7 +348,7 @@ class Runner:
         """
         self._pipeline = None
         caption = CaptionMode(run.options.caption)
-        if run.mode == "copy" or (run.mode == "auto" and caption is CaptionMode.KEEP):
+        if not may_reupload(run.mode, caption, _topic_hashtag(run)):
             async for batch in stream:
                 yield Ready(await self._without_done(run.id, batch))
             return
@@ -715,6 +721,11 @@ class Runner:
 def _remove_runs(root: Path) -> None:
     for entry in root.glob("run-*"):
         shutil.rmtree(entry, ignore_errors=True)
+
+
+def _topic_hashtag(run: Run) -> bool:
+    """Phase 8: forum units must carry their topic as a hashtag (only a unit sent again can)."""
+    return run.options.topic_as_hashtag and run.dst_kind is not ChatKind.FORUM
 
 
 def _extra_stats(batch: Batch) -> dict[str, int] | None:

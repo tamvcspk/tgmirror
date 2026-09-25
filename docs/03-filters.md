@@ -38,7 +38,7 @@ Các điểm đã chốt khi làm phase 3 (không phải D1–D9):
 | `mime` | list | vd `video/mp4`; cho phép `video/*` |
 | `views` | `{min,max}` | Kênh broadcast có số views |
 | `from_user` | list id (một số = list một phần tử) | Nguồn group/forum, any-of. **Chỉ nhận id** (không `@username`): giữ `filters/model.py`/`matcher.py`/`parser.py` không đụng I/O. Tin của nguồn broadcast không có id người gửi nên predicate luôn sai (thiếu thuộc tính) |
-| `topic` | list id (một số = list một phần tử) | Chỉ forum, any-of. **Chỉ nhận id**, không tên topic — `tgmirror topics <src>` tra id/tên. Tin ở General của forum cũng không có topic id ở tầng Telethon (giống nguồn không phải forum) nên `topic` không khớp cho General; muốn cả General thì đừng lọc theo topic |
+| `topic` | list id (một số = list một phần tử) | Chỉ forum, any-of. **Chỉ nhận id**, không tên topic — `tgmirror topics <src>` tra id/tên. Tin ở General của forum không có topic id ở tầng Telethon (giống nguồn không phải forum); `topic: 1` (General, như `tgmirror topics` và wizard hiển thị) vẫn khớp chúng: matcher coi tin không có topic id là General |
 
 `date` và `id` là điều kiện toàn cục (đẩy xuống server, xem dưới).
 

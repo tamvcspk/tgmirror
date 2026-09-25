@@ -386,8 +386,9 @@ def test_the_wizard_asks_again_after_an_invalid_answer(
         gateway,
         tmp_path / "w",
         select=["Source", "Copy", "Automatic", CRITERIA],
-        checkbox=[["video"], ["video"]],
-        text=["", "", "last week", "", "", "", "", "", "2024-01-01", "", "", ""],
+        checkbox=[["video"]],
+        # only the refused answer is asked again: the media ticked and the text before it stay
+        text=["", "", "last week", "2024-01-01", "", "", ""],
         confirm=[False, True],
     )
 

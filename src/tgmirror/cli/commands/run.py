@@ -175,6 +175,7 @@ async def resume_flow(
         ignore_unsupported=target.options.ignore_unsupported,
         placeholder=target.options.placeholder,
         protected_ack=target.options.protected_ack,
+        topic_as_hashtag=target.options.topic_as_hashtag,
     )
     src, dst = pair_of(target)
     if fresh:

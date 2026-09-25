@@ -21,6 +21,7 @@ from tgmirror.cli.app import app
 from tgmirror.cli.keys import KeyProvider, apply_key
 from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.core.errors import FloodWait
+from tgmirror.core.gateway import ChatKind
 from tgmirror.engine.runner import RunControl, Runner
 from tgmirror.store.runs import Control, Run, RunSpec, RunStatus
 
@@ -343,6 +344,26 @@ def test_run_keeps_the_filter_and_the_options_of_that_run(
     assert "Using the filter of the previous run" in again.output
 
 
+def test_run_keeps_the_topic_hashtag_of_that_run(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """A later run of a forum -> non-forum pair still carries each topic as a hashtag."""
+    src = gateway.add_channel("Forum", kind=ChatKind.FORUM).id
+    dst = gateway.add_channel("Broadcast").id
+    topic = gateway.add_topic(src, "News")
+    gateway.add_message(src, "m1", topic_id=topic.id)
+    rt = make_runtime(gateway=gateway)
+    first = runner.invoke(app, ["clone", "--src", "Forum", "--dst", "Broadcast", "--yes"], obj=rt)
+    assert first.exit_code == 0, first.output
+    gateway.add_message(src, "m2", topic_id=topic.id)
+
+    again = runner.invoke(app, ["run"], obj=rt)
+
+    assert again.exit_code == 0, again.output
+    assert texts(gateway, dst) == ["m1\n#news", "m2\n#news"]
+    assert all(run.options.topic_as_hashtag for run in saved_runs(rt))
+
+
 def test_run_with_two_pairs_and_no_number_asks_which_to_continue(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
@@ -456,7 +477,7 @@ def test_a_restricted_source_exits_4_with_advice(
 
     assert result.exit_code == 4
     assert "Restrict saving content" in result.output and "--mode reupload" in result.output
-    assert saved_runs(rt)[0].status is RunStatus.FAILED
+    assert saved_runs(rt) == []  # refused before a run is started: a forward cannot work
 
 
 def test_a_clone_held_by_another_process_is_refused_unless_taken_over(

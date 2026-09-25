@@ -350,9 +350,9 @@ class FakeGateway:
             first = prepared.unit.messages[0].id
             on_transfer(TransferPhase.UPLOAD, first, 0, size)
             on_transfer(TransferPhase.UPLOAD, first, size, size)
-        for msg in prepared.unit.messages:
+        texts = _rewrite_unit(prepared.unit, caption)
+        for msg, text in zip(prepared.unit.messages, texts, strict=True):
             new_id = self._alloc_id(dst)
-            text = _rewrite(msg, caption)
             self.messages[dst].append(
                 replace(msg, id=new_id, grouped_id=gid, text=text, topic_id=topic)
             )
@@ -378,10 +378,11 @@ class FakeGateway:
             raise NoPermission(f"cannot post to channel {dst}")
         gid = self._alloc_group() if prepared.unit.is_album else None
         new_ids: list[int] = []
-        for msg in prepared.unit.messages:
+        texts = _rewrite_unit(prepared.unit, caption)
+        for msg, text in zip(prepared.unit.messages, texts, strict=True):
             new_id = self._alloc_id(dst)
             self.messages[dst].append(
-                replace(msg, id=new_id, grouped_id=gid, text=_rewrite(msg, caption), topic_id=topic)
+                replace(msg, id=new_id, grouped_id=gid, text=text, topic_id=topic)
             )
             new_ids.append(new_id)
         return new_ids
@@ -466,6 +467,17 @@ def _rewrite(msg: SrcMessage, policy: CaptionPolicy) -> str:
     if policy.hashtag:
         text = f"{text}\n{policy.hashtag}" if text else policy.hashtag
     return text
+
+
+def _rewrite_unit(unit: Unit, policy: CaptionPolicy) -> list[str]:
+    """``_rewrite`` for each message of a unit; an album gets the topic hashtag once, on its first
+    caption left (or its first item), like the real gateway's ``_album_captions``."""
+    if not unit.is_album or not policy.hashtag:
+        return [_rewrite(m, policy) for m in unit.messages]
+    texts = [_rewrite(m, replace(policy, hashtag=None)) for m in unit.messages]
+    at = next((i for i, text in enumerate(texts) if text), 0)
+    texts[at] = f"{texts[at]}\n{policy.hashtag}" if texts[at] else policy.hashtag
+    return texts
 
 
 class FakeAuth:

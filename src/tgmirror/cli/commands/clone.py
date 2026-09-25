@@ -33,6 +33,7 @@ from tgmirror.cli.filter_options import (
     collect,
 )
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.core.errors import ForwardsRestricted
 from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
 from tgmirror.engine import preview
 from tgmirror.engine.endpoints import (
@@ -70,7 +71,13 @@ def clone(
         ),
     ] = None,
     dst: Annotated[
-        str | None, typer.Option("--dst", help="Existing destination (same kind as the source).")
+        str | None,
+        typer.Option(
+            "--dst",
+            help="Existing destination: a channel or group you administer and can post to "
+            "(any kind; a forum source into a non-forum loses its topics, see "
+            "--topic-as-hashtag).",
+        ),
     ] = None,
     dst_new: Annotated[
         str | None,
@@ -81,9 +88,11 @@ def clone(
         str | None,
         typer.Option(
             "--mode",
-            help="auto (default): server-side copy, and re-upload only what needs a new caption. "
-            "copy: server-side copy only. reupload: download and send again (slow); the only "
-            "way to copy a source that restricts saving content and that you administer.",
+            help="auto (default): server-side copy; what needs a new caption or a topic hashtag "
+            "is sent again by file id (nothing downloaded; downloaded and re-uploaded when the "
+            "source restricts saving content). copy: server-side copy only. reupload: download "
+            "and send everything again (slow); the only way to copy a source that restricts "
+            "saving content.",
         ),
     ] = None,
     caption: Annotated[
@@ -92,7 +101,8 @@ def clone(
             "--caption",
             help="keep (default), strip-links (drop links/mentions that point at the source), "
             "append (add --caption-text) or none. Only the captions of media messages change; "
-            "each message with a caption is downloaded and sent again.",
+            "each message with a caption is sent again (by file id when the source allows "
+            "saving content, otherwise downloaded and re-uploaded).",
         ),
     ] = None,
     caption_text: Annotated[
@@ -135,9 +145,10 @@ def clone(
         bool | None,
         typer.Option(
             "--topic-as-hashtag/--no-topic-as-hashtag",
-            help="Forum source, non-forum destination, a mode that can rewrite text: keep each "
-            "topic's name as a hashtag instead of dropping it (default: yes, asked on a "
-            "terminal). With a mode that cannot rewrite text, topics are dropped and this "
+            help="Forum source, non-forum destination: keep each topic's name as a hashtag "
+            "instead of dropping it (default: yes, asked on a terminal). A forward cannot add "
+            "one, so --mode auto sends those messages again (by file id, or downloaded when the "
+            "source restricts saving content); with --mode copy topics are dropped and this "
             "flag is a usage error; a separate confirmation applies instead.",
         ),
     ] = None,
@@ -399,8 +410,8 @@ class CloneFlow:
         return [
             self._pick_source,
             self._pick_destination,
-            self._pick_strategy,
             self._read_history,
+            self._pick_strategy,
             self._pick_resume,
             self._pick_filters,
             self._confirm,
@@ -436,7 +447,12 @@ class CloneFlow:
         else:
             raise UsageProblem("err.missing_flag", flag="--dst or --dst-new")
         take_responsibility = o.admin_ack
-        if not take_responsibility and source.noforwards and not source.is_admin:
+        if (
+            not take_responsibility
+            and source.noforwards
+            and not source.is_admin
+            and self._may_download(source, destination)
+        ):
             # No CLI flag to type in an interactive flow (menu or classic wizard): a dedicated
             # question stands in for --yes-i-administer-this-channel, asking the exact statement
             # it names (D3) rather than a generic yes/no (not interactive: stays False, and
@@ -444,6 +460,22 @@ class CloneFlow:
             take_responsibility = await self._confirm_unadministered(source)
         # every refusal happens before any write
         self._plan = plan_endpoints(source, destination, take_responsibility=take_responsibility)
+
+    def _may_download(self, source: ChannelInfo, destination: ChannelInfo | NewChannelSpec) -> bool:
+        """Whether the mode given as a flag leaves a way to download and send again, which is the
+        only way to copy a protected source (D3). No mode given: the wizard forces reupload for
+        such a source, so yes. ``--mode copy`` (or ``auto`` with nothing to rewrite): asking for
+        the statement would be pointless, the forward is refused anyway."""
+        o = self._o
+        if o.mode is None:
+            return True
+        loses_topics = (
+            source.kind is ChatKind.FORUM
+            and isinstance(destination, ChannelInfo)
+            and destination.kind is not ChatKind.FORUM
+        )
+        hashtag = o.topic_as_hashtag is not False and loses_topics
+        return may_reupload(o.mode, o.caption or "keep", hashtag)
 
     async def _confirm_unadministered(self, source: ChannelInfo) -> bool:
         """No CLI flag to type in an interactive flow (menu or classic wizard): typing the flag's
@@ -479,12 +511,20 @@ class CloneFlow:
         if self._asked and not given:
             choice = await wizard.pick_strategy(self._prompter, protected=plan.protected)
 
-        downloads = may_reupload(choice.mode, choice.caption)
+        loses_topics = "topic_loss" in plan.warnings
         topic_hashtag = o.topic_as_hashtag
+        said = topic_hashtag is not None  # the user already chose what happens to topics
+        asked_hashtag = False
         if topic_hashtag is None:
-            topic_hashtag = "topic_loss" in plan.warnings and downloads
+            topic_hashtag = loses_topics and choice.mode != "copy"
             if topic_hashtag and self._asked and not given:
                 topic_hashtag = await wizard.pick_topic_as_hashtag(self._prompter)
+                said = asked_hashtag = True
+        elif choice.mode != "copy":
+            # a forum destination keeps the topics themselves: a hashtag would only make ``auto``
+            # send every message again for nothing (``--mode copy`` still refuses the flag below)
+            topic_hashtag = topic_hashtag and loses_topics
+        downloads = may_reupload(choice.mode, choice.caption, topic_hashtag)
         base = RunRequest(
             mode=choice.mode,
             batch_size=o.batch_size or self._rt.config().limits.batch_size,
@@ -498,14 +538,23 @@ class CloneFlow:
             topic_as_hashtag=topic_hashtag,
         )
         check_options(base)  # options that contradict each other: exit 2 before any write
+        if plan.protected and not downloads:
+            # D3: nothing forwards out of a source that restricts saving content (Telegram refuses
+            # it, admin or not); say so now, before a destination is created or a run started
+            raise ForwardsRestricted("the source restricts saving content")
 
         for code in plan.warnings:
-            if not (code == "noforwards_admin" and downloads):  # the confirmation says it
-                self._echo(t(f"warn.{code}"), err=True)
+            if code == "noforwards_admin" and downloads:  # the confirmation says it
+                continue
+            if code == "topic_loss" and topic_hashtag:  # kept as hashtags: nothing is dropped
+                if not asked_hashtag:  # nobody asked: say what happens to the topics instead
+                    self._echo(t("warn.topic_as_hashtag"), err=True)
+                continue
+            self._echo(t(f"warn.{code}"), err=True)
         if plan.protected and downloads:
             await self._confirm_protected(plan)
             base = replace(base, protected_ack=True)  # a refusal above never gets here
-        if "topic_loss" in plan.warnings and not downloads:
+        if loses_topics and not topic_hashtag and not said:
             await self._confirm_topic_loss()
         self._base = base
 
@@ -523,8 +572,9 @@ class CloneFlow:
             raise Declined
 
     async def _confirm_topic_loss(self) -> None:
-        """The source is a forum, the destination is not, and the run's mode cannot rewrite text
-        (so there is no hashtag fallback): every topic is dropped outright. Mirrors
+        """The source is a forum, the destination is not, and there is no hashtag fallback (``--mode
+        copy``, which cannot add one) nor an answer from the user about it: every topic is dropped
+        outright. Mirrors
         ``confirm_fresh``: a terminal asks (default no), ``--yes`` agrees, neither is exit 2."""
         if self._o.yes:
             return
