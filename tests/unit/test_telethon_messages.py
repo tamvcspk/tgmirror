@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from telethon import errors, types
 from telethon.tl import custom
+from telethon.tl.functions.messages import ForwardMessagesRequest
 
 from tgmirror.core.errors import (
     FloodWait,
@@ -126,6 +127,10 @@ class HistoryClient:
         self.after: list[list[Any]] = []  # answers to "first message after <date>", in order
         self.lookups: list[dict[str, Any]] = []
         self.id_lookups: list[dict[str, Any]] = []
+        self.raw_calls: list[Any] = []
+        # ids ``ForwardMessagesRequest`` (the raw, topic-aware path) answers with, aligned to
+        # ``request.random_id``; ``None`` means Telegram made nothing for that one.
+        self.raw_forward_result: list[int | None] = []
 
     async def get_input_entity(self, ref: int) -> str:
         if ref in self.unknown:
@@ -144,6 +149,21 @@ class HistoryClient:
         if self.raises:
             raise self.raises
         return self.forward_result
+
+    async def __call__(self, request: Any) -> Any:
+        """The raw-request path (topic forwards, forum topics); ``forward_messages`` above covers
+        everything that goes through Telethon's own high-level helper."""
+        self.raw_calls.append(request)
+        if self.raises:
+            raise self.raises
+        if isinstance(request, ForwardMessagesRequest):
+            updates = [
+                types.UpdateMessageID(id=new_id, random_id=rnd)
+                for rnd, new_id in zip(request.random_id, self.raw_forward_result, strict=True)
+                if new_id is not None
+            ]
+            return types.Updates(updates=updates, users=[], chats=[], date=NOW, seq=1)
+        return None
 
     async def get_messages(self, peer: Any, limit: int = 1, **kwargs: Any) -> list[Any]:
         if "ids" in kwargs:  # like Telethon: one slot per id, ``None`` for a message that is gone
@@ -350,6 +370,29 @@ def test_a_text_message_has_no_file_details() -> None:
     assert (reduced.size, reduced.duration, reduced.mime, reduced.views) == (None, None, None, None)
 
 
+def test_src_message_reads_sender_and_topic() -> None:
+    """Phase 8: ``from_user_id`` costs no extra request; ``topic_id`` comes from ``reply_to``,
+    unverified on a real account (docs/06-lo-trinh.md, open question 9)."""
+    plain = src_message(message(1, from_id=types.PeerUser(user_id=555)))
+    assert plain is not None and plain.from_user_id == 555 and plain.topic_id is None
+
+    reply_in_topic = types.MessageReplyHeader(
+        reply_to_scheduled=False, forum_topic=True, reply_to_top_id=7, reply_to_msg_id=42
+    )
+    reduced = src_message(message(2, reply_to=reply_in_topic))
+    assert reduced is not None and reduced.topic_id == 7  # a reply within topic 7
+
+    topic_root = types.MessageReplyHeader(
+        reply_to_scheduled=False, forum_topic=True, reply_to_msg_id=9
+    )
+    root = src_message(message(9, reply_to=topic_root))
+    assert root is not None and root.topic_id == 9  # the message that defines the topic
+
+    not_forum = types.MessageReplyHeader(reply_to_scheduled=False, reply_to_msg_id=3)
+    ordinary_reply = src_message(message(4, reply_to=not_forum))
+    assert ordinary_reply is not None and ordinary_reply.topic_id is None
+
+
 def photo_of(*sizes: int) -> types.Photo:
     return types.Photo(
         id=1,
@@ -386,6 +429,39 @@ async def test_copy_messages_forwards_without_the_author_and_aligns_results() ->
     ((to_peer, ids, kwargs),) = client.forwards
     assert (to_peer, ids) == ("peer:-1002", [1, 2, 3])
     assert kwargs == {"from_peer": "peer:-1001", "drop_author": True}
+    assert client.raw_calls == []  # the well-verified path, untouched (phase 8, decision 3)
+
+
+async def test_copy_messages_with_a_topic_uses_the_raw_forward_request() -> None:
+    """``forward_messages`` has no topic parameter, so a topic id drops to a raw
+    ``ForwardMessagesRequest`` (docs/01-kien-truc.md, "Ánh xạ topic"; unverified on a real
+    account)."""
+    client = HistoryClient()
+    client.raw_forward_result = [200, None, 202]  # id 2 no longer exists
+
+    result = await gateway_on(client).copy_messages(-1001, -1002, [1, 2, 3], topic=55)
+
+    assert result == [200, None, 202]
+    assert client.forwards == []  # never the high-level helper once a topic is given
+    (request,) = client.raw_calls
+    assert isinstance(request, ForwardMessagesRequest)
+    assert (request.from_peer, request.to_peer, request.id) == (
+        "peer:-1001",
+        "peer:-1002",
+        [1, 2, 3],
+    )
+    assert (request.drop_author, request.top_msg_id) == (True, 55)
+
+
+async def test_copy_messages_without_a_topic_ignores_general() -> None:
+    """``topic=None`` (a non-forum destination, or the caller resolved General itself) never
+    reaches the raw path."""
+    client = HistoryClient()
+    client.forward_result = [message(9)]
+
+    await gateway_on(client).copy_messages(-1001, -1002, [1], topic=None)
+
+    assert client.raw_calls == [] and len(client.forwards) == 1
 
 
 @pytest.mark.parametrize(

@@ -99,6 +99,20 @@ def test_mime_types_are_lower_cased() -> None:
     )
 
 
+def test_from_user_and_topic_are_id_lists_deduplicated() -> None:
+    """Phase 8: ids only, never a username or topic name (docs/01-kien-truc.md, "thuần logic,
+    không I/O") — ``tgmirror topics`` is the friendly lookup."""
+    rule = spec({"include": [{"from_user": [5, 5, 9], "topic": [7]}]}).include[0]
+
+    assert (rule.from_user, rule.topic) == ((5, 9), (7,))
+
+
+def test_a_single_id_stands_for_a_one_item_list() -> None:
+    rule = spec({"include": [{"from_user": 5, "topic": 7}]}).include[0]
+
+    assert (rule.from_user, rule.topic) == ((5,), (7,))
+
+
 # ---- rejection ------------------------------------------------------------------------------
 
 
@@ -128,10 +142,9 @@ def test_invalid_filters_say_where_and_why(data: dict[str, Any], fragment: str) 
 
 
 @pytest.mark.parametrize("key", ["from_user", "topic"])
-def test_group_predicates_are_announced_for_phase_8(key: str) -> None:
-    detail = rejected({"include": [{key: "x"}]})
-
-    assert key in detail and "phase 8" in detail
+def test_from_user_and_topic_reject_non_ids(key: str) -> None:
+    assert "valid integer" in rejected({"include": [{key: "not-an-id"}]})
+    assert "greater than 0" in rejected({"include": [{key: 0}]})
 
 
 def test_every_problem_is_reported() -> None:

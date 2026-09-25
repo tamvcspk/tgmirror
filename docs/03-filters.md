@@ -37,8 +37,8 @@ Các điểm đã chốt khi làm phase 3 (không phải D1–D9):
 | `duration` | `{min,max}` | Video/audio/voice. Số giây, hoặc `90s`, `5m`, `1h30m` |
 | `mime` | list | vd `video/mp4`; cho phép `video/*` |
 | `views` | `{min,max}` | Kênh broadcast có số views |
-| `from_user` | id/username | Chưa có: phase 8 (group/supergroup/forum). Hiện báo "arrives with group and forum sources" |
-| `topic` | id/tên topic | Như trên, chỉ forum |
+| `from_user` | list id (một số = list một phần tử) | Nguồn group/forum, any-of. **Chỉ nhận id** (không `@username`): giữ `filters/model.py`/`matcher.py`/`parser.py` không đụng I/O. Tin của nguồn broadcast không có id người gửi nên predicate luôn sai (thiếu thuộc tính) |
+| `topic` | list id (một số = list một phần tử) | Chỉ forum, any-of. **Chỉ nhận id**, không tên topic — `tgmirror topics <src>` tra id/tên. Tin ở General của forum cũng không có topic id ở tầng Telethon (giống nguồn không phải forum) nên `topic` không khớp cho General; muốn cả General thì đừng lọc theo topic |
 
 `date` và `id` là điều kiện toàn cục (đẩy xuống server, xem dưới).
 
@@ -76,12 +76,13 @@ Nhiều rule OR hoặc `regex`/`contains` → không đẩy phần đó (quét �
 --exclude-regex "pattern" (lặp được)        --exclude-media sticker
 --since 2024-01-01         --until 2025-01-01
 --min-size 10MB            --max-size 2GB
+--from-user 12345 (lặp được = OR, chỉ id)   --topic 7 (lặp được = OR, chỉ id; `tgmirror topics <src>` tra id)
 --album any|all|first
 --filter-file filters.yaml  (không trộn với các flag lọc trên; nếu trộn thì báo lỗi rõ ràng, mã 2)
 --pushdown / --no-pushdown  --preview / --no-preview   (không phải filter, chỉ của `new`)
 ```
 
-Ghép cờ thành filter: các cờ "dương" (`--media`, `--hashtag`, `--contains`, `--regex`, `--min-size`, `--max-size`) tạo **một** rule `include` (AND); mỗi cờ `--exclude-*` là **một rule `exclude` riêng** (OR). Việc phức tạp hơn (nhiều rule include, `mime`, `duration`, `views`, `id`, `has_caption`) dùng YAML. Wizard thu thập cùng các giá trị chuỗi này rồi qua cùng `from_flags`, nên cờ, YAML và wizard cho ra cùng một filter (có test).
+Ghép cờ thành filter: các cờ "dương" (`--media`, `--hashtag`, `--contains`, `--regex`, `--min-size`, `--max-size`, `--from-user`, `--topic`) tạo **một** rule `include` (AND); mỗi cờ `--exclude-*` là **một rule `exclude` riêng** (OR). Việc phức tạp hơn (nhiều rule include, `mime`, `duration`, `views`, `id`, `has_caption`) dùng YAML. Wizard thu thập cùng các giá trị chuỗi này rồi qua cùng `from_flags`, nên cờ, YAML và wizard cho ra cùng một filter (có test); bước filter của wizard còn có checkbox chọn topic khi nguồn là forum (tự lấy id qua `list_topics`).
 
 Filter được lưu (JSON đã chuẩn hóa: hashtag chữ thường, size dạng `"<byte>B"`, ngày UTC ISO, giá trị mặc định bỏ đi; `{}` là không lọc) trong `mirrors.filters_json` (và ghi lại ở `runs.filters_json` của mỗi lần chạy), nạp lại được (có test round-trip).
 

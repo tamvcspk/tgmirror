@@ -9,6 +9,7 @@ from tests.fakes import FakeGateway
 from tgmirror.core.gateway import (
     ALBUM_MARGIN,
     MAX_IDS_PER_CALL,
+    ChatKind,
     MediaKind,
     ServerFilter,
     SrcMessage,
@@ -101,6 +102,33 @@ async def test_an_album_is_never_split_across_batches(gateway: FakeGateway) -> N
     result = await sizes(gateway, src, 4)
 
     assert result == [[[1], [2]], [[3, 4, 5], [6]]]
+
+
+async def test_a_batch_cuts_when_the_source_topic_changes(gateway: FakeGateway) -> None:
+    """Phase 8: one forward/send call targets one destination topic, so a batch never mixes
+    source topics even when it would otherwise still have room (docs/01-kien-truc.md, "Ánh xạ
+    topic")."""
+    src = gateway.add_channel("S", kind=ChatKind.FORUM).id
+    gateway.add_message(src, "a", topic_id=1)  # 1
+    gateway.add_message(src, "b", topic_id=1)  # 2
+    gateway.add_message(src, "c", topic_id=7)  # 3: a different topic ends the batch
+    gateway.add_message(src, "d", topic_id=7)  # 4: joins the new batch
+
+    result = await sizes(gateway, src, 10)
+
+    assert result == [[[1], [2]], [[3], [4]]]
+    batches_seen = [b async for b in batches(stream(gateway, src), 10)]
+    assert [b.topic_id for b in batches_seen] == [1, 7]
+
+
+async def test_a_non_forum_stream_never_cuts_on_topic(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("S").id
+    for _ in range(3):
+        gateway.add_message(src, "x")
+
+    (batch,) = [b async for b in batches(stream(gateway, src), 10)]
+
+    assert batch.topic_id is None and len(batch.units) == 3
 
 
 async def test_an_album_larger_than_the_batch_goes_out_whole(gateway: FakeGateway) -> None:

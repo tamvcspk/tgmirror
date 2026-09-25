@@ -43,6 +43,8 @@ class FlagFilters:
     min_size: str | None = None
     max_size: str | None = None
     album: str | None = None
+    from_user: list[int] = field(default_factory=list)  # group/forum sources only (phase 8)
+    topic: list[int] = field(default_factory=list)  # forum sources only (phase 8)
 
     @property
     def given(self) -> bool:
@@ -65,6 +67,10 @@ def from_flags(flags: FlagFilters) -> FilterSpec:
         rule["contains"] = flags.contains
     if flags.regex is not None:
         rule["regex"] = flags.regex
+    if flags.from_user:
+        rule["from_user"] = flags.from_user
+    if flags.topic:
+        rule["topic"] = flags.topic
     if flags.min_size is not None or flags.max_size is not None:
         size = {"min": flags.min_size, "max": flags.max_size}
         rule["size"] = {k: v for k, v in size.items() if v is not None}

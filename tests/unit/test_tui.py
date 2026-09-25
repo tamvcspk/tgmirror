@@ -41,6 +41,7 @@ def run(
         src_id=-1,
         src_title="Kenh A",
         src_kind=ChatKind.BROADCAST,
+        dst_kind=ChatKind.BROADCAST,
         dst_id=-2,
         dst_title="Kenh A (copy)",
         mode=mode,

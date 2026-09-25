@@ -34,6 +34,8 @@ def test_the_positive_flags_make_one_include_rule() -> None:
             regex="a.c",
             min_size="10MB",
             max_size="2GB",
+            from_user=[5, 9],
+            topic=[7],
         )
     )
 
@@ -42,6 +44,7 @@ def test_the_positive_flags_make_one_include_rule() -> None:
     assert rule.hashtag == ("#news", "#sport") and rule.contains == ("word",)
     assert rule.regex == "a.c"
     assert rule.size is not None and (rule.size.min, rule.size.max) == (10 * 1024**2, 2 * 1024**3)
+    assert rule.from_user == (5, 9) and rule.topic == (7,)
     assert spec.exclude == ()
 
 

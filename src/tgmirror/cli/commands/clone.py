@@ -21,17 +21,19 @@ from tgmirror.cli.filter_options import (
     ExcludeMediaOption,
     ExcludeRegexOption,
     FilterFileOption,
+    FromUserOption,
     HashtagOption,
     MaxSizeOption,
     MediaOption,
     MinSizeOption,
     RegexOption,
     SinceOption,
+    TopicOption,
     UntilOption,
     collect,
 )
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
-from tgmirror.core.gateway import ChannelInfo, TelegramGateway
+from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
 from tgmirror.engine import preview
 from tgmirror.engine.endpoints import (
     Endpoints,
@@ -55,6 +57,8 @@ from tgmirror.store.db import Store, utc_now
 from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import Prompter, run_steps
 from tgmirror.ui.tables import channel_label
+
+ADMIN_ACK_FLAG = "--yes-i-administer-this-channel"
 
 
 def clone(
@@ -127,6 +131,16 @@ def clone(
             "responsibility for that: tgmirror cannot check it. --yes does not stand in for it.",
         ),
     ] = False,
+    topic_as_hashtag: Annotated[
+        bool | None,
+        typer.Option(
+            "--topic-as-hashtag/--no-topic-as-hashtag",
+            help="Forum source, non-forum destination, a mode that can rewrite text: keep each "
+            "topic's name as a hashtag instead of dropping it (default: yes, asked on a "
+            "terminal). With a mode that cannot rewrite text, topics are dropped and this "
+            "flag is a usage error; a separate confirmation applies instead.",
+        ),
+    ] = None,
     batch_size: Annotated[
         int | None,
         typer.Option(
@@ -148,6 +162,8 @@ def clone(
     max_size: MaxSizeOption = None,
     album: AlbumOption = None,
     filter_file: FilterFileOption = None,
+    from_user: FromUserOption = None,
+    topic: TopicOption = None,
     no_filter: Annotated[
         bool,
         typer.Option(
@@ -243,6 +259,8 @@ def clone(
             max_size=max_size,
             album=album,
             filter_file=filter_file,
+            from_user=from_user,
+            topic=topic,
         )  # a bad filter is a usage error before anything is asked or written
         if no_filter:
             if filters is not None:
@@ -260,6 +278,7 @@ def clone(
             ignore_unsupported=ignore_unsupported,
             placeholder=placeholder,
             admin_ack=admin_ack,
+            topic_as_hashtag=topic_as_hashtag,
             batch_size=batch_size,
             filters=filters,
             fresh=fresh,
@@ -315,6 +334,7 @@ class CloneOptions:
     ignore_unsupported: bool = False
     placeholder: bool = False
     admin_ack: bool = False
+    topic_as_hashtag: bool | None = None
     batch_size: int | None = None
     filters: FilterSpec | None = None
     fresh: bool = False
@@ -415,8 +435,27 @@ class CloneFlow:
             destination = await wizard.pick_destination(self._prompter, source, self._channels)
         else:
             raise UsageProblem("err.missing_flag", flag="--dst or --dst-new")
+        take_responsibility = o.admin_ack
+        if not take_responsibility and source.noforwards and not source.is_admin:
+            # No CLI flag to type in an interactive flow (menu or classic wizard): a dedicated
+            # question stands in for --yes-i-administer-this-channel, asking the exact statement
+            # it names (D3) rather than a generic yes/no (not interactive: stays False, and
+            # plan_endpoints below raises SourceRestricted exactly as before).
+            take_responsibility = await self._confirm_unadministered(source)
         # every refusal happens before any write
-        self._plan = plan_endpoints(source, destination, take_responsibility=o.admin_ack)
+        self._plan = plan_endpoints(source, destination, take_responsibility=take_responsibility)
+
+    async def _confirm_unadministered(self, source: ChannelInfo) -> bool:
+        """No CLI flag to type in an interactive flow (menu or classic wizard): typing the flag's
+        own name here, verbatim, stands in for it — not a Yes/No click, so agreeing takes the same
+        deliberate act as typing it on a command line. Esc (raised by the prompter as ``GoBack``
+        in the menu) leaves this unanswered like any other step; anything but an exact match is
+        "no" and falls through to ``plan_endpoints``'s ordinary ``SourceRestricted`` refusal."""
+        if not self._interactive:
+            return False
+        question = t("clone.confirm_unadministered", title=source.title, flag=ADMIN_ACK_FLAG)
+        typed = await self._prompter.text(question)
+        return typed.strip() == ADMIN_ACK_FLAG
 
     async def _pick_strategy(self) -> None:
         o, plan = self._o, self._plan
@@ -440,6 +479,12 @@ class CloneFlow:
         if self._asked and not given:
             choice = await wizard.pick_strategy(self._prompter, protected=plan.protected)
 
+        downloads = may_reupload(choice.mode, choice.caption)
+        topic_hashtag = o.topic_as_hashtag
+        if topic_hashtag is None:
+            topic_hashtag = "topic_loss" in plan.warnings and downloads
+            if topic_hashtag and self._asked and not given:
+                topic_hashtag = await wizard.pick_topic_as_hashtag(self._prompter)
         base = RunRequest(
             mode=choice.mode,
             batch_size=o.batch_size or self._rt.config().limits.batch_size,
@@ -450,16 +495,18 @@ class CloneFlow:
             reset_polls=choice.reset_polls,
             ignore_unsupported=choice.ignore_unsupported,
             placeholder=choice.placeholder,
+            topic_as_hashtag=topic_hashtag,
         )
         check_options(base)  # options that contradict each other: exit 2 before any write
 
-        downloads = may_reupload(choice.mode, choice.caption)
         for code in plan.warnings:
             if not (code == "noforwards_admin" and downloads):  # the confirmation says it
                 self._echo(t(f"warn.{code}"), err=True)
         if plan.protected and downloads:
             await self._confirm_protected(plan)
             base = replace(base, protected_ack=True)  # a refusal above never gets here
+        if "topic_loss" in plan.warnings and not downloads:
+            await self._confirm_topic_loss()
         self._base = base
 
     async def _confirm_protected(self, plan: Plan) -> None:
@@ -473,6 +520,17 @@ class CloneFlow:
             raise UsageProblem("err.needs_admin_ack", title=plan.src.title)
         question = t("clone.confirm_protected", title=plan.src.title)
         if not await self._prompter.confirm(question, False):
+            raise Declined
+
+    async def _confirm_topic_loss(self) -> None:
+        """The source is a forum, the destination is not, and the run's mode cannot rewrite text
+        (so there is no hashtag fallback): every topic is dropped outright. Mirrors
+        ``confirm_fresh``: a terminal asks (default no), ``--yes`` agrees, neither is exit 2."""
+        if self._o.yes:
+            return
+        if not self._interactive:
+            raise UsageProblem("err.topic_loss_needs_yes")
+        if not await self._prompter.confirm(t("clone.confirm_topic_loss"), False):
             raise Declined
 
     async def _read_history(self) -> None:
@@ -494,7 +552,13 @@ class CloneFlow:
     async def _pick_filters(self) -> None:
         self._filters = self._o.filters
         if self._filters is None and self._asked:
-            self._filters = await wizard.pick_filters(self._prompter, can_keep=self._seen_before)
+            assert self._source is not None
+            topics: Sequence[TopicInfo] = ()
+            if self._source.kind is ChatKind.FORUM:
+                topics = await self._gateway.list_topics(self._source.id)
+            self._filters = await wizard.pick_filters(
+                self._prompter, can_keep=self._seen_before, topics=topics
+            )
 
     async def _confirm(self) -> None:
         """Wizard step 5 (the preview, when shown) and the one question before copying."""

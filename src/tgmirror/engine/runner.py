@@ -75,6 +75,7 @@ from tgmirror.engine.reupload import (
 )
 from tgmirror.engine.runs import DAILY_CAP
 from tgmirror.engine.strategy import Strategy, router
+from tgmirror.engine.topics import TopicResolver, TopicRoute
 from tgmirror.engine.transfer import Transfer, TransferTracker
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
@@ -189,6 +190,7 @@ class Runner:
         self._limiter: Limiter | None = None
         self._guard: FloodGuard | None = None
         self._reader: MessageReader | None = None
+        self._topics: TopicResolver | None = None
 
     async def run(self, run: Run) -> Run:
         """Carry out ``run`` (already started by ``begin_run``) to a resting state and return it.
@@ -470,8 +472,28 @@ class Runner:
         if stats:  # a long stretch without matches still shows a sign of life
             self._reporter.progress(updated)
 
+    async def _topic_route(self, run: Run, batch: Batch) -> TopicRoute:
+        """Phase 8: where this batch's messages should land. ``batch.topic_id`` is ``None`` for a
+        non-forum source and for a forum's General topic alike (Telethon carries no ``reply_to``
+        for a General message, unverified on a real account, docs/06-lo-trinh.md open question
+        9) — Telegram is left to default a topic-less post to General on its own."""
+        if batch.topic_id is None:
+            return TopicRoute()
+        assert self._guard is not None and self._reader is not None
+        guard = self._guard
+        if self._topics is None:
+
+            async def create(title: str) -> int:
+                return await guard.write(
+                    "create_topic", 1, lambda: self._gateway.create_topic(run.dst_id, title)
+                )
+
+            self._topics = TopicResolver(self._reader, self._store, run, create)
+        return await self._topics.resolve(batch.topic_id)
+
     async def _send(self, run: Run, batch: Batch, ready: Ready | None = None) -> None:
         assert self._guard is not None and self._limiter is not None
+        route = await self._topic_route(run, batch) if batch.units else TopicRoute()
         batch_id = await self._store.begin_batch(run.id, batch.units)  # write-ahead
         try:
             # A FloodWait is sat out inside ``write`` and the same call repeated: the batch stays
@@ -499,6 +521,8 @@ class Runner:
                         on_fallback=lambda: self._reporter.notice(
                             "reference_fallback", id=batch.units[0].ids[0]
                         ),
+                        topic=route.dst_topic_id,
+                        hashtag=route.hashtag,
                     ),
                 )
             elif ready is not None and ready.action is not None:  # strategy B: one unit
@@ -515,13 +539,17 @@ class Runner:
                         action,
                         options,
                         self._tracker.update,
+                        topic=route.dst_topic_id,
+                        hashtag=route.hashtag,
                     ),
                 )
             else:
                 results = await self._guard.write(
                     "copy_messages",
                     batch.size,
-                    lambda: copy_batch(self._gateway, run.src_id, run.dst_id, batch),
+                    lambda: copy_batch(
+                        self._gateway, run.src_id, run.dst_id, batch, topic=route.dst_topic_id
+                    ),
                 )
         except PerMessage as exc:
             if len(batch.units) > 1:
@@ -555,7 +583,12 @@ class Runner:
                 return  # the units not sent yet are read again on the next run
             await self._guard.pace(len(unit.messages))
             # the filter count and the cursor past the skipped messages go with the last unit
-            await self._send(run, replace(batch, units=(unit,)) if i == last else Batch((unit,)))
+            alone = (
+                replace(batch, units=(unit,))
+                if i == last
+                else Batch((unit,), topic_id=unit.topic_id)
+            )
+            await self._send(run, alone)
 
     # ---- strategy B's scratch space -----------------------------------------------------------
 

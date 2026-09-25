@@ -39,11 +39,13 @@ class TelegramGateway(Protocol):
     async def count(self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER) -> int: ...   # analyze: tổng (cận trên) của khoảng iter_messages sẽ đọc; một request `messages.search` limit=1
     async def get_messages(self, src: int, ids: Sequence[int]) -> list[SrcMessage]: ...   # đọc theo id (1..100/lần); tin đã xóa thì vắng mặt; `retry` dùng
     async def last_message_id(self, chat: int) -> int: ...             # 0 nếu trống; lần chạy đầu của cặp ghi làm dst_base_id (đích) và mỗi lần chạy thường ghi làm `src_last_id` (nguồn)
-    async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]: ...   # strategy A
+    async def copy_messages(self, src: int, dst: int, ids: list[int], *, topic: int | None = None) -> list[int | None]: ...   # strategy A; topic: phase 8
     async def prepare(self, src: int, unit: Unit, tmp: Path, on_transfer: OnTransfer | None = None) -> Prepared: ...   # strategy B, nửa đọc: đọc lại tin + tải media về `tmp`, báo tiến độ từng file
-    async def send_prepared(self, dst: int, prepared: Prepared, caption: CaptionPolicy, on_transfer: OnTransfer | None = None) -> list[int]: ...  # strategy B, nửa ghi: gửi lại, trả id mới thẳng hàng với unit, báo tiến độ tải lên
-    async def send_text(self, dst: int, text: str) -> int: ...                                    # tin text thay thế (`--placeholder`)
+    async def send_prepared(self, dst: int, prepared: Prepared, caption: CaptionPolicy, on_transfer: OnTransfer | None = None, *, topic: int | None = None) -> list[int]: ...  # strategy B, nửa ghi: gửi lại, trả id mới thẳng hàng với unit, báo tiến độ tải lên
+    async def send_text(self, dst: int, text: str, *, topic: int | None = None) -> int: ...        # tin text thay thế (`--placeholder`)
 ```
+
+`CaptionPolicy.hashtag` (phase 8): một hashtag đứng thay cho topic khi đích không có topic (`RunOptions.topic_as_hashtag`), cộng vào sau những gì `mode` tạo ra, kể cả tin chữ — trừ tin tự chứa (poll/quiz/location/contact/geo/dice) không có chỗ caption. Xem "Đích khác loại nguồn" bên dưới.
 
 Đăng nhập cũng là lời gọi mạng nên có protocol riêng, `TelegramAuth` (`core/auth.py`): `account()`, `request_code`, `sign_in_code`, `sign_in_password`, `log_out`. Luồng `login(auth, prompts)` (thử lại tối đa 3 lần cho số điện thoại, mã, mật khẩu; mã hết hạn thì gửi lại một lần) chỉ biết protocol và `LoginPrompts`, nên test được bằng `FakeAuth`. `AccountInfo` cố ý không có số điện thoại.
 
@@ -68,7 +70,7 @@ Chọn chiến lược **cho từng unit** (`engine/strategy.py::router`), theo 
 
 - `copy`: mọi unit đi đường forward. Không dùng được với `--caption` khác `keep` (lỗi mã 2).
 - `auto` (mặc định): forward, trừ unit mà caption phải sửa (`--caption strip-links|append|none` và unit có tin media kèm caption). Unit đó đi **gửi bằng mã file** khi nguồn cho lưu nội dung và mọi tin của unit là file (ảnh, video, tài liệu, ...): Telegram nhận id của file nó đã lưu nên **không tải xuống, không tải lên** (`Strategy.REFERENCE`, xem dưới). Ngược lại (nguồn `noforwards`, hay unit là vị trí, danh bạ, poll) thì tải xuống rồi tải lên lại. Thứ tự giữ nguyên (D4): batcher cắt batch mỗi khi chiến lược đổi.
-- `reupload`: mọi unit tải xuống rồi tải lên lại (không bao giờ gửi bằng mã file: đó là điều người dùng đã chọn). Là cách duy nhất sao chép nguồn `noforwards` (D3, đổi 2026-09-20: user chịu hoàn toàn trách nhiệm): phải có lời tuyên bố của user. Tài khoản là admin của nguồn: câu hỏi xác nhận hoặc cờ `--yes-i-administer-this-channel`. Tài khoản **không** phải admin (user là chủ kênh bằng tài khoản khác): chỉ cờ, kèm cảnh báo; không có cờ thì từ chối (mã 4). `--yes` không thay được cờ. Mỗi lần chạy dựa trên lời tuyên bố in một cảnh báo trách nhiệm (`warn.responsibility`).
+- `reupload`: mọi unit tải xuống rồi tải lên lại (không bao giờ gửi bằng mã file: đó là điều người dùng đã chọn). Là cách duy nhất sao chép nguồn `noforwards` (D3, đổi 2026-09-20: user chịu hoàn toàn trách nhiệm): phải có lời tuyên bố của user. Tài khoản là admin của nguồn: một câu hỏi Có/Không hoặc cờ `--yes-i-administer-this-channel`. Tài khoản **không** phải admin (user là chủ kênh bằng tài khoản khác): cờ đó gõ trên dòng lệnh, hoặc — không có dòng lệnh để gõ (wizard/menu, tinh chỉnh 2026-09-25) — gõ nguyên văn đúng chữ cờ vào một câu hỏi riêng (`CloneFlow._confirm_unadministered`, không phải Có/Không), giữ đúng mức "cố ý" như gõ cờ thật; không có cờ/không gõ đúng thì từ chối (mã 4). `--yes` không thay được cờ hay câu gõ đó. Mỗi lần chạy dựa trên lời tuyên bố in một cảnh báo trách nhiệm (`warn.responsibility`).
 
 `run`/`retry` không hỏi lại D3 vì không đổi nguồn; xem "Kiểm lại nguồn khi chạy lại" bên dưới.
 
@@ -102,14 +104,21 @@ Spike 11 (kênh không cấm lưu nội dung): `send_file(dst, message.media, ca
 | `supergroup` / `group` | supergroup | Basic group không tạo mới được nên đích luôn là supergroup |
 | `forum` | supergroup bật forum | Ánh xạ topic → topic (bên dưới) |
 
-Đích có sẵn phải cùng loại với nguồn (forum → forum); khác loại thì từ chối trước khi chạy (chốt 2026-09-19).
+### Đích khác loại nguồn (phase 8, đảo "chốt 2026-09-19")
 
-### Ánh xạ topic (forum)
+Đích có sẵn **không** còn phải cùng loại với nguồn: `engine/endpoints.py::eligible_destinations` chỉ còn kiểm "không phải chính nguồn" và "admin + đăng được". Mọi cặp loại (kể cả group ↔ channel) đều hợp lệ, vì `drop_author` đã bỏ danh tính người gửi như nhau cho mọi loại — thứ duy nhất mang cấu trúc mà loại khác không có chỗ chứa là **topic của forum**:
 
-- Lần chạy đầu của cặp: đọc danh sách topic nguồn, tạo topic tương ứng ở đích (tên + icon), lưu `src_topic_id → dst_topic_id` trong bảng `topic_map` (`04-state-checkpoint.md`). Topic General (id 1) ánh xạ vào General của đích. Topic mới xuất hiện ở nguồn ở lần chạy sau thì được tạo bổ sung.
-- Duyệt nguồn theo **id tăng dần toàn group** (id là chung cho mọi topic), nên `cursor_src_id` vẫn là một số duy nhất. Mỗi tin được định tuyến theo topic của nó.
-- Một lời gọi forward chỉ có một topic đích. Batcher cắt batch khi topic đổi, nên nhóm chat xen kẽ nhiều topic sẽ có batch nhỏ hơn (chậm hơn, nhưng thứ tự trong từng topic vẫn đúng).
-- `forward_messages` của Telethon **không** có tham số topic. `TelethonGateway` phải gọi `ForwardMessagesRequest(top_msg_id=...)` trực tiếp (vẫn nằm trong gateway + limiter, luật 1). Cần spike xác nhận (`06-lo-trinh.md`).
+- **forum → forum**: ánh xạ topic đầy đủ (mục dưới).
+- **forum → không phải forum**: `Plan.warnings` có `"topic_loss"`. Với mode viết lại được nội dung (`auto` đổi caption, hoặc `reupload`), wizard hỏi "giữ tên topic dưới dạng hashtag?" (mặc định có, `RunOptions.topic_as_hashtag`/`--topic-as-hashtag`) — hashtag cộng vào sau caption/text (`CaptionPolicy.hashtag`), trừ tin tự chứa (poll/quiz/location/contact/geo/dice, xem "Tin đặc thù"). Với `--mode copy` (hay `auto` không đổi caption), không có gì viết lại được nên topic luôn bị bỏ hoàn toàn — `cli/commands/clone.py::_confirm_topic_loss` hỏi xác nhận trước (mặc định không; `--yes` đủ để đồng ý).
+- Đích **mới** (`--dst-new`) luôn theo đúng loại nguồn (bảng trên) — không có chat có sẵn để chọn loại khác, nên `topic_loss` không bao giờ xảy ra cho đích mới.
+
+### Ánh xạ topic (forum → forum)
+
+- **Tạo kiểu lười** (`engine/topics.py::TopicResolver`), không liệt kê và tạo sẵn mọi topic nguồn: topic đích được tạo đúng lúc tin đầu tiên cần gửi vào đó xuất hiện (tra tên qua `list_topics`, tạo qua `create_topic`, lưu `src_topic_id → dst_topic_id` vào `topic_map`, `04-state-checkpoint.md`, cùng một nhịp không có gì chen giữa — không phải một transaction SQL thật sự bọc quanh lời gọi Telegram, luật 5 cấm điều đó). Topic mới xuất hiện ở nguồn sau này đi đúng đường này, không cần xử lý riêng. Kết quả tương đương "tạo sẵn ở lần đầu" mà không cần hai đường code.
+- **General (topic nguồn id 1) không cần ánh xạ hay lời gọi nào.** Telethon không gắn `reply_to` cho tin ở General (chỉ tin trong các topic khác mới có `reply_to.forum_topic=True`), nên `SrcMessage.topic_id` của một tin General là `None` — giống hệt tin của nguồn không phải forum. `topic=None` được truyền cho `copy_messages`/`send_prepared`/..., Telegram tự định tuyến vào General (**chưa kiểm chứng trên tài khoản thật**, câu hỏi mở số 9 ở `06-lo-trinh.md`).
+- Duyệt nguồn theo **id tăng dần toàn group** (id là chung cho mọi topic), nên `cursor_src_id` vẫn là một số duy nhất. Mỗi tin được định tuyến theo topic của nó (`msg_map.src_topic_id`).
+- Một lời gọi forward/gửi chỉ có một topic đích. `engine/batcher.py` cắt batch khi `Unit.topic_id` đổi (như khi chiến lược đổi), nên nhóm chat xen kẽ nhiều topic sẽ có batch nhỏ hơn (chậm hơn, nhưng thứ tự trong từng topic vẫn đúng).
+- `forward_messages` của Telethon **không** có tham số topic: `copy_messages` giữ nguyên đường đó khi không có topic (đã kiểm chứng từ phase 2), chỉ chuyển sang gọi thẳng `ForwardMessagesRequest(top_msg_id=...)` khi có (vẫn nằm trong gateway + limiter, luật 1) — giảm rủi ro cho đường code cũ. `send_prepared`/`send_by_reference`/`send_text` truyền `reply_to=<dst topic id>` (Telethon không hỗ trợ `top_msg_id` qua API công khai của chúng, chỉ `reply_to_msg_id`; dùng id của tin định nghĩa topic làm `reply_to` thay thế). **Chưa kiểm chứng trên tài khoản thật** (câu hỏi mở số 9, `06-lo-trinh.md`).
 
 ### Hạn chế khi copy từ group
 
@@ -137,6 +146,20 @@ Chốt 2026-09-19. Chiến lược A (forward phía server) để Telegram giữ
 - Tin bị bỏ: ghi `msg_map` với `status='skipped'`, `reason='unsupported:<loại>'` (không phải `failed`, để `retry` không thử lại vô ích), tăng `stats.skipped_unsupported`, con trỏ đi qua. Vì con trỏ đã qua, delta không nhặt lại poll đã bỏ khi sau này thêm `--reset-polls`; muốn có chúng phải `--fresh`.
 - Với `--placeholder`, mỗi tin bị bỏ vì không hỗ trợ được thay bằng một tin text `[<Loại>: <title> — không thể sao chép]` ở đích, để người xem biết chỗ đó từng có gì. Đây là một lần gửi ghi (qua limiter); hàng `msg_map` vẫn `status='skipped'` nhưng có `dst_msg_id` của tin thay thế. Nếu process chết giữa lúc đăng, `reconcile` không so được (đích có một tin text, nguồn là game) nên coi là mơ hồ và đăng lại: có thể trùng một dòng ghi chú.
 - Cờ CLI: xem `02-cli-ux.md` mục "Tin đặc thù".
+
+### Loại tin khi đổi loại đích (phase 8)
+
+Ngoài topic, đổi loại đích (mục trên) không tạo khác biệt nào khác đã biết trước cho hầu hết loại tin — `drop_author` đã bỏ danh tính người gửi như nhau cho mọi loại rồi:
+
+| Loại tin | Ảnh hưởng khi đổi loại đích | `topic_as_hashtag` |
+|---|---|---|
+| Ảnh/video/tài liệu/audio/voice/gif/sticker/video_note, tin chữ | Không có | Áp dụng bình thường |
+| Poll | Group cho phép `public_voters` (hiện tên người bình chọn), poll trong broadcast channel theo Telegram luôn ẩn danh — đem một poll đã public từ group sang broadcast, Telegram giữ/ép ẩn danh/từ chối? **Chưa biết, thêm vào câu hỏi mở cùng spike 9** (`06-lo-trinh.md`); không tự sửa `public_voters`, không chặn, gửi như hiện nay | Không áp dụng: không có chỗ caption |
+| Quiz, Location/Venue/Contact/Geo/Dice | Không có khác biệt nào biết trước | Không áp dụng: không có chỗ caption |
+| Game/Invoice | Vẫn bị bỏ như hiện nay, không đổi bởi phase 8 | Không áp dụng (tin không được gửi) |
+| Service message | Luôn bị bỏ qua, không phụ thuộc loại đích | Không áp dụng |
+
+Không thêm logic chặn hay tự sửa hành vi Telegram cho trường hợp "chưa biết" (dòng poll): gửi như bình thường và để spike 9 trả lời sau, giống cách project xử lý mọi hành vi Telegram khác chưa kiểm chứng.
 
 ## Unit và Batch
 
@@ -208,10 +231,10 @@ for batch in batcher(planner.units(run), run.batch_size):
 ```
 src/tgmirror/
   core/     gateway.py  auth.py  telethon_gateway.py  limiter.py  errors.py  config.py  paths.py
-  engine/   endpoints.py  runs.py  planner.py  batcher.py  strategy.py  copy.py  reupload.py  flood.py  reconcile.py  preview.py  runner.py  status.py
+  engine/   endpoints.py  runs.py  planner.py  batcher.py  strategy.py  copy.py  reupload.py  flood.py  reconcile.py  preview.py  runner.py  status.py  topics.py
   filters/  model.py  parser.py  pushdown.py  matcher.py
-  store/    schema.sql  db.py  runs.py  msgmap.py  floodlog.py  limiterstate.py
-  cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py clone.py run.py retry.py status.py control.py history.py config.py ...)
+  store/    schema.sql  db.py  runs.py  msgmap.py  floodlog.py  limiterstate.py  topicmap.py
+  cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py topics.py clone.py run.py retry.py status.py control.py history.py config.py ...)
   ui/       messages.py  prompts.py  tables.py  progress.py  tui.py
             menu/  (app full-screen: app, screen, prompter, widgets, run_screen, screens/)
 tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integration/
@@ -220,6 +243,6 @@ tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integrati
 ## Kiểm thử
 
 - `FakeGateway` mô phỏng kênh (danh sách tin, album, lỗi FloodWait/PeerFlood theo kịch bản) và đồng hồ giả cho limiter.
-- Test bắt buộc: resume sau khi kill giữa chừng không trùng/sót; album không bị tách; FloodWait làm tăng delay; PeerFlood dừng lần chạy; delta chỉ lấy tin mới; pause giữ tại chỗ rồi chạy tiếp. Phase 2 có `tests/integration/test_runner.py`, `tests/unit/test_store.py`, ...; phase 4 thêm `tests/unit/test_limiter.py` (đồng hồ giả) và `tests/integration/test_runner_flood.py` (kịch bản flood trên `FakeGateway`); phase 5 thêm `tests/integration/test_runner_retry.py` (retry: kill giữa chừng, bị từ chối, album, tin đã xóa), `tests/unit/test_status.py` (ước lượng tiến độ/ETA) và `tests/unit/test_cli_retry.py` (`retry`, `status`); phase 6 thêm `tests/integration/test_runner_reupload.py` (mỗi unit một lần gửi, tải trước, ngân sách đĩa, dừng khi đang tải, caption, tin không hỗ trợ, flood, kill trước/sau khi gửi), `tests/unit/test_reupload.py` (router, batcher, `plan_unit`, `Window`, `Pipeline`), `tests/unit/test_telethon_reupload.py` (tải/gửi/viết lại caption trên client giả) và `tests/unit/test_cli_reupload.py` (cờ, D3, wizard); test kiến trúc (`tests/unit/test_architecture.py`) giữ Telethon và SQL trong đúng chỗ.
+- Test bắt buộc: resume sau khi kill giữa chừng không trùng/sót; album không bị tách; FloodWait làm tăng delay; PeerFlood dừng lần chạy; delta chỉ lấy tin mới; pause giữ tại chỗ rồi chạy tiếp. Phase 2 có `tests/integration/test_runner.py`, `tests/unit/test_store.py`, ...; phase 4 thêm `tests/unit/test_limiter.py` (đồng hồ giả) và `tests/integration/test_runner_flood.py` (kịch bản flood trên `FakeGateway`); phase 5 thêm `tests/integration/test_runner_retry.py` (retry: kill giữa chừng, bị từ chối, album, tin đã xóa), `tests/unit/test_status.py` (ước lượng tiến độ/ETA) và `tests/unit/test_cli_retry.py` (`retry`, `status`); phase 6 thêm `tests/integration/test_runner_reupload.py` (mỗi unit một lần gửi, tải trước, ngân sách đĩa, dừng khi đang tải, caption, tin không hỗ trợ, flood, kill trước/sau khi gửi), `tests/unit/test_reupload.py` (router, batcher, `plan_unit`, `Window`, `Pipeline`), `tests/unit/test_telethon_reupload.py` (tải/gửi/viết lại caption trên client giả) và `tests/unit/test_cli_reupload.py` (cờ, D3, wizard); phase 8 thêm `tests/integration/test_runner_topics.py` (cắt batch theo topic, ánh xạ + tạo topic, General không cần lời gọi, hashtag khi đích không phải forum), mở rộng `test_endpoints.py` (ma trận cross-kind), `test_planner.py` (cắt batch theo topic), `test_store.py` (`topic_map`, migration v2 `dst_kind`), `test_filter_model.py`/`test_filter_matcher.py`/`test_filter_parser.py` (`from_user`/`topic`), `test_telethon_gateway.py`/`test_telethon_messages.py`/`test_telethon_reupload.py` (tạo kênh theo `kind`, forward/gửi theo topic, hashtag không áp dụng cho tin tự chứa) và `test_cli_clone.py`/`test_cli_filters.py`/`test_cli_topics.py` (mới); test kiến trúc (`tests/unit/test_architecture.py`) giữ Telethon và SQL trong đúng chỗ.
 - Không test tự động chống lại Telegram thật. Có script thủ công `scripts/smoke.py` dùng kênh test riêng.
 - Kiểm tra đột biến thủ công: `scripts/mutation_check.py` (phase 6) phá từng cơ chế của chiến lược B/D3 trên **bản sao tạm** của `src/` và `tests/` rồi xem có test nào đỏ; mỗi lần chạy có timeout riêng nên một đột biến làm test treo cũng chỉ tính là "bị phát hiện". `--list`, `--only <chữ>`. Một dòng `SURVIVED` là cơ chế không test nào bảo vệ (hoặc đột biến tương đương): đọc nó, đừng chỉ làm nó xanh. Test có timeout 60 giây (`pytest-timeout`).

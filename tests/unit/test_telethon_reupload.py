@@ -538,6 +538,32 @@ async def test_a_poll_is_sent_from_its_own_media_object(tmp_path: Path) -> None:
     assert stub.sent[0][2]["file"] is media
 
 
+async def test_a_topic_hashtag_is_appended_to_plain_text(tmp_path: Path) -> None:
+    """Phase 8: ``CaptionPolicy.hashtag`` applies to plain text too, not only media captions."""
+    words = message(1, text="hi there", entities=[])
+    gw, stub = gateway(words)
+
+    await gw.send_prepared(
+        2, await gw.prepare(1, unit_of(words), tmp_path), CaptionPolicy(hashtag="#general")
+    )
+
+    assert stub.sent[0][1] == "hi there\n#general"
+
+
+async def test_a_topic_hashtag_is_never_appended_to_self_contained_media(tmp_path: Path) -> None:
+    """A poll (like location/contact/geo/dice) has no caption slot to append a hashtag to."""
+    media = poll(quiz=False, results=None)
+    asked = message(1, media=media)
+    gw, stub = gateway(asked)
+
+    await gw.send_prepared(
+        2, await gw.prepare(1, unit_of(asked), tmp_path), CaptionPolicy(hashtag="#general")
+    )
+
+    assert stub.sent[0][2]["file"] is media
+    assert stub.sent[0][1] == ""  # no hashtag slipped into the (unused) text argument
+
+
 async def test_a_message_with_media_we_cannot_rebuild_is_that_messages_problem(
     tmp_path: Path,
 ) -> None:
@@ -589,7 +615,12 @@ async def test_a_file_is_sent_again_by_its_media_object_with_the_caption_rewritt
     assert ids == [101]
     ((kind, what, kw),) = stub.sent
     assert kind == "file" and what is pic.media  # Telegram gets the id of what it stores
-    assert kw == {"caption": "look\n\nvia X", "formatting_entities": None, "parse_mode": None}
+    assert kw == {
+        "caption": "look\n\nvia X",
+        "formatting_entities": None,
+        "parse_mode": None,
+        "reply_to": None,
+    }
     assert stub.downloads == []  # nothing came down, and no upload argument goes with it
 
 

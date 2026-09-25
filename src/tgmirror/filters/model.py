@@ -41,7 +41,6 @@ _SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([KMGT]?)i?B\s*$", re.IGNORECASE)
 _SIZE_UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 _DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)([smh])")
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600}
-_LATER = {"from_user", "topic"}  # predicates for group and forum sources (phase 8)
 
 
 def parse_size(value: Any) -> int:
@@ -89,8 +88,9 @@ def parse_moment(value: Any) -> datetime:
 
 
 def _listify(value: Any) -> Any:
-    """``media: video`` is a one-item list."""
-    return [value] if isinstance(value, str) else value
+    """``media: video`` (or a single id, e.g. ``topic: 7``) is a one-item list."""
+    scalar = isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool))
+    return [value] if scalar else value
 
 
 def normalize_hashtag(tag: str) -> str:
@@ -112,6 +112,11 @@ Size = Annotated[
 Duration = Annotated[float, BeforeValidator(parse_duration)]
 Moment = Annotated[datetime, BeforeValidator(parse_moment)]
 Names = Annotated[tuple[str, ...], BeforeValidator(_listify), Field(min_length=1)]
+# ``from_user``/``topic`` (phase 8): Telegram ids only in v1, never a username or topic name, so
+# the matcher stays pure I/O-free (docs/01-kien-truc.md); ``tgmirror topics`` looks up the id.
+Ids = Annotated[
+    tuple[Annotated[int, Field(gt=0)], ...], BeforeValidator(_listify), Field(min_length=1)
+]
 
 
 class _Model(BaseModel):
@@ -197,6 +202,13 @@ class Rule(_Model):
     duration: DurationRange | None = None
     mime: Names | None = None
     views: CountRange | None = None
+    from_user: Ids | None = None  # group/forum sources only (phase 8)
+    topic: Ids | None = None  # forum sources only (phase 8)
+
+    @field_validator("from_user", "topic")
+    @classmethod
+    def _dedup_ids(cls, ids: tuple[int, ...] | None) -> tuple[int, ...] | None:
+        return None if ids is None else tuple(dict.fromkeys(ids))
 
     @field_validator("hashtag")
     @classmethod
@@ -284,8 +296,7 @@ def explain(exc: ValidationError) -> str:
             where += f"[{part}]" if isinstance(part, int) else f".{part}"
         where = where.lstrip(".")
         if err["type"] == "extra_forbidden":
-            later = str(err["loc"][-1]) in _LATER
-            msg = "arrives with group and forum sources (phase 8)" if later else "not a filter key"
+            msg = "not a filter key"
         else:
             msg = err["msg"].removeprefix("Value error, ")
         lines.append(f"{where}: {msg}" if where else msg)

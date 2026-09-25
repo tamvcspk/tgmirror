@@ -43,7 +43,7 @@ Inside a rule, predicates are ANDed; rules are ORed. Service messages are always
 - Sizes/durations use explicit units; reject bare ambiguous numbers in size fields.
 - Changing the filter of a pair never rewrites history: cloning it again with another filter (or `--no-filter`) reads from cursor 0 and skips `done` items through `msg_map` (`Store.start_run`); no filter flag reuses the remembered one.
 - Filter-skipped messages are not written to `msg_map` (see `checkpoint-state`); they only bump `skipped_filter` and advance the cursor. This is different from *unsupported* messages (game, invoice, ...), which are recorded as `skipped`.
-- `media` also has `geo contact game invoice`; the `topic` and `from_user` predicates only make sense for group/forum sources (`docs/03-filters.md`).
+- `media` also has `geo contact game invoice`; `topic` (forum only) and `from_user` (group/forum only) are id-only lists (phase 8) — never a username or topic name, so `filters/model.py`/`matcher.py`/`parser.py` stay I/O-free; `tgmirror topics <src>` is where a user looks up an id (`docs/03-filters.md`).
 
 ## Preview (wizard step 5)
 

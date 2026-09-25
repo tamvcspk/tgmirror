@@ -67,6 +67,9 @@ class RunOptions:
     reset_polls: bool = False
     ignore_unsupported: bool = False
     placeholder: bool = False
+    # Phase 8: the source is a forum but the destination cannot hold topics, and the run's mode
+    # can rewrite text — append a hashtag for the topic instead of dropping it silently.
+    topic_as_hashtag: bool = False
     # The user said they may copy a source that restricts saving content (decision D3); ``run`` and
     # ``retry`` carry it on, so they do not ask again.
     protected_ack: bool = False
@@ -96,6 +99,7 @@ class RunOptions:
             ignore_unsupported=self.ignore_unsupported,
             placeholder=self.placeholder,
             protected_ack=self.protected_ack,
+            topic_as_hashtag=self.topic_as_hashtag,
         )
 
     def to_json(self) -> str:
@@ -131,6 +135,7 @@ class Mirror:
     src_kind: ChatKind
     dst_id: int
     dst_title: str
+    dst_kind: ChatKind
     mode: str
     filters_json: str
     options: RunOptions
@@ -151,6 +156,7 @@ class Run:
     src_kind: ChatKind
     dst_id: int
     dst_title: str
+    dst_kind: ChatKind
     mode: str
     filters_json: str
     options: RunOptions
@@ -228,9 +234,9 @@ class FloodEvent:
 
 RUN_SELECT = (
     "SELECT r.id, r.mirror_id, m.account, m.src_id, m.src_title, m.src_kind, m.dst_id, "
-    "m.dst_title, r.mode, r.filters_json, r.options_json, r.status, r.control, r.cursor_from, "
-    "r.cursor_to, r.resume_at, r.fail_reason, r.stats_json, r.started_at, r.ended_at, "
-    "r.updated_at FROM runs r JOIN mirrors m ON m.id = r.mirror_id"
+    "m.dst_title, m.dst_kind, r.mode, r.filters_json, r.options_json, r.status, r.control, "
+    "r.cursor_from, r.cursor_to, r.resume_at, r.fail_reason, r.stats_json, r.started_at, "
+    "r.ended_at, r.updated_at FROM runs r JOIN mirrors m ON m.id = r.mirror_id"
 )
 
 
@@ -249,6 +255,7 @@ def run_from_row(row: sqlite3.Row) -> Run:
         src_kind=ChatKind(row["src_kind"]),
         dst_id=row["dst_id"],
         dst_title=row["dst_title"] or "",
+        dst_kind=ChatKind(row["dst_kind"]),
         mode=row["mode"],
         filters_json=row["filters_json"],
         options=RunOptions.from_json(row["options_json"]),
@@ -274,6 +281,7 @@ def mirror_from_row(row: sqlite3.Row) -> Mirror:
         src_kind=ChatKind(row["src_kind"]),
         dst_id=row["dst_id"],
         dst_title=row["dst_title"] or "",
+        dst_kind=ChatKind(row["dst_kind"]),
         mode=row["mode"],
         filters_json=row["filters_json"],
         options=RunOptions.from_json(row["options_json"]),

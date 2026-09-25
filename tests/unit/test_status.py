@@ -26,6 +26,7 @@ def make_run(**changes: object) -> Run:
         src_id=-1001,
         src_title="Source",
         src_kind=ChatKind.BROADCAST,
+        dst_kind=ChatKind.BROADCAST,
         dst_id=-1002,
         dst_title="Copy",
         mode="auto",

@@ -31,6 +31,10 @@ class Batch:
     upto: int = 0
     strategy: Strategy = Strategy.COPY
     already: int = 0  # messages passed because the pair already has them (resume, changed filter)
+    # Source topic id (forum sources only, phase 8); every unit in a batch shares one, since one
+    # forward/send call targets exactly one destination topic (docs/01-kien-truc.md, "Ánh xạ
+    # topic").
+    topic_id: int | None = None
 
     @property
     def ids(self) -> list[int]:
@@ -66,14 +70,17 @@ async def batches(
     unit that did not fit, so the batch's cursor may safely pass them.
 
     ``route`` picks each unit's strategy (default: copy). A change of strategy ends the batch, and
-    a re-uploaded unit is emitted at once, alone.
+    a re-uploaded unit is emitted at once, alone. A change of source topic also ends the batch
+    (phase 8: one call targets one destination topic); non-forum units all have ``topic_id is
+    None``, so this never affects them.
     """
     current: list[Unit] = []
     count = skipped = upto = 0
     strategy = Strategy.COPY
+    topic: int | None = None
 
     def emit() -> Batch:
-        return Batch(tuple(current), skipped, upto, strategy)
+        return Batch(tuple(current), skipped, upto, strategy, topic_id=topic)
 
     async for item in stream:
         if isinstance(item, Skip):
@@ -84,10 +91,12 @@ async def batches(
             continue
         limit = batch_size() if callable(batch_size) else batch_size
         wanted = route(item) if route is not None else Strategy.COPY
-        if current and (wanted is not strategy or count + len(item.messages) > limit):
+        if current and (
+            wanted is not strategy or item.topic_id != topic or count + len(item.messages) > limit
+        ):
             yield emit()
             current, count, skipped, upto = [], 0, 0, 0
-        strategy = wanted
+        strategy, topic = wanted, item.topic_id
         current.append(item)
         count += len(item.messages)
         if strategy is not Strategy.COPY:  # nothing can join it

@@ -127,6 +127,17 @@ def test_duration_mime_and_views() -> None:
     assert not passes(rule(views={"min": 0}), bare)
 
 
+def test_from_user_and_topic() -> None:
+    group_msg = msg("hi", from_user_id=5, topic_id=7)
+
+    assert passes(rule(from_user=[5, 9]), group_msg)
+    assert not passes(rule(from_user=[9]), group_msg)
+    assert passes(rule(topic=7), group_msg) and not passes(rule(topic=[1]), group_msg)
+    broadcast_msg = msg("hi")  # no sender/topic: the predicate is false, like size/views/mime
+    assert not passes(rule(from_user=[5]), broadcast_msg)
+    assert not passes(rule(topic=[7]), broadcast_msg)
+
+
 # ---- rules ----------------------------------------------------------------------------------
 
 

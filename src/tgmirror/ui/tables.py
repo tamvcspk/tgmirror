@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from tgmirror.core.gateway import ChannelInfo
+from tgmirror.core.gateway import ChannelInfo, TopicInfo
 from tgmirror.ui.messages import t
 
 
@@ -53,3 +53,21 @@ def print_channels(console: Console, channels: Sequence[ChannelInfo]) -> None:
         )
     console.print(table)
     console.print(t("channels.count", count=len(channels)))
+
+
+def topics_json(topics: Sequence[TopicInfo]) -> str:
+    return json.dumps([asdict(t) for t in topics], ensure_ascii=False, indent=2)
+
+
+def print_topics(console: Console, topics: Sequence[TopicInfo]) -> None:
+    if not topics:
+        console.print(t("topics.empty"))
+        return
+    table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    table.add_column(t("col.id"), no_wrap=True)
+    table.add_column(t("col.title"), overflow="fold")
+    table.add_column(t("col.closed"), justify="center")
+    for topic in topics:
+        table.add_row(str(topic.id), Text(topic.title), t("yes") if topic.closed else "")
+    console.print(table)
+    console.print(t("topics.count", count=len(topics)))

@@ -36,8 +36,6 @@ from tgmirror.engine.endpoints import (
     DestinationNotWritable,
     EndpointError,
     InvalidChannelTitle,
-    KindMismatch,
-    NewChannelUnsupported,
     SameChannel,
     SourceRestricted,
 )
@@ -115,16 +113,10 @@ def describe(exc: TgMirrorError) -> str:
                 ref=exc.ref,
                 matches=", ".join(channel_label(c) for c in exc.matches),
             )
-        case KindMismatch():
-            return t(
-                "err.kind_mismatch", src=t(f"kind.{exc.src.kind}"), dst=t(f"kind.{exc.dst.kind}")
-            )
         case SameChannel():
             return t("err.same_channel")
         case InvalidChannelTitle():
             return t(f"err.{exc.reason}")
-        case NewChannelUnsupported():
-            return t("err.new_unsupported", kind=t(f"kind.{exc.kind}"))
         case RunNotFound():
             return t("err.run_none") if exc.ref is None else t("err.run_not_found", ref=exc.ref)
         case ModeUnsupported():

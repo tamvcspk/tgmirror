@@ -19,6 +19,7 @@ from tgmirror.cli.commands import (
     retry,
     run,
     status,
+    topics,
 )
 from tgmirror.cli.errors import run as run_command
 from tgmirror.cli.runtime import Runtime, default_runtime
@@ -115,6 +116,7 @@ app.command("login")(auth.login)
 app.command("logout")(auth.logout)
 app.command("whoami")(auth.whoami)
 app.command("channels")(channels.channels)
+app.command("topics")(topics.topics)
 app.command("clone")(clone.clone)
 app.command("run")(run.run_clone)
 app.command("pause")(control.pause)

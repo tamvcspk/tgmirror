@@ -66,6 +66,12 @@ def _compile(rule: Rule) -> list[Predicate]:
     if rule.views is not None:
         views = rule.views
         checks.append(lambda m: _within(m.views, views))
+    if rule.from_user is not None:
+        senders = frozenset(rule.from_user)
+        checks.append(lambda m: m.from_user_id in senders)
+    if rule.topic is not None:
+        topics = frozenset(rule.topic)
+        checks.append(lambda m: m.topic_id in topics)
     return checks
 
 

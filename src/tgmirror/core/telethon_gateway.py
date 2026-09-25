@@ -27,8 +27,15 @@ from telethon import TelegramClient, errors, helpers, types, utils
 from telethon.errors.common import InvalidBufferError
 from telethon.network import MTProtoSender
 from telethon.tl import custom
-from telethon.tl.functions.channels import CreateChannelRequest
-from telethon.tl.functions.messages import SearchRequest, SendMultiMediaRequest, UploadMediaRequest
+from telethon.tl.functions.channels import CreateChannelRequest, ToggleForumRequest
+from telethon.tl.functions.messages import (
+    CreateForumTopicRequest,
+    ForwardMessagesRequest,
+    GetForumTopicsRequest,
+    SearchRequest,
+    SendMultiMediaRequest,
+    UploadMediaRequest,
+)
 from telethon.tl.functions.upload import GetFileRequest, SaveBigFilePartRequest
 
 from tgmirror.core.auth import AccountInfo
@@ -66,6 +73,7 @@ from tgmirror.core.gateway import (
     Prepared,
     ServerFilter,
     SrcMessage,
+    TopicInfo,
     TransferPhase,
     Unit,
 )
@@ -337,6 +345,20 @@ def _title_and_quiz(message: custom.Message) -> tuple[str | None, bool]:
     return None, False
 
 
+def _topic_of(message: custom.Message) -> int | None:
+    """The forum topic a message belongs to (1 = General), or ``None`` outside a forum.
+
+    Phase 8, unverified on a real account (docs/06-lo-trinh.md, open question 9): a reply within a
+    topic carries ``reply_to_top_id``; the message that *defines* a topic (its first message) has
+    ``forum_topic`` set but no ``reply_to_top_id``, so it is its own topic and
+    ``reply_to_msg_id`` is the topic id instead.
+    """
+    reply_to = message.reply_to
+    if reply_to is None or not getattr(reply_to, "forum_topic", False):
+        return None
+    return reply_to.reply_to_top_id or reply_to.reply_to_msg_id
+
+
 def src_message(message: object) -> SrcMessage | None:
     """Reduce a Telethon message to ``SrcMessage``; ``None`` for anything that is not a message."""
     # Telethon's patched MessageEmpty is a custom.Message too, so it has to be excluded by name
@@ -362,7 +384,25 @@ def src_message(message: object) -> SrcMessage | None:
         views=message.views,
         quiz_unanswered=quiz_unanswered,
         title=title,
+        topic_id=_topic_of(message),
+        from_user_id=message.sender_id,
     )
+
+
+def _forward_result_ids(req: ForwardMessagesRequest, result: object) -> list[int | None]:
+    """Map a raw ``ForwardMessagesRequest`` result back to ``req.random_id`` order.
+
+    Mirrors the mapping Telethon's own ``forward_messages`` does internally (``random_id`` ->
+    ``UpdateMessageID.id``), without reaching into its private ``_get_response_message`` helper.
+    """
+    if isinstance(result, types.UpdateShort):
+        updates: Sequence[object] = [result.update]
+    elif isinstance(result, types.Updates | types.UpdatesCombined):
+        updates = result.updates
+    else:
+        updates = ()
+    random_to_id = {u.random_id: u.id for u in updates if isinstance(u, types.UpdateMessageID)}
+    return [random_to_id.get(rnd) for rnd in req.random_id]
 
 
 # ---- strategy B: captions and files ---------------------------------------------------------
@@ -442,12 +482,16 @@ def rewrite_caption(
     """The caption and its entities after ``policy`` (docs/02-cli-ux.md, "Caption handling")."""
     match policy.mode:
         case CaptionMode.NONE:
-            return "", []
+            text, kept = "", []
         case CaptionMode.APPEND:
-            return (f"{text}\n\n{policy.text}" if text else text), list(entities)
+            text, kept = (f"{text}\n\n{policy.text}" if text else text), list(entities)
         case CaptionMode.STRIP_LINKS:
-            return strip_source_links(text, entities, names)
-    return text, list(entities)
+            text, kept = strip_source_links(text, entities, names)
+        case _:
+            text, kept = text, list(entities)
+    if policy.hashtag:  # phase 8: appended last, whatever the mode did; Telegram parses it itself
+        text = f"{text}\n{policy.hashtag}" if text else policy.hashtag
+    return text, kept
 
 
 def _source_names(message: custom.Message) -> set[str]:
@@ -701,15 +745,55 @@ class TelethonGateway:
             raise NoPermission(f"{ref} is not a channel or group you can use")
         return info
 
-    async def create_channel(self, title: str, about: str = "") -> ChannelInfo:
+    async def create_channel(
+        self, title: str, about: str = "", kind: ChatKind = ChatKind.BROADCAST
+    ) -> ChannelInfo:
         with mapped_errors():
             result = await self._client(
-                CreateChannelRequest(title=title, about=about, broadcast=True)
+                CreateChannelRequest(title=title, about=about, broadcast=kind is ChatKind.BROADCAST)
+                if kind is ChatKind.BROADCAST
+                else CreateChannelRequest(title=title, about=about, megagroup=True)
             )
-        info = channel_info(result.chats[0])
-        if info is None:  # cannot happen for a fresh broadcast channel; fail loudly if it does
+            chat = result.chats[0]
+            if kind is ChatKind.FORUM:
+                await self._client(ToggleForumRequest(chat, enabled=True, tabs=False))
+                chat = await self._client.get_entity(utils.get_peer_id(chat))
+        info = channel_info(chat)
+        if info is None:  # cannot happen for a fresh channel; fail loudly if it does
             raise GatewayError("Telegram returned an unexpected result for the new channel")
         return info
+
+    async def list_topics(self, src: int) -> list[TopicInfo]:
+        peer = await self._peer(src)
+        topics: list[TopicInfo] = []
+        offset_date, offset_id, offset_topic = None, 0, 0
+        with mapped_errors():
+            while True:
+                result = await self._client(
+                    GetForumTopicsRequest(
+                        peer=peer,
+                        offset_date=offset_date,
+                        offset_id=offset_id,
+                        offset_topic=offset_topic,
+                        limit=100,
+                    )
+                )
+                page = [t for t in result.topics if isinstance(t, types.ForumTopic)]
+                topics.extend(TopicInfo(t.id, t.title, closed=bool(t.closed)) for t in page)
+                if len(page) < 100:
+                    break
+                last = page[-1]
+                offset_date, offset_id, offset_topic = last.date, last.top_message, last.id
+        return topics
+
+    async def create_topic(self, dst: int, title: str) -> int:
+        peer = await self._peer(dst)
+        with mapped_errors():
+            result = await self._client(CreateForumTopicRequest(peer=peer, title=title))
+        for update in result.updates:
+            if isinstance(update, types.UpdateMessageID):
+                return update.id
+        raise GatewayError("Telegram returned no id for the new topic")
 
     async def last_message_id(self, chat: int) -> int:
         peer = await self._peer(chat)
@@ -820,13 +904,24 @@ class TelethonGateway:
         found = await self._client.get_messages(peer, limit=1, offset_date=moment, reverse=True)
         return found[0].id if found else None
 
-    async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]:
+    async def copy_messages(
+        self, src: int, dst: int, ids: list[int], *, topic: int | None = None
+    ) -> list[int | None]:
         from_peer, to_peer = await self._peer(src), await self._peer(dst)
+        if topic is None:  # the well-verified path (docs/06-lo-trinh.md, spike 2)
+            with mapped_errors():
+                sent = await self._client.forward_messages(
+                    to_peer, ids, from_peer=from_peer, drop_author=True
+                )
+            return [None if m is None else m.id for m in sent]
+        # ``forward_messages`` has no topic parameter (docs/01-kien-truc.md, "Ánh xạ topic");
+        # phase 8, unverified on a real account.
+        req = ForwardMessagesRequest(
+            from_peer=from_peer, id=ids, to_peer=to_peer, drop_author=True, top_msg_id=topic
+        )
         with mapped_errors():
-            sent = await self._client.forward_messages(
-                to_peer, ids, from_peer=from_peer, drop_author=True
-            )
-        return [None if m is None else m.id for m in sent]
+            result = await self._client(req)
+        return _forward_result_ids(req, result)
 
     async def _peer(self, ref: int) -> object:
         """The input entity for ``ref``; chats we never saw in a dialog list are not accessible."""
@@ -858,7 +953,7 @@ class TelethonGateway:
         return Prepared(unit, (), _Fetched(tuple(_Item(m) for m in messages)))
 
     async def send_by_reference(
-        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+        self, dst: int, prepared: Prepared, caption: CaptionPolicy, *, topic: int | None = None
     ) -> list[int]:
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
@@ -876,7 +971,12 @@ class TelethonGateway:
         with mapped_errors(), _media_reusable():
             if len(media) > 1:
                 sent = await self._client.send_file(
-                    peer, media, caption=texts, formatting_entities=entity_lists, parse_mode=None
+                    peer,
+                    media,
+                    caption=texts,
+                    formatting_entities=entity_lists,
+                    parse_mode=None,
+                    reply_to=topic,
                 )
                 return [int(m.id) for m in sent]
             one = await self._client.send_file(
@@ -885,6 +985,7 @@ class TelethonGateway:
                 caption=texts[0],
                 formatting_entities=entity_lists[0] or None,
                 parse_mode=None,
+                reply_to=topic,
             )
             return [int(one.id)]
 
@@ -1193,14 +1294,16 @@ class TelethonGateway:
         prepared: Prepared,
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None = None,
+        *,
+        topic: int | None = None,
     ) -> list[int]:
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
         peer = await self._peer(dst)
         with mapped_errors():
             if len(fetched.items) > 1:
-                return await self._send_album(peer, fetched.items, caption, on_transfer)
-            return [await self._send_one(peer, fetched.items[0], caption, on_transfer)]
+                return await self._send_album(peer, fetched.items, caption, on_transfer, topic)
+            return [await self._send_one(peer, fetched.items[0], caption, on_transfer, topic)]
 
     async def _send_one(
         self,
@@ -1208,6 +1311,7 @@ class TelethonGateway:
         item: _Item,
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None = None,
+        topic: int | None = None,
     ) -> int:
         message = item.message
         text, entities = message.message or "", list(message.entities or [])
@@ -1246,19 +1350,31 @@ class TelethonGateway:
                 formatting_entities=entities or None,
                 parse_mode=None,  # the entities are the formatting: nothing to parse as markdown
                 thumb=None if item.thumb is None else str(item.thumb),
+                reply_to=topic,
                 **extra,
             )
         elif media is None or isinstance(media, types.MessageMediaWebPage):
+            # ``CaptionPolicy.mode`` never touches plain text (it is the content itself), but a
+            # topic hashtag (phase 8) still applies: it is tgmirror's own addition, not part of
+            # the original message.
+            if caption.hashtag:
+                text = f"{text}\n{caption.hashtag}" if text else caption.hashtag
             sent = await self._client.send_message(
                 peer,
                 text,
                 formatting_entities=entities or None,
                 parse_mode=None,
                 link_preview=media is not None,
+                reply_to=topic,
             )
         elif isinstance(media, _SELF_CONTAINED):
             sent = await self._client.send_message(
-                peer, text, file=media, formatting_entities=entities or None, parse_mode=None
+                peer,
+                text,
+                file=media,
+                formatting_entities=entities or None,
+                parse_mode=None,
+                reply_to=topic,
             )
         else:
             raise PerMessage(f"unsupported_media:{type(media).__name__}")
@@ -1333,6 +1449,7 @@ class TelethonGateway:
         items: Sequence[_Item],
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None = None,
+        topic: int | None = None,
     ) -> list[int]:
         total = _album_share(items)
         album_id = items[0].message.id
@@ -1347,16 +1464,25 @@ class TelethonGateway:
             fm = await self._album_media(peer, item, progress)
             done += _album_share((item,))
             media.append(types.InputSingleMedia(fm, message=text, entities=entities or None))
-        result = await self._client(SendMultiMediaRequest(peer, multi_media=media))
+        reply_to = (
+            None
+            if topic is None
+            else types.InputReplyToMessage(reply_to_msg_id=topic, top_msg_id=topic)
+        )
+        result = await self._client(
+            SendMultiMediaRequest(peer, multi_media=media, reply_to=reply_to)
+        )
         has_updates = types.Updates | types.UpdatesCombined
         updates = result.updates if isinstance(result, has_updates) else []
         id_map = {u.random_id: u.id for u in updates if isinstance(u, types.UpdateMessageID)}
         return [id_map[m.random_id] for m in media]
 
-    async def send_text(self, dst: int, text: str) -> int:
+    async def send_text(self, dst: int, text: str, *, topic: int | None = None) -> int:
         peer = await self._peer(dst)
         with mapped_errors():
-            sent = await self._client.send_message(peer, text, parse_mode=None, link_preview=False)
+            sent = await self._client.send_message(
+                peer, text, parse_mode=None, link_preview=False, reply_to=topic
+            )
         return int(sent.id)
 
 

@@ -8,9 +8,7 @@ from tgmirror.engine.endpoints import (
     ChannelNotFound,
     DestinationNotWritable,
     InvalidChannelTitle,
-    KindMismatch,
     NewChannelSpec,
-    NewChannelUnsupported,
     SameChannel,
     SourceRestricted,
     eligible_destinations,
@@ -66,16 +64,19 @@ def test_find_channel_rejects_duplicate_titles(gateway: FakeGateway) -> None:
     assert len(caught.value.matches) == 2
 
 
-def test_eligible_destinations_are_writable_same_kind_and_not_the_source(
+def test_eligible_destinations_are_writable_and_not_the_source(
     gateway: FakeGateway,
 ) -> None:
+    """Any kind may pair with any kind since "same kind only" was dropped: cross-kind clones
+    (e.g. group -> broadcast) are allowed, only forum topics are special (``topic_loss``, see
+    ``test_plan_warns_about_topic_loss_leaving_a_forum``)."""
     src = gateway.add_channel("src")
     ok = gateway.add_channel("ok")
+    other_kind = gateway.add_channel("a group", kind=ChatKind.SUPERGROUP)
     gateway.add_channel("read only", can_post=False)
     gateway.add_channel("not admin", is_admin=False)
-    gateway.add_channel("a group", kind=ChatKind.SUPERGROUP)
 
-    assert eligible_destinations(src, list(gateway.channels.values())) == [ok]
+    assert eligible_destinations(src, list(gateway.channels.values())) == [ok, other_kind]
 
 
 def test_plan_with_existing_destination(gateway: FakeGateway) -> None:
@@ -130,12 +131,30 @@ def test_plan_rejects_same_channel(gateway: FakeGateway) -> None:
         plan_endpoints(src, src)
 
 
-def test_plan_rejects_kind_mismatch(gateway: FakeGateway) -> None:
+def test_plan_allows_a_cross_kind_existing_destination(gateway: FakeGateway) -> None:
     src = gateway.add_channel("src")
     group = gateway.add_channel("group", kind=ChatKind.SUPERGROUP)
 
-    with pytest.raises(KindMismatch):
-        plan_endpoints(src, group)
+    plan = plan_endpoints(src, group)
+
+    assert plan.dst == group and plan.warnings == ()  # only a forum source warns (topic_loss)
+
+
+@pytest.mark.parametrize("dst_kind", [ChatKind.BROADCAST, ChatKind.SUPERGROUP, ChatKind.GROUP])
+def test_plan_warns_about_topic_loss_leaving_a_forum(
+    gateway: FakeGateway, dst_kind: ChatKind
+) -> None:
+    src = gateway.add_channel("src", kind=ChatKind.FORUM)
+    dst = gateway.add_channel("dst", kind=dst_kind)
+
+    assert plan_endpoints(src, dst).warnings == ("topic_loss",)
+
+
+def test_plan_does_not_warn_forum_to_forum(gateway: FakeGateway) -> None:
+    src = gateway.add_channel("src", kind=ChatKind.FORUM)
+    dst = gateway.add_channel("dst", kind=ChatKind.FORUM)
+
+    assert plan_endpoints(src, dst).warnings == ()
 
 
 @pytest.mark.parametrize("flags", [{"can_post": False}, {"is_admin": False}])
@@ -149,14 +168,26 @@ def test_plan_rejects_destination_without_admin_post_rights(
         plan_endpoints(src, dst)
 
 
-@pytest.mark.parametrize("kind", [ChatKind.SUPERGROUP, ChatKind.FORUM, ChatKind.GROUP])
-def test_new_destination_is_broadcast_only_until_phase_8(
-    gateway: FakeGateway, kind: ChatKind
+@pytest.mark.parametrize(
+    ("src_kind", "expected"),
+    [
+        (ChatKind.BROADCAST, ChatKind.BROADCAST),
+        (ChatKind.SUPERGROUP, ChatKind.SUPERGROUP),
+        (ChatKind.FORUM, ChatKind.FORUM),
+        (ChatKind.GROUP, ChatKind.SUPERGROUP),  # a basic group cannot be created via the API
+    ],
+)
+async def test_a_new_destination_mirrors_the_source_kind(
+    gateway: FakeGateway, src_kind: ChatKind, expected: ChatKind
 ) -> None:
-    src = gateway.add_channel("src", kind=kind)
+    src = gateway.add_channel("src", kind=src_kind)
 
-    with pytest.raises(NewChannelUnsupported):
-        plan_endpoints(src, NewChannelSpec("copy"))
+    plan = plan_endpoints(src, NewChannelSpec("copy"))
+    created = await materialize(gateway, plan)
+
+    assert created.created and created.dst.kind is expected
+    ((_, _, kind),) = [c.args for c in gateway.calls_to("create_channel")]
+    assert kind is expected
 
 
 @pytest.mark.parametrize(
@@ -188,7 +219,9 @@ async def test_materialize_creates_only_when_asked(gateway: FakeGateway) -> None
 
     created = await materialize(gateway, plan_endpoints(src, NewChannelSpec("Copy", "about")))
     assert created.created and created.dst.title == "Copy"
-    assert [c.args for c in gateway.calls_to("create_channel")] == [("Copy", "about")]
+    assert [c.args for c in gateway.calls_to("create_channel")] == [
+        ("Copy", "about", ChatKind.BROADCAST)
+    ]
 
 
 async def test_materialize_lets_gateway_errors_through(gateway: FakeGateway) -> None:

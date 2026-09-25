@@ -47,15 +47,6 @@ class DestinationNotWritable(EndpointError):
         self.dst = dst
 
 
-class KindMismatch(EndpointError):
-    """An existing destination must be the same kind as the source (decided 2026-09-19)."""
-
-    def __init__(self, src: ChannelInfo, dst: ChannelInfo) -> None:
-        super().__init__(f"source is a {src.kind}, destination is a {dst.kind}")
-        self.src = src
-        self.dst = dst
-
-
 class SameChannel(EndpointError):
     def __init__(self) -> None:
         super().__init__("source and destination are the same chat")
@@ -66,14 +57,6 @@ class InvalidChannelTitle(EndpointError):
         super().__init__(reason)
         # message key of ui/messages.py minus "err.": title_empty | title_too_long | about_too_long
         self.reason = reason
-
-
-class NewChannelUnsupported(EndpointError):
-    """Creating a destination of this kind is not implemented yet (phase 8)."""
-
-    def __init__(self, kind: ChatKind) -> None:
-        super().__init__(f"cannot create a new {kind} destination yet")
-        self.kind = kind
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +73,12 @@ class Plan:
     it (D3, as changed 2026-09-20): either this account administers it, or the user said so with
     ``--yes-i-administer-this-channel`` although it does not (they own it through another account).
     Only ``--mode reupload`` can copy it.
+
+    ``warnings`` also carries ``"topic_loss"`` when the source is a forum and an existing (not
+    freshly created) destination is not: the destination cannot hold topics, so every topic gets
+    collapsed (``engine/topics.py``, ``RunOptions.topic_as_hashtag``; ``cli/commands/clone.py``
+    turns this into a wizard question or a confirmation depending on whether the run's mode can
+    still rewrite text).
     """
 
     src: ChannelInfo
@@ -137,8 +126,12 @@ def find_channel(channels: Sequence[ChannelInfo], ref: str) -> ChannelInfo:
 
 
 def eligible_destinations(src: ChannelInfo, channels: Sequence[ChannelInfo]) -> list[ChannelInfo]:
-    """Existing chats the wizard may offer as destination for ``src``."""
-    return [c for c in channels if c.id != src.id and _writable_same_kind(src, c)]
+    """Existing chats the wizard may offer as destination for ``src``.
+
+    Any kind may pair with any kind (decided after 2026-09-19's "same kind only": ``drop_author``
+    already strips sender identity for every kind, so nothing else about kind is structurally
+    incompatible except forum topics, which ``plan_endpoints`` warns about separately)."""
+    return [c for c in channels if c.id != src.id and c.is_admin and c.can_post]
 
 
 def validate_new_channel(spec: NewChannelSpec) -> NewChannelSpec:
@@ -173,29 +166,33 @@ def plan_endpoints(
         protected = True
 
     if isinstance(dst, NewChannelSpec):
-        if src.kind is not ChatKind.BROADCAST:
-            raise NewChannelUnsupported(src.kind)
         return Plan(src, validate_new_channel(dst), tuple(warnings), protected)
 
     if dst.id == src.id:
         raise SameChannel
-    if dst.kind is not src.kind:
-        raise KindMismatch(src, dst)
     if not (dst.is_admin and dst.can_post):
         raise DestinationNotWritable(dst)
+    if src.kind is ChatKind.FORUM and dst.kind is not ChatKind.FORUM:
+        warnings.append("topic_loss")
     return Plan(src, dst, tuple(warnings), protected)
 
 
 async def materialize(gateway: TelegramGateway, plan: Plan) -> Endpoints:
     """Create the destination if the plan asks for one."""
     if isinstance(plan.dst, NewChannelSpec):
-        dst = await gateway.create_channel(plan.dst.title, plan.dst.about)
+        kind = _dst_kind_for(plan.src.kind)
+        dst = await gateway.create_channel(plan.dst.title, plan.dst.about, kind=kind)
         return Endpoints(plan.src, dst, created=True, warnings=plan.warnings)
     return Endpoints(plan.src, plan.dst, created=False, warnings=plan.warnings)
 
 
-def _writable_same_kind(src: ChannelInfo, dst: ChannelInfo) -> bool:
-    return dst.kind is src.kind and dst.is_admin and dst.can_post
+def _dst_kind_for(src_kind: ChatKind) -> ChatKind:
+    """What kind a brand-new destination should be for a source of this kind.
+
+    Mirrors the source, except a basic group cannot be created through the API (only megagroups),
+    so a ``GROUP`` source gets a fresh ``SUPERGROUP`` instead (docs/01-kien-truc.md, "Loại nguồn").
+    """
+    return ChatKind.SUPERGROUP if src_kind is ChatKind.GROUP else src_kind
 
 
 def _is_int(text: str) -> bool:

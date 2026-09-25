@@ -69,15 +69,17 @@ async def insert_pending(
     moves to the current run when the batch is settled (``finish_batch``).
     """
     rows = [
-        (mirror_id, m.id, m.grouped_id, MsgStatus.PENDING, batch_id, run_id, ts)
+        (mirror_id, m.id, m.grouped_id, m.topic_id, MsgStatus.PENDING, batch_id, run_id, ts)
         for unit in units
         for m in unit.messages
     ]
     await db.executemany(
-        "INSERT INTO msg_map(mirror_id, src_msg_id, grouped_id, status, batch_id, run_id, ts) "
-        "VALUES(?, ?, ?, ?, ?, ?, ?) "
+        "INSERT INTO msg_map(mirror_id, src_msg_id, grouped_id, src_topic_id, status, "
+        "  batch_id, run_id, ts) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(mirror_id, src_msg_id) DO UPDATE SET "
-        "  dst_msg_id = NULL, grouped_id = excluded.grouped_id, status = excluded.status, "
+        "  dst_msg_id = NULL, grouped_id = excluded.grouped_id, "
+        "  src_topic_id = excluded.src_topic_id, status = excluded.status, "
         "  reason = CASE WHEN msg_map.status = 'failed' THEN msg_map.reason END, "
         "  batch_id = excluded.batch_id, ts = excluded.ts "
         "WHERE msg_map.status != 'done'",

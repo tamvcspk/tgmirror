@@ -55,6 +55,15 @@ class ChannelInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class TopicInfo:
+    """A forum topic (docs/01-kien-truc.md, "Ánh xạ topic"). ``id`` 1 is always General."""
+
+    id: int
+    title: str
+    closed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class SrcMessage:
     """A source message reduced to what the engine and the filters need."""
 
@@ -71,6 +80,8 @@ class SrcMessage:
     views: int | None = None
     quiz_unanswered: bool = False  # a quiz whose right answer this account cannot see yet
     title: str | None = None  # game/invoice title or poll question, for a placeholder text
+    topic_id: int | None = None  # forum topic this message belongs to (1 = General); phase 8
+    from_user_id: int | None = None  # sender of a group/forum message; phase 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +112,10 @@ class Unit:
     @property
     def is_album(self) -> bool:
         return self.grouped_id is not None
+
+    @property
+    def topic_id(self) -> int | None:
+        return self.messages[0].topic_id
 
 
 ALBUM_MARGIN = 10  # an album has at most 10 messages, with consecutive ids
@@ -144,11 +159,19 @@ class CaptionMode(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class CaptionPolicy:
-    """How captions are rewritten while re-sending. Only captions of media messages: the text of a
-    message that has no media is the content itself and is always sent as it is."""
+    """How captions are rewritten while re-sending. ``mode``/``text`` only ever touch captions of
+    media messages: the text of a message that has no media is the content itself and is always
+    sent as it is.
+
+    ``hashtag`` (phase 8, ``RunOptions.topic_as_hashtag``) is different: it is appended last,
+    after whatever ``mode`` produced, to *any* text that ends up being sent (media caption or
+    plain text alike) — except self-contained media (poll, location, contact, geo, dice) which
+    have no caption slot to append to at all.
+    """
 
     mode: CaptionMode = CaptionMode.KEEP
     text: str = ""  # what ``APPEND`` adds
+    hashtag: str | None = None  # e.g. "#general", appended last regardless of ``mode``
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +227,11 @@ class MessageReader(Protocol):
         """
         ...
 
+    async def list_topics(self, src: int) -> list[TopicInfo]:
+        """A forum's topics (phase 8), one paced read request. ``engine/topics.py`` uses it to
+        name a destination topic the first time it must create one."""
+        ...
+
     async def fetch(self, src: int, unit: Unit) -> Prepared:
         """Sending by reference, the read half: read the unit's messages again so their file
         references are fresh. Nothing is downloaded (``Prepared.files`` is empty). Raises
@@ -231,8 +259,22 @@ class TelegramGateway(Protocol):
 
     async def get_channel(self, ref: int) -> ChannelInfo: ...
 
-    async def create_channel(self, title: str, about: str = "") -> ChannelInfo:
-        """Create a broadcast channel the account administers (other kinds: phase 8)."""
+    async def create_channel(
+        self, title: str, about: str = "", kind: ChatKind = ChatKind.BROADCAST
+    ) -> ChannelInfo:
+        """Create a channel/supergroup/forum the account administers.
+
+        ``kind`` is never ``ChatKind.GROUP``: basic groups cannot be created through this API
+        (``engine/endpoints.py`` asks for ``SUPERGROUP`` instead when the source is a ``GROUP``).
+        """
+        ...
+
+    async def list_topics(self, src: int) -> list[TopicInfo]:
+        """As ``MessageReader.list_topics``."""
+        ...
+
+    async def create_topic(self, dst: int, title: str) -> int:
+        """Create a topic in a forum destination and return its id (forum destinations only)."""
         ...
 
     def iter_messages(
@@ -257,7 +299,9 @@ class TelegramGateway(Protocol):
         """
         ...
 
-    async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]:
+    async def copy_messages(
+        self, src: int, dst: int, ids: list[int], *, topic: int | None = None
+    ) -> list[int | None]:
         """Strategy A: server-side copy without author. Result is aligned with ``ids``.
 
         A call that returns normally is authoritative: ``None`` means Telegram created no message
@@ -265,6 +309,9 @@ class TelegramGateway(Protocol):
         rejects the request because of the ids themselves (nothing was created), so the caller can
         retry the units one by one. If the call is cut off (``Transient``) the outcome is unknown
         and only reconcile can tell (docs/04-state-checkpoint.md).
+
+        ``topic``, when given, is the destination topic id (phase 8): the messages land there
+        instead of the forum's General topic.
         """
         ...
 
@@ -279,13 +326,14 @@ class TelegramGateway(Protocol):
         ...
 
     async def send_by_reference(
-        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+        self, dst: int, prepared: Prepared, caption: CaptionPolicy, *, topic: int | None = None
     ) -> list[int]:
         """Sending by reference, the write half: post the unit as new messages by handing
         Telegram the id of each file it already stores, so nothing is downloaded or uploaded
         (an album stays one album). Returns the new ids aligned with ``prepared.unit``;
         ``caption`` rewrites the captions. Raises ``FileRefExpired`` when the media cannot be
-        sent this way (the reference expired, or Telegram will not reuse it)."""
+        sent this way (the reference expired, or Telegram will not reuse it). ``topic`` targets a
+        destination topic (phase 8)."""
         ...
 
     async def upload_prepared(
@@ -304,14 +352,17 @@ class TelegramGateway(Protocol):
         prepared: Prepared,
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None = None,
+        *,
+        topic: int | None = None,
     ) -> list[int]:
         """Strategy B, the write half: send the unit as new messages (one album for an album, text
         for text, the poll/location/contact itself for those) and return their ids in the
         destination, aligned with ``prepared.unit``. ``caption`` rewrites the captions of media;
         ``on_transfer`` hears how far the upload is. A unit already ``uploaded`` is only
-        posted."""
+        posted. ``topic`` targets a destination topic (phase 8)."""
         ...
 
-    async def send_text(self, dst: int, text: str) -> int:
-        """Post a plain text message (the stub that stands for what cannot be copied)."""
+    async def send_text(self, dst: int, text: str, *, topic: int | None = None) -> int:
+        """Post a plain text message (the stub that stands for what cannot be copied). ``topic``
+        targets a destination topic (phase 8)."""
         ...

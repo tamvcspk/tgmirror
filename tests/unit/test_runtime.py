@@ -23,6 +23,7 @@ def a_run() -> Run:
         src_id=-1,
         src_title="A",
         src_kind=ChatKind.BROADCAST,
+        dst_kind=ChatKind.BROADCAST,
         dst_id=-2,
         dst_title="B",
         mode="copy",

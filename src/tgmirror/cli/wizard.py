@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tgmirror.cli.errors import describe
-from tgmirror.core.gateway import CaptionMode, ChannelInfo, MediaKind
+from tgmirror.core.gateway import CaptionMode, ChannelInfo, MediaKind, TopicInfo
 from tgmirror.engine.endpoints import (
     InvalidChannelTitle,
     NewChannelSpec,
@@ -96,6 +96,12 @@ async def pick_resume(prompter: Prompter, copied: int) -> bool:
     )
 
 
+async def pick_topic_as_hashtag(prompter: Prompter) -> bool:
+    """Phase 8: the source is a forum, the destination is not, and the run can rewrite text —
+    keep each topic's name as a hashtag instead of dropping it silently. Default yes."""
+    return await prompter.confirm(t("clone.topic_as_hashtag"), True)
+
+
 @dataclass(frozen=True, slots=True)
 class StrategyChoice:
     """Step 4: the values ``--mode``, ``--caption``, ``--caption-text`` and the strategy B flags
@@ -165,11 +171,15 @@ async def pick_strategy(prompter: Prompter, *, protected: bool) -> StrategyChoic
     )
 
 
-async def pick_filters(prompter: Prompter, *, can_keep: bool = False) -> FilterSpec | None:
+async def pick_filters(
+    prompter: Prompter, *, can_keep: bool = False, topics: Sequence[TopicInfo] = ()
+) -> FilterSpec | None:
     """Step 3: no filter, a few criteria, or a YAML file. A rejected answer asks again.
 
     ``can_keep`` (the pair was cloned before) adds the first choice, "keep the filter of the
-    previous run", answered with ``None`` like giving no filter flag at all.
+    previous run", answered with ``None`` like giving no filter flag at all. ``topics`` (already
+    fetched by the caller when the source is a forum, phase 8) adds a topic checkbox to the
+    criteria step.
     """
     choices = [
         Choice(t("filter.none"), "none"),
@@ -185,7 +195,9 @@ async def pick_filters(prompter: Prompter, *, can_keep: bool = False) -> FilterS
         return FilterSpec()
     for attempt in range(1, MAX_FILTER_ATTEMPTS + 1):
         try:
-            return await (_ask_file(prompter) if how == "file" else _ask_criteria(prompter))
+            return await (
+                _ask_file(prompter) if how == "file" else _ask_criteria(prompter, topics=topics)
+            )
         except FilterError as exc:
             if attempt == MAX_FILTER_ATTEMPTS:
                 raise
@@ -197,7 +209,7 @@ def _words(text: str) -> list[str]:
     return [w.strip() for w in text.split(",") if w.strip()]
 
 
-async def _ask_criteria(prompter: Prompter) -> FilterSpec:
+async def _ask_criteria(prompter: Prompter, *, topics: Sequence[TopicInfo] = ()) -> FilterSpec:
     """The same values the flags carry, so ``from_flags`` validates them the same way."""
     media = await prompter.checkbox(
         t("filter.ask_media"), [Choice(kind.value, kind.value) for kind in MediaKind]
@@ -208,6 +220,11 @@ async def _ask_criteria(prompter: Prompter) -> FilterSpec:
     until = (await prompter.text(t("filter.ask_until"))).strip()
     min_size = (await prompter.text(t("filter.ask_min_size"))).strip()
     max_size = (await prompter.text(t("filter.ask_max_size"))).strip()
+    picked_topics: list[int] = []
+    if topics:
+        picked_topics = await prompter.checkbox(
+            t("filter.ask_topics"), [Choice(topic.title, topic.id) for topic in topics]
+        )
     return from_flags(
         FlagFilters(
             media=",".join(media) or None,
@@ -217,6 +234,7 @@ async def _ask_criteria(prompter: Prompter) -> FilterSpec:
             until=until or None,
             min_size=min_size or None,
             max_size=max_size or None,
+            topic=picked_topics,
         )
     )
 

@@ -163,12 +163,14 @@ class Rig:
         original = self.gw.copy_messages
         counter = 0
 
-        async def wrapped(src: int, dst: int, ids: list[int]) -> list[int | None]:
+        async def wrapped(
+            src: int, dst: int, ids: list[int], *, topic: int | None = None
+        ) -> list[int | None]:
             nonlocal counter
             counter += 1
             if not after:
                 await hook(ids, counter)
-            result = await original(src, dst, ids)
+            result = await original(src, dst, ids, topic=topic)
             if after:
                 await hook(ids, counter)
             return result

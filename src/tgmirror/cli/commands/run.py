@@ -184,11 +184,10 @@ async def resume_flow(
 
 
 def pair_of(earlier: Run) -> tuple[ChannelInfo, ChannelInfo]:
-    """Source and destination of an earlier run, as ``begin_run`` takes them (a destination has
-    the kind of its source: that is how the pair was chosen)."""
+    """Source and destination of an earlier run, as ``begin_run`` takes them."""
     return (
         ChannelInfo(earlier.src_id, earlier.src_title, earlier.src_kind),
-        ChannelInfo(earlier.dst_id, earlier.dst_title, earlier.src_kind),
+        ChannelInfo(earlier.dst_id, earlier.dst_title, earlier.dst_kind),
     )
 
 

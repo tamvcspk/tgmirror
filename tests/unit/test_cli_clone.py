@@ -4,6 +4,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from tests.fakes import FakeGateway, ScriptedPrompter
+from tests.unit.test_cli_run import saved_runs
 from tgmirror.cli.app import app
 from tgmirror.cli.runtime import Runtime
 from tgmirror.core.errors import FloodWait
@@ -14,7 +15,7 @@ MakeRuntime = Callable[..., Runtime]
 
 
 def creations(gateway: FakeGateway) -> list[tuple[object, ...]]:
-    return [c.args for c in gateway.calls_to("create_channel")]
+    return [c.args[:2] for c in gateway.calls_to("create_channel")]
 
 
 # ---- flags (no terminal, never prompts) -----------------------------------------------------
@@ -139,6 +140,59 @@ def test_restricted_source_as_admin_warns_but_goes_on(
     assert len(creations(gateway)) == 1
 
 
+def test_typing_the_flag_verbatim_lets_a_non_admin_account_through(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """Interactive (menu or wizard): no CLI flag to type, so a dedicated question asks for the
+    flag's own name, verbatim — not a Yes/No click. Answering it right does the same as
+    ``--yes-i-administer-this-channel``."""
+    gateway.add_channel("Locked", noforwards=True, is_admin=False, can_post=False)
+    prompter = ScriptedPrompter(text=["--yes-i-administer-this-channel"], confirm=[True])
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Locked", "--dst-new", "Copy", "--mode", "reupload", "--yes"],
+        obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(creations(gateway)) == 1
+    assert [k for k, _ in prompter.asked] == ["text", "confirm"]  # ownership, then "go on?"
+
+
+def test_typing_anything_else_still_refuses_an_unadministered_source(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    gateway.add_channel("Locked", noforwards=True, is_admin=False, can_post=False)
+    prompter = ScriptedPrompter(text=["yes please"])  # not the flag, verbatim
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Locked", "--dst-new", "Copy", "--mode", "reupload", "--yes"],
+        obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True),
+    )
+
+    assert result.exit_code == 4
+    assert "Restrict saving content" in result.output
+    assert creations(gateway) == []
+
+
+def test_an_admin_account_is_never_asked_to_type_the_flag(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    gateway.add_channel("Mine", noforwards=True, is_admin=True)
+    prompter = ScriptedPrompter(confirm=[True])  # only the "go on?" question, no text prompt
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Mine", "--dst-new", "Copy", "--mode", "reupload", "--yes"],
+        obj=make_runtime(gateway=gateway, prompter=prompter, interactive=True),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [k for k, _ in prompter.asked] == ["confirm"]
+
+
 def test_destination_rules_exit_codes(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
     gateway.add_channel("Source")
     gateway.add_channel("Read only", can_post=False)
@@ -146,15 +200,18 @@ def test_destination_rules_exit_codes(make_runtime: MakeRuntime, gateway: FakeGa
     rt = make_runtime(gateway=gateway)
 
     read_only = runner.invoke(app, ["clone", "--src", "Source", "--dst", "Read only"], obj=rt)
+    # cross-kind is allowed since "same kind only" was dropped: full flags are consent enough
     group = runner.invoke(app, ["clone", "--src", "Source", "--dst", "Group"], obj=rt)
     same = runner.invoke(app, ["clone", "--src", "Source", "--dst", "Source"], obj=rt)
 
-    assert (read_only.exit_code, group.exit_code, same.exit_code) == (4, 2, 2)
+    assert (read_only.exit_code, group.exit_code, same.exit_code) == (4, 0, 2)
 
 
-def test_new_destination_for_a_group_source_is_not_available_yet(
+def test_a_new_destination_for_a_group_source_is_a_supergroup(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
+    """A basic group cannot be created through the API, so a new destination for a group source
+    is a supergroup instead (docs/01-kien-truc.md, "Loại nguồn")."""
     gateway.add_channel("Chat", kind=ChatKind.SUPERGROUP)
 
     result = runner.invoke(
@@ -163,8 +220,140 @@ def test_new_destination_for_a_group_source_is_not_available_yet(
         obj=make_runtime(gateway=gateway),
     )
 
-    assert result.exit_code == 2 and "phase 8" in result.output
-    assert creations(gateway) == []
+    assert result.exit_code == 0, result.output
+    assert len(creations(gateway)) == 1
+
+
+# ---- topic loss: forum source, non-forum destination (phase 8) ------------------------------
+
+
+def test_copy_mode_with_topic_loss_needs_yes_without_a_terminal(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """``--mode copy`` cannot rewrite anything, so topics are only ever dropped; without a
+    terminal that needs an explicit ``--yes`` (mirrors ``--fresh``'s usage-error shape)."""
+    gateway.add_channel("Forum", kind=ChatKind.FORUM)
+    gateway.add_channel("Broadcast")
+    rt = make_runtime(gateway=gateway)
+
+    refused = runner.invoke(
+        app, ["clone", "--src", "Forum", "--dst", "Broadcast", "--mode", "copy"], obj=rt
+    )
+    assert refused.exit_code == 2, refused.output
+    assert saved_runs(rt) == []
+
+    agreed = runner.invoke(
+        app,
+        ["clone", "--src", "Forum", "--dst", "Broadcast", "--mode", "copy", "--yes"],
+        obj=rt,
+    )
+    assert agreed.exit_code == 0, agreed.output
+    (run,) = saved_runs(rt)
+    assert run.options.topic_as_hashtag is False  # nothing can carry it under --mode copy
+
+
+def test_copy_mode_with_topic_loss_asks_on_a_terminal(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    gateway.add_channel("Forum", kind=ChatKind.FORUM)
+    gateway.add_channel("Broadcast")
+    prompter = ScriptedPrompter(confirm=[False])
+    rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+
+    declined = runner.invoke(
+        app, ["clone", "--src", "Forum", "--dst", "Broadcast", "--mode", "copy"], obj=rt
+    )
+
+    assert declined.exit_code == 1, declined.output
+    assert saved_runs(rt) == []
+
+
+def test_reupload_mode_defaults_topic_as_hashtag_to_yes_with_only_yes_given(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """A mode that can rewrite text gets the hashtag fallback by default; ``--yes`` alone (no
+    terminal to ask) takes that default instead of erroring."""
+    gateway.add_channel("Forum", kind=ChatKind.FORUM)
+    gateway.add_channel("Broadcast")
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Forum", "--dst", "Broadcast", "--mode", "reupload", "--yes"],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    (run,) = saved_runs(rt)
+    assert run.options.topic_as_hashtag is True
+
+
+def test_no_topic_as_hashtag_flag_turns_the_default_off(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    gateway.add_channel("Forum", kind=ChatKind.FORUM)
+    gateway.add_channel("Broadcast")
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(
+        app,
+        [
+            "clone",
+            "--src",
+            "Forum",
+            "--dst",
+            "Broadcast",
+            "--mode",
+            "reupload",
+            "--no-topic-as-hashtag",
+            "--yes",
+        ],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    (run,) = saved_runs(rt)
+    assert run.options.topic_as_hashtag is False
+
+
+def test_topic_as_hashtag_under_copy_mode_is_a_usage_error(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    gateway.add_channel("Forum", kind=ChatKind.FORUM)
+    gateway.add_channel("Broadcast")
+
+    result = runner.invoke(
+        app,
+        [
+            "clone",
+            "--src",
+            "Forum",
+            "--dst",
+            "Broadcast",
+            "--mode",
+            "copy",
+            "--topic-as-hashtag",
+            "--yes",
+        ],
+        obj=make_runtime(gateway=gateway),
+    )
+
+    assert result.exit_code == 2, result.output
+
+
+def test_forum_to_forum_has_no_topic_loss_warning_or_question(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    gateway.add_channel("Forum A", kind=ChatKind.FORUM)
+    gateway.add_channel("Forum B", kind=ChatKind.FORUM)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, ["clone", "--src", "Forum A", "--dst", "Forum B", "--yes"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "topic" not in result.output.lower()
+    (run,) = saved_runs(rt)
+    assert run.options.topic_as_hashtag is False
 
 
 def test_invalid_title_exits_2(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
@@ -237,9 +426,11 @@ def test_wizard_creates_the_same_channel_as_the_flags(
     assert flags.output == wizard.output
 
 
-def test_wizard_offers_only_eligible_destinations(
+def test_wizard_offers_only_writable_destinations(
     make_runtime: MakeRuntime, gateway: FakeGateway
 ) -> None:
+    """Any kind is offered (cross-kind is allowed); only "not writable" and "is the source
+    itself" still exclude a chat."""
     gateway.add_channel("Source")
     gateway.add_channel("Good target")
     gateway.add_channel("Read only", can_post=False)
@@ -253,10 +444,9 @@ def test_wizard_offers_only_eligible_destinations(
     assert result.exit_code == 0, result.output
     source_choices, destination_choices, _mode, _filter = prompter.select_labels
     assert len(source_choices) == 4  # every joined chat can be a source
-    assert [
-        c for c in destination_choices if "Read only" in c or "Group" in c or "Source" in c
-    ] == []
+    assert [c for c in destination_choices if "Read only" in c or "Source" in c] == []
     assert any("Good target" in c for c in destination_choices)
+    assert any("Group" in c for c in destination_choices)  # cross-kind is offered too
     assert creations(gateway) == []
 
 

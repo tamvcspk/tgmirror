@@ -38,7 +38,7 @@ async for d in client.iter_dialogs():
 `kind`: `broadcast` (`Channel.broadcast`), `forum` (`Channel.megagroup and Channel.forum`), `supergroup` (other `megagroup`), `group` (`Chat`). All four are valid sources; see `docs/01-kien-truc.md` ("Loại nguồn").
 
 - Rights come from the entity (`channel_info`): `is_admin = creator or admin_rights`; `can_post` = creator / `admin_rights.post_messages` for broadcast, admin or not restricted (`banned_rights`, `default_banned_rights`, honouring `until_date`) for groups. This costs no extra request per dialog; `get_permissions` would cost one each. Whether it matches Telegram for every kind is still unverified on a real account (spike 4).
-- Destination candidates: `is_admin and can_post` and same kind as the source (`engine.endpoints.eligible_destinations`). Hide the rest.
+- Destination candidates: `is_admin and can_post` and not the source itself (`engine.endpoints.eligible_destinations`) — any kind (phase 8 dropped "same kind as the source"; only forum → non-forum gets a `topic_loss` warning, `docs/01-kien-truc.md`). Hide the rest.
 - Cache entities; do not call `get_entity` in loops.
 
 ## Login
@@ -48,12 +48,23 @@ async for d in client.iter_dialogs():
 ## Creating a destination channel
 
 ```python
-from telethon.tl.functions.channels import CreateChannelRequest
-res = await client(CreateChannelRequest(title=title, about=about, broadcast=True))
+from telethon.tl.functions.channels import CreateChannelRequest, ToggleForumRequest
+res = await client(CreateChannelRequest(title=title, about=about, broadcast=True))  # broadcast
+res = await client(CreateChannelRequest(title=title, about=about, megagroup=True))  # supergroup/forum
 dst = res.chats[0]
 ```
 
+`kind` (phase 8, `engine/endpoints.py::_dst_kind_for`) decides `broadcast=` vs `megagroup=`; `ChatKind.FORUM` also calls `ToggleForumRequest(chat, enabled=True, tabs=False)` right after and re-fetches the entity (a fresh megagroup does not report `forum=True` until the toggle runs). `ChatKind.GROUP` never reaches `create_channel`: a basic group cannot be created via the API, so a new destination for a group source is a supergroup instead.
+
 Avatar copy (optional): download source photo, `client.upload_file(...)`, then `EditPhotoRequest`. New channels start private; making them public (username) is a separate, optional step and not part of v1.
+
+## Forum topics (phase 8)
+
+```python
+from telethon.tl.functions.messages import CreateForumTopicRequest, GetForumTopicsRequest
+```
+
+`list_topics`/`create_topic` live in `telethon_gateway.py` next to the other reads/writes; `GetForumTopicsRequest` paginates (100 at a time, `offset_date`/`offset_id`/`offset_topic` from the last page's last topic), `CreateForumTopicRequest` returns its new id via an `UpdateMessageID` in the result (found by scanning `result.updates`, not Telethon's private `_get_response_message`). Both are called only from `engine/topics.py::TopicResolver`, never directly from `engine/runner.py` (hard rule 1/8 — see `test_the_runner_reaches_telegram_only_through_the_flood_guard`, which requires every `self._gateway` use in `runner.py` to sit inside a `guard.write`/`guard.reader`/`guard.transfer` call; `TopicResolver` takes an already-guarded `create` callable instead of a raw gateway reference so it never trips this).
 
 ## Reading the source (ascending order)
 
@@ -83,14 +94,14 @@ sent = await client.forward_messages(dst, ids, from_peer=src, drop_author=True)
 - `count(src, min_id, filters)` is the run's analysis (`Runner._analyze`, docs/01 "Analyze và tiến độ"): raw `messages.search` requests with `limit=1`. Telegram applies the media filter but **ignores `min_id`/`max_id` when it counts** (spike 10), so the range is counted by *position*: `offset_id_offset` for `offset_id = x` is how many matches have an id `>= x`, and two positions bound the range (no position reported → the whole total, still an upper bound). Date bounds become ids as when reading, without the album margin. Telethon's own `get_messages(limit=0)` is no help: it ignores the range too. The answer is an *upper bound* (service messages counted, client-side filters not subtracted) and is capped by the id span in the runner.
 - `get_messages(src, ids)` (`client.get_messages(peer, ids=[...])`, at most 100 ids per call — the caller chunks) reads the messages `retry` must send again: it returns the ones that still exist, ascending; Telethon answers `None`/`MessageEmpty` for a deleted id and `src_message` drops it. Read from the Telethon 1.45 source, unverified on a real account.
 - `drop_author` (and `drop_media_captions`) exist in `forward_messages` since the Telethon version we require (`>=1.45`, checked in the spike); no raw `ForwardMessagesRequest` needed for broadcast/supergroup targets.
-- Forum targets: `forward_messages` has no topic parameter, so the gateway calls `ForwardMessagesRequest(..., top_msg_id=<dst topic>)` itself (still inside the gateway + limiter). One call = one destination topic; the batcher cuts a batch when the topic changes. Topic mapping rules: `docs/01-kien-truc.md`. Unverified until the phase 8 spike.
+- Forum targets (phase 8, done): `forward_messages` has no topic parameter, so `copy_messages` keeps it only for the no-topic case (already verified since phase 2) and calls raw `ForwardMessagesRequest(..., top_msg_id=<dst topic>)` itself when a topic is given (still inside the gateway + limiter); `_forward_result_ids` maps the result back to `random_id` order by hand (mirrors Telethon's own private `_get_response_message`, without calling it — keeps it off `PRIVATE_ON_THE_CLIENT`). `send_prepared`/`send_by_reference`/`send_text` pass `reply_to=<dst topic id>` (Telethon's public API has no `top_msg_id` kwarg on these, only `reply_to_msg_id`; the topic's own defining message id stands in for it). One call = one destination topic; `engine/batcher.py` cuts a batch when `Unit.topic_id` changes. Topic mapping (`engine/topics.py::TopicResolver`, lazy creation) and routing rules: `docs/01-kien-truc.md`, "Đích khác loại nguồn"/"Ánh xạ topic". **Still unverified on a real account** (open question 9, `docs/06-lo-trinh.md`): does `top_msg_id`/`reply_to` actually land the message in the right topic, does a message with no topic default to General.
 - Batch size defaults to 20, hard max 100.
 - `CHAT_FORWARDS_RESTRICTED` / `ChatForwardsRestrictedError` → apply decision D3 (below), do not "work around" it.
 
 ## noforwards (decision D3)
 
 Before a clone starts (`engine/endpoints.py::plan_endpoints`, then `cli/commands/clone.py::_confirm_protected`): `src.noforwards` true →
-- this account is not creator/admin of the source: refuse with a clear message that names `--yes-i-administer-this-channel` (exit 4). With that flag it goes on, with `warn.noforwards_unadministered`: the user says they own the channel through another account and takes full responsibility (decision D3 as changed 2026-09-20; tgmirror cannot check the claim). The prompt does not do it: only the flag.
+- this account is not creator/admin of the source: refuse with a clear message that names `--yes-i-administer-this-channel` (exit 4). With that flag it goes on, with `warn.noforwards_unadministered`: the user says they own the channel through another account and takes full responsibility (decision D3 as changed 2026-09-20; tgmirror cannot check the claim). A plain Yes/No prompt does not do it. **Refined 2026-09-25**: in an interactive flow with no command line to type the flag on (classic wizard or the full-screen menu), `CloneFlow._confirm_unadministered` asks the user to type the flag's own name verbatim into a text prompt (`clone.confirm_unadministered`) — the same deliberate act as typing it as a flag, not a click. Anything else, or Esc, is a decline and falls through to the ordinary `SourceRestricted` refusal. Non-interactive: unchanged, only the real flag works.
 - user is admin: tell them they can turn off "Restrict saving content" temporarily; `--mode reupload` is allowed only after the user's own confirmation: the prompt (default no) or `--yes-i-administer-this-channel`. `--yes` does **not** count, and without a terminal and without the flag it is exit 2. It happens before the destination is created or anything is stored.
 - `engine/runs.py::begin_run` re-reads the source before any run that could re-upload (`mode` reupload, or `auto` with `--caption` other than `keep`), so `run`/`retry`, which never go through `plan_endpoints`, cannot copy a source that became protected without the user's statement (`RunOptions.protected_ack`, recorded by `clone`, carried by `run`/`retry`): not an admin → `SourceRestricted`, an admin → `NeedsAcknowledgement`. With the statement the run goes on even if the account has since lost admin rights. Every run that relies on it prints `warn.responsibility` (`cli/commands/run.py::execute`).
 

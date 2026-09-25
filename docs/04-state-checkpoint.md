@@ -1,6 +1,6 @@
 # 04 — State, checkpoint, delta
 
-Một file SQLite (`WAL` mode, `foreign_keys=ON`, `busy_timeout=5000` để `pause`/`stop` từ process khác không bị lỗi khóa). Phiên bản schema nằm ở `PRAGMA user_version`; `store/schema.sql` là phiên bản 1, các thay đổi sau thêm migration đánh số đăng ký ở `store/db.py::default_migrations` (mỗi migration chạy trong một transaction, có test nâng cấp từ phiên bản trước).
+Một file SQLite (`WAL` mode, `foreign_keys=ON`, `busy_timeout=5000` để `pause`/`stop` từ process khác không bị lỗi khóa). Phiên bản schema nằm ở `PRAGMA user_version`; `store/schema.sql` là phiên bản 1, các thay đổi sau thêm migration đánh số đăng ký ở `store/db.py::default_migrations` (mỗi migration chạy trong một transaction, có test nâng cấp từ phiên bản trước). Phiên bản 2 (phase 8, 2026-09-25): thêm `mirrors.dst_kind`, backfill từ `src_kind` cho các cặp có sẵn.
 
 ## Hai thứ, chỉ một thứ người dùng thấy
 
@@ -22,6 +22,7 @@ CREATE TABLE mirrors (                      -- điểm kiểm tra của một c�
   src_kind      TEXT NOT NULL,              -- broadcast|supergroup|forum|group
   dst_id        INTEGER NOT NULL,
   dst_title     TEXT,
+  dst_kind      TEXT NOT NULL,              -- v2 (phase 8): không còn ép phải bằng src_kind
   mode          TEXT NOT NULL,              -- auto|copy|reupload (của lần tạo)
   filters_json  TEXT NOT NULL,              -- filter đang nhớ ({} = không lọc)
   options_json  TEXT NOT NULL,              -- dst_base_id (xem dưới); key lạ bị bỏ qua
@@ -109,7 +110,7 @@ Tin bị **filter loại** không được ghi vào `msg_map` (hàng triệu hà
 
 Tin **không hỗ trợ** (game, invoice, quiz chưa trả lời, poll khi thiếu `--reset-polls`; xem `01-kien-truc.md`) khác filter: người dùng muốn clone nhưng không thể, nên có ghi `msg_map` với `status='skipped'` + `reason='unsupported:<loại>'` và tăng `skipped_unsupported`. `retry` chỉ thử lại `failed`, không thử `skipped`. Hàng `skipped` của tin không hỗ trợ có `dst_msg_id` nếu đã đăng tin text thay thế (`--placeholder`); con trỏ đi qua nó như một tin đã xử lý xong, và bộ đếm là `stats.skipped_unsupported` của lần chạy (`commit_batch` đếm mọi kết quả `skipped`). Tin bị bỏ mà không cần gọi Telegram (poll không có `--reset-polls`, hay `--ignore-unsupported`) vẫn đi qua write-ahead rồi commit trong hai transaction liền nhau (`begin_batch` + `commit_batch`, không có lời gọi Telegram ở giữa): một crash ở giữa chỉ để lại hàng `pending` mà reconcile thấy không có gì ở đích và xóa. Cũng `skipped` là tin mà `retry` thấy đã bị xóa ở nguồn: `reason='gone_from_source'`, tăng `stats.gone` của lần retry (`Store.mark_gone`).
 
-`topic_map` được ghi cùng transaction với việc tạo topic đích (tạo topic xong phải lưu ngay, kẻo resume tạo trùng).
+`topic_map` (phase 8, `engine/topics.py::TopicResolver`, tạo topic kiểu lười khi tin đầu tiên của nó xuất hiện): gọi `create_topic` rồi lưu `topic_map` ngay sau, không có gì chen giữa — không phải một transaction SQL thật sự bọc quanh lời gọi Telegram (quy tắc transaction bên dưới cấm điều đó), nên một crash đúng giữa hai bước đó chỉ khiến lần chạy sau tạo lại đúng topic đó một lần nữa (chấp nhận được, cùng mức rủi ro như việc tải byte lên trước write-ahead ở chiến lược B, xem dưới). `msg_map.src_topic_id` được ghi theo từng tin (từ `SrcMessage.topic_id`) trong cùng write-ahead của batch; `NULL` khi nguồn không phải forum, hoặc khi tin đó ở General (Telethon không gắn `reply_to` cho tin General, `01-kien-truc.md`).
 
 ## Quy tắc transaction
 

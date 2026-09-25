@@ -44,6 +44,8 @@ SPECS: dict[str, dict[str, Any]] = {
     "date and hashtag": {"include": [{"hashtag": ["#a"]}], "date": {"from": "2024-01-10"}},
     "id range and photos": {"include": [{"media": ["photo"]}], "id": {"from": 33, "to": 150}},
     "everything": {},
+    "topic": {"include": [{"topic": [1, 2]}]},
+    "from_user": {"include": [{"from_user": [100]}]},
 }
 
 
@@ -56,6 +58,8 @@ def channel(seed: int) -> tuple[FakeGateway, int]:
         when = START + timedelta(hours=6 * index)
         tags = tuple(t for t in TAGS if rng.random() < 0.3)
         text = " ".join([rng.choice(WORDS), *tags])
+        topic = rng.choice([1, 2, 3])  # a whole unit shares one topic, like a real forum album
+        sender = rng.choice([100, 200, None])
         if rng.random() < 0.35:  # an album: the caption and its hashtags sit on the first member
             size = rng.randint(2, 6)
             gid = gw._alloc_group()
@@ -67,10 +71,18 @@ def channel(seed: int) -> tuple[FakeGateway, int]:
                     grouped_id=gid,
                     hashtags=tags if i == 0 else (),
                     date=when,
+                    topic_id=topic,
+                    from_user_id=sender,
                 )
         else:
             gw.add_message(
-                src, text, media=rng.choice([*KINDS, MediaKind.TEXT]), hashtags=tags, date=when
+                src,
+                text,
+                media=rng.choice([*KINDS, MediaKind.TEXT]),
+                hashtags=tags,
+                date=when,
+                topic_id=topic,
+                from_user_id=sender,
             )
         if rng.random() < 0.05:
             gw.add_message(src, is_service=True, date=when)

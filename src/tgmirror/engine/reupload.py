@@ -18,7 +18,7 @@ unit at a time on one account.
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -139,15 +139,23 @@ async def send_unit(
     action: Action,
     options: Options,
     on_transfer: OnTransfer | None = None,
+    *,
+    topic: int | None = None,
+    hashtag: str | None = None,
 ) -> list[MessageResult]:
     """Post the unit (or its placeholder) and say what became of each message.
 
-    Errors from the gateway propagate; the runner decides what they mean for the run.
+    Errors from the gateway propagate; the runner decides what they mean for the run. ``topic``
+    targets a destination topic; ``hashtag`` (phase 8, ``RunOptions.topic_as_hashtag``) stands in
+    for a topic the destination cannot hold — appended to the placeholder directly here, and to
+    every caption/text ``gateway.send_prepared`` sends (``CaptionPolicy.hashtag``).
     """
     if action.kind is ActionKind.PLACEHOLDER:
-        return left_out(unit, action, await gateway.send_text(dst, action.text))
+        text = f"{action.text}\n{hashtag}" if hashtag else action.text
+        return left_out(unit, action, await gateway.send_text(dst, text, topic=topic))
     assert action.kind is ActionKind.SEND and prepared is not None
-    sent = await gateway.send_prepared(dst, prepared, options.caption, on_transfer)
+    caption = replace(options.caption, hashtag=hashtag) if hashtag else options.caption
+    sent = await gateway.send_prepared(dst, prepared, caption, on_transfer, topic=topic)
     return results_of(unit, sent)
 
 
@@ -163,6 +171,8 @@ async def send_unit_by_reference(
     tmp: Path,
     on_transfer: OnTransfer | None = None,
     on_fallback: Callable[[], None] = lambda: None,
+    topic: int | None = None,
+    hashtag: str | None = None,
 ) -> list[MessageResult]:
     """Send ``unit`` by the ids of its files: nothing is downloaded or uploaded.
 
@@ -170,18 +180,23 @@ async def send_unit_by_reference(
     Telegram still will not send the media this way, the unit goes the long way, exactly as
     ``--mode reupload`` would send it, and ``on_fallback`` is told. Telegram created nothing
     before this returns, whichever way it went, so the caller's batch stays ``pending`` meanwhile
-    and the write-ahead rule holds.
+    and the write-ahead rule holds. ``topic``/``hashtag``: phase 8, as ``send_unit``.
     """
+    caption = replace(options.caption, hashtag=hashtag) if hashtag else options.caption
     for attempt in range(2):
         try:
-            return results_of(unit, await gateway.send_by_reference(dst, prepared, options.caption))
+            return results_of(
+                unit, await gateway.send_by_reference(dst, prepared, caption, topic=topic)
+            )
         except FileRefExpired:
             if attempt == 0:
                 prepared = await reader.fetch(src, unit)
     on_fallback()
     full = await reader.prepare(src, unit, tmp, on_transfer)
     try:
-        return await send_unit(gateway, dst, unit, full, SEND, options, on_transfer)
+        return await send_unit(
+            gateway, dst, unit, full, SEND, options, on_transfer, topic=topic, hashtag=hashtag
+        )
     finally:
         for path in full.files:
             path.unlink(missing_ok=True)

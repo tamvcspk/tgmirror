@@ -107,6 +107,24 @@ FilterFileOption = Annotated[
         rich_help_panel=PANEL,
     ),
 ]
+FromUserOption = Annotated[
+    list[int] | None,
+    typer.Option(
+        "--from-user",
+        help="Only messages from this sender id (group/forum sources); repeat for any-of. "
+        "See `tgmirror topics` for ids.",
+        rich_help_panel=PANEL,
+    ),
+]
+TopicOption = Annotated[
+    list[int] | None,
+    typer.Option(
+        "--topic",
+        help="Only messages in this forum topic id; repeat for any-of. `tgmirror topics <src>` "
+        "lists them.",
+        rich_help_panel=PANEL,
+    ),
+]
 
 
 def collect(
@@ -123,6 +141,8 @@ def collect(
     max_size: str | None,
     album: str | None,
     filter_file: Path | None,
+    from_user: list[int] | None = None,
+    topic: list[int] | None = None,
 ) -> FilterSpec | None:
     """The filter the flags describe, or ``None`` when none was given. Raises ``FilterError``."""
     flags = FlagFilters(
@@ -137,5 +157,7 @@ def collect(
         min_size=min_size,
         max_size=max_size,
         album=album,
+        from_user=from_user or [],
+        topic=topic or [],
     )
     return resolve(flags, filter_file)

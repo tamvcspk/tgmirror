@@ -15,7 +15,7 @@ from tests.fakes import FakeGateway, ScriptedPrompter
 from tests.unit.test_cli_run import saved_runs, texts
 from tgmirror.cli.app import app
 from tgmirror.cli.runtime import Runtime
-from tgmirror.core.gateway import MediaKind
+from tgmirror.core.gateway import ChatKind, MediaKind
 from tgmirror.store.runs import RunStatus
 
 runner = CliRunner()
@@ -300,6 +300,39 @@ def test_the_wizard_stores_the_same_filter_as_the_flags(
     assert "Preview" in result.output
     # "customise how to copy?" (no), then the one question before copying
     assert [k for k, _ in prompter.asked if k == "confirm"] == ["confirm", "confirm"]
+
+
+def test_the_wizard_offers_a_topic_checkbox_for_a_forum_source(
+    make_runtime: MakeRuntime, tmp_path: Path
+) -> None:
+    """Phase 8, parity rule: the wizard's topic checkbox and ``--topic`` end in the same filter."""
+    flags_gw, wizard_gw = FakeGateway(), FakeGateway()
+    for gw in (flags_gw, wizard_gw):
+        forum = gw.add_channel("Forum", kind=ChatKind.FORUM)
+        gw.add_channel("Copy", kind=ChatKind.FORUM)
+        ann = gw.add_topic(forum.id, "Announcements")
+        gw.add_topic(forum.id, "Off-topic")
+        assert ann.id == 2  # the first added topic (General is id 1, implicit)
+    flags_rt = make_runtime(gateway=flags_gw, root=tmp_path / "flags")
+    runner.invoke(
+        app,
+        ["clone", "--src", "Forum", "--dst", "Copy", "--yes", "--topic", "2"],
+        obj=flags_rt,
+    )
+
+    rt, prompter = wizard_rt(
+        make_runtime,
+        wizard_gw,
+        tmp_path / "wizard",
+        select=["Forum", "Copy", "Automatic", CRITERIA],
+        checkbox=[[], ["Announcements"]],  # no media, then the topic checkbox
+        text=["", "", "", "", "", ""],
+        confirm=[False, True],
+    )
+    result = runner.invoke(app, ["clone"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert filters_of(rt) == filters_of(flags_rt) == {"include": [{"topic": [2]}]}
 
 
 def test_choosing_no_filter_in_the_wizard_stores_an_empty_one_and_shows_no_preview(

@@ -8,15 +8,17 @@ NOT_COPIED = "not_copied"  # Telegram made no message for this id: deleted at th
 
 
 async def copy_batch(
-    gateway: TelegramGateway, src: int, dst: int, batch: Batch
+    gateway: TelegramGateway, src: int, dst: int, batch: Batch, *, topic: int | None = None
 ) -> list[MessageResult]:
     """One ``copy_messages`` call for the whole batch; one result per source message.
 
     ``PerMessage`` (Telegram refused the ids, nothing created) and every other gateway error
-    propagate: the runner decides what they mean for the run.
+    propagate: the runner decides what they mean for the run. ``topic`` targets a destination
+    topic (phase 8); strategy A never gets a hashtag fallback (forward cannot rewrite anything —
+    ``cli/commands/clone.py::_confirm_topic_loss`` is the gate for that case).
     """
     ids = batch.ids
-    copied = await gateway.copy_messages(src, dst, ids)
+    copied = await gateway.copy_messages(src, dst, ids, topic=topic)
     if len(copied) != len(ids):
         raise ValueError(f"copy_messages returned {len(copied)} results for {len(ids)} ids")
     return [

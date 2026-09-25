@@ -29,7 +29,7 @@ import aiosqlite
 from tgmirror.core.errors import RunBusy, SchemaTooNew, StoreError
 from tgmirror.core.gateway import Unit
 from tgmirror.core.limiter import LimiterState
-from tgmirror.store import floodlog, limiterstate, msgmap
+from tgmirror.store import floodlog, limiterstate, msgmap, topicmap
 from tgmirror.store.msgmap import MessageResult, PendingRow
 from tgmirror.store.runs import (
     RUN_SELECT,
@@ -57,13 +57,22 @@ def _sql(name: str) -> str:
     return resources.files("tgmirror.store").joinpath(name).read_text(encoding="utf-8")
 
 
+# Version 2 (phase 8): a destination's kind is stored too, now that it need not match the
+# source's (``engine/endpoints.py``). Every pre-existing pair was made under the old "same kind
+# only" rule, so backfilling ``dst_kind`` from ``src_kind`` is exact for it.
+_V2_DST_KIND = (
+    "ALTER TABLE mirrors ADD COLUMN dst_kind TEXT NOT NULL DEFAULT 'broadcast';\n"
+    "UPDATE mirrors SET dst_kind = src_kind;"
+)
+
+
 def default_migrations() -> tuple[str, ...]:
     """SQL scripts by version: ``migrations[i]`` upgrades ``user_version`` ``i`` to ``i + 1``.
 
     Version 1 is ``schema.sql``. A schema change appends a script here (never edits an earlier
     one) and gets a test that upgrades a database made by the previous version.
     """
-    return (_sql("schema.sql"),)
+    return (_sql("schema.sql"), _V2_DST_KIND)
 
 
 def utc_now() -> datetime:
@@ -185,8 +194,8 @@ class Store:
                 filters = spec.filters_json if spec.filters_json is not None else "{}"
                 cur = await db.execute(
                     "INSERT INTO mirrors(account, src_id, src_title, src_kind, dst_id, dst_title, "
-                    "mode, filters_json, options_json, cursor_src_id, created_at, updated_at) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                    "dst_kind, mode, filters_json, options_json, cursor_src_id, created_at, "
+                    "updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
                     (
                         spec.account,
                         spec.src.id,
@@ -194,6 +203,7 @@ class Store:
                         spec.src.kind,
                         spec.dst.id,
                         spec.dst.title,
+                        spec.dst.kind,
                         spec.mode,
                         filters,
                         spec.options.for_pair(spec.options.dst_base_id).to_json(),
@@ -523,6 +533,22 @@ class Store:
         """Keep what the limiter learned (after a flood); a batch commit saves it with the batch."""
         async with self._tx() as db:
             await limiterstate.save(db, account, state, self._ts())
+
+    # ---- topic map (phase 8, forum pairs) --------------------------------------------------
+
+    async def topic_map(self, run_id: int) -> dict[int, int]:
+        """The pair's source topic id -> destination topic id mapping so far."""
+        async with self._lock:
+            return await topicmap.all_of(self._conn, await self._mirror_id(self._conn, run_id))
+
+    async def save_topic(
+        self, run_id: int, src_topic_id: int, dst_topic_id: int, title: str
+    ) -> None:
+        """Record a destination topic just created for ``src_topic_id`` (``engine/topics.py``
+        calls this right after the Telegram call, not across it: rule 5)."""
+        async with self._tx() as db:
+            mirror_id = await self._mirror_id(db, run_id)
+            await topicmap.save(db, mirror_id, src_topic_id, dst_topic_id, title)
 
     # ---- internals ------------------------------------------------------------------------
 

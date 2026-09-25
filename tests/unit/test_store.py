@@ -8,7 +8,7 @@ import pytest
 
 from tests.fakes import FakeGateway
 from tgmirror.core.errors import RunBusy, SchemaTooNew, StoreError
-from tgmirror.core.gateway import ChannelInfo, MediaKind, SrcMessage, Unit
+from tgmirror.core.gateway import ChannelInfo, ChatKind, MediaKind, SrcMessage, Unit
 from tgmirror.core.limiter import LimiterState
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store, default_migrations
 from tgmirror.store.msgmap import MessageResult
@@ -49,8 +49,12 @@ def spec(**kw: object) -> RunSpec:
     return RunSpec(src=src, dst=dst, **kw)  # type: ignore[arg-type]
 
 
-def unit(*ids: int, group: int | None = None) -> Unit:
-    return Unit(tuple(SrcMessage(i, T0, media=MediaKind.PHOTO, grouped_id=group) for i in ids))
+def unit(*ids: int, group: int | None = None, topic: int | None = None) -> Unit:
+    return Unit(
+        tuple(
+            SrcMessage(i, T0, media=MediaKind.PHOTO, grouped_id=group, topic_id=topic) for i in ids
+        )
+    )
 
 
 async def rows(path: Path, sql: str, *args: object) -> list[tuple[object, ...]]:
@@ -73,7 +77,7 @@ async def test_a_new_database_gets_the_schema_and_wal(tmp_path: Path) -> None:
     tables = {r[0] for r in await rows(path, "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"runs", "mirrors", "msg_map", "topic_map", "flood_log", "limiter_state"} <= tables
     assert "jobs" not in tables
-    assert await rows(path, "PRAGMA user_version") == [(1,)]
+    assert await rows(path, "PRAGMA user_version") == [(len(default_migrations()),)]
     assert await rows(path, "PRAGMA journal_mode") == [("wal",)]
 
 
@@ -109,8 +113,33 @@ async def test_upgrading_a_database_made_by_the_previous_version(tmp_path: Path)
     async with await Store.open(path, migrations=v2) as upgraded:
         assert (await upgraded.get_run(run.id)) == run  # data survived
 
-    assert await rows(path, "PRAGMA user_version") == [(2,)]
+    assert await rows(path, "PRAGMA user_version") == [(len(v2),)]
     assert "note" in [r[1] for r in await rows(path, "PRAGMA table_info(runs)")]
+
+
+async def test_v2_migration_backfills_dst_kind_from_src_kind(tmp_path: Path) -> None:
+    """Phase 8: every pre-v2 pair was made under the old "same kind only" rule, so the source's
+    kind is the destination's kind too. ``start_run`` writes the current schema, so a pre-v2 row
+    (no ``dst_kind`` column) is inserted with raw SQL, as it would look before this migration."""
+    path = tmp_path / "state.db"
+    v1_only = default_migrations()[:1]
+    async with await Store.open(path, migrations=v1_only):
+        pass  # just to create the v1 schema
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO mirrors(account, src_id, src_title, src_kind, dst_id, dst_title, mode, "
+        "filters_json, options_json, cursor_src_id, created_at, updated_at) "
+        "VALUES('default', -1, 'S', 'supergroup', -2, 'D', 'auto', '{}', '{}', 0, ?, ?)",
+        (T0.isoformat(), T0.isoformat()),
+    )
+    con.commit()
+    con.close()
+
+    async with await Store.open(path) as upgraded:  # the real default_migrations(): v1 + v2
+        mirror = await upgraded.find_mirror(-1, -2)
+
+    assert mirror is not None
+    assert mirror.dst_kind == mirror.src_kind == ChatKind.SUPERGROUP
 
 
 async def test_a_failing_migration_leaves_the_old_version_intact(tmp_path: Path) -> None:
@@ -122,7 +151,7 @@ async def test_a_failing_migration_leaves_the_old_version_intact(tmp_path: Path)
     with pytest.raises(sqlite3.OperationalError):
         await Store.open(path, migrations=(*current, "CREATE TABLE ok(x); NOT VALID SQL;"))
 
-    assert await rows(path, "PRAGMA user_version") == [(1,)]
+    assert await rows(path, "PRAGMA user_version") == [(len(current),)]
     assert "ok" not in {r[0] for r in await rows(path, "SELECT name FROM sqlite_master")}
 
 
@@ -738,3 +767,50 @@ async def test_discarding_pending_puts_a_failed_message_back_and_forgets_a_new_o
         "SELECT src_msg_id, status, reason, run_id FROM msg_map ORDER BY src_msg_id",
     ) == [(1, "failed", "boom", first.id), (2, "done", None, first.id)]  # 3 is forgotten
     assert await store.count_failed(first.id) == 1  # message 1 is still the first run's to retry
+
+
+# ---- topic map (phase 8, forum pairs) --------------------------------------------------------
+
+
+async def test_topic_map_round_trips(store: Store) -> None:
+    run = (await store.start_run(spec())).run
+
+    assert await store.topic_map(run.id) == {}
+
+    await store.save_topic(run.id, 7, 107, "Announcements")
+    await store.save_topic(run.id, 9, 109, "Off-topic")
+
+    assert await store.topic_map(run.id) == {7: 107, 9: 109}
+
+
+async def test_save_topic_overwrites_the_same_source_topic(store: Store) -> None:
+    run = (await store.start_run(spec())).run
+
+    await store.save_topic(run.id, 7, 107, "Announcements")
+    await store.save_topic(run.id, 7, 207, "Announcements (retry)")
+
+    assert await store.topic_map(run.id) == {7: 207}
+
+
+async def test_topic_map_is_per_mirror(store: Store) -> None:
+    gw = FakeGateway()
+    src1, dst1 = gw.add_channel("Src1"), gw.add_channel("Dst1")
+    src2, dst2 = gw.add_channel("Src2"), gw.add_channel("Dst2")
+    run_a = (await store.start_run(RunSpec(src=src1, dst=dst1))).run
+    run_b = (await store.start_run(RunSpec(src=src2, dst=dst2))).run
+
+    await store.save_topic(run_a.id, 7, 107, "A")
+    await store.save_topic(run_b.id, 7, 999, "B")
+
+    assert await store.topic_map(run_a.id) == {7: 107}
+    assert await store.topic_map(run_b.id) == {7: 999}
+
+
+async def test_write_ahead_records_the_source_topic(store: Store, tmp_path: Path) -> None:
+    run = (await store.start_run(spec())).run
+
+    await store.begin_batch(run.id, [unit(1, topic=7), unit(2, 3, group=9, topic=7)])
+
+    assert await rows(
+        tmp_path / "state.db", "SELECT src_msg_id, src_topic_id FROM msg_map ORDER BY src_msg_id"
+    ) == [(1, 7), (2, 7), (3, 7)]

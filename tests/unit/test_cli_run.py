@@ -712,9 +712,11 @@ def test_ctrl_c_saves_and_exits_130_then_run_finishes_without_duplicates(
     rt = make_runtime(gateway=gateway)
     original = gateway.copy_messages
 
-    async def interrupt_then_copy(s: int, d: int, ids: list[int]) -> list[int | None]:
+    async def interrupt_then_copy(
+        s: int, d: int, ids: list[int], *, topic: int | None = None
+    ) -> list[int | None]:
         signal.raise_signal(signal.SIGINT)  # what the terminal does
-        return await original(s, d, ids)
+        return await original(s, d, ids, topic=topic)
 
     gateway.copy_messages = interrupt_then_copy  # type: ignore[method-assign]
     result = runner.invoke(app, [*CLONE, "--batch-size", "2"], obj=rt)

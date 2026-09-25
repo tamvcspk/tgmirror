@@ -32,6 +32,7 @@ from tgmirror.core.gateway import (
     Prepared,
     ServerFilter,
     SrcMessage,
+    TopicInfo,
     Unit,
 )
 from tgmirror.core.limiter import Limiter, Sleep
@@ -214,6 +215,20 @@ class _GuardedReader:
                 )
             except PeerFlood:
                 await self._guard.peer_flood("get_messages")
+                raise
+
+    async def list_topics(self, src: int) -> list[TopicInfo]:
+        """One paced read request (phase 8)."""
+        floods = 0
+        while True:
+            await self._guard.pace_read(1)
+            try:
+                return await self._inner.list_topics(src)
+            except FloodWait as exc:
+                floods += 1
+                await self._guard.flooded("list_topics", exc, give_up=floods >= MAX_FLOODS_PER_CALL)
+            except PeerFlood:
+                await self._guard.peer_flood("list_topics")
                 raise
 
     async def fetch(self, src: int, unit: Unit) -> Prepared:

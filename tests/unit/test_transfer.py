@@ -177,6 +177,7 @@ def run(copied: int, total: int, *, skipped: int = 0) -> Run:
         src_id=-1,
         src_title="s",
         src_kind=ChatKind.BROADCAST,
+        dst_kind=ChatKind.BROADCAST,
         dst_id=-2,
         dst_title="d",
         mode="auto",

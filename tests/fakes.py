@@ -37,6 +37,7 @@ from tgmirror.core.gateway import (
     Prepared,
     ServerFilter,
     SrcMessage,
+    TopicInfo,
     TransferPhase,
     Unit,
 )
@@ -63,6 +64,8 @@ class FakeGateway:
         self._next_channel_id = -1001000000001
         self._next_msg_id: dict[int, int] = defaultdict(lambda: 1)
         self._next_group_id = 10_000
+        self.topics: dict[int, list[TopicInfo]] = {}  # channel -> topics (General is implicit)
+        self._next_topic_id: dict[int, int] = defaultdict(lambda: 2)  # 1 is always General
 
     # ---- test setup -------------------------------------------------------------------------
 
@@ -91,6 +94,13 @@ class FakeGateway:
         self.channels[info.id] = info
         return info
 
+    def add_topic(self, channel: int, title: str, *, closed: bool = False) -> TopicInfo:
+        """A forum topic besides the implicit General (id 1)."""
+        topic = TopicInfo(id=self._next_topic_id[channel], title=title, closed=closed)
+        self._next_topic_id[channel] += 1
+        self.topics.setdefault(channel, []).append(topic)
+        return topic
+
     def add_message(
         self,
         channel: int,
@@ -107,6 +117,8 @@ class FakeGateway:
         date: datetime | None = None,
         quiz_unanswered: bool = False,
         title: str | None = None,
+        topic_id: int | None = None,
+        from_user_id: int | None = None,
     ) -> SrcMessage:
         msg_id = self._alloc_id(channel)
         msg = SrcMessage(
@@ -123,17 +135,26 @@ class FakeGateway:
             views=views,
             quiz_unanswered=quiz_unanswered,
             title=title,
+            topic_id=topic_id,
+            from_user_id=from_user_id,
         )
         self.messages[channel].append(msg)
         return msg
 
     def add_album(
-        self, channel: int, kinds: list[MediaKind], caption: str = ""
+        self,
+        channel: int,
+        kinds: list[MediaKind],
+        caption: str = "",
+        *,
+        topic_id: int | None = None,
     ) -> list[SrcMessage]:
         """Consecutive messages sharing one ``grouped_id``; the caption sits on the first."""
         gid = self._alloc_group()
         return [
-            self.add_message(channel, caption if i == 0 else "", media=kind, grouped_id=gid)
+            self.add_message(
+                channel, caption if i == 0 else "", media=kind, grouped_id=gid, topic_id=topic_id
+            )
             for i, kind in enumerate(kinds)
         ]
 
@@ -162,9 +183,23 @@ class FakeGateway:
         self._enter("get_channel", ref)
         return self._channel(ref)
 
-    async def create_channel(self, title: str, about: str = "") -> ChannelInfo:
-        self._enter("create_channel", title, about)
-        return self.add_channel(title)
+    async def create_channel(
+        self, title: str, about: str = "", kind: ChatKind = ChatKind.BROADCAST
+    ) -> ChannelInfo:
+        self._enter("create_channel", title, about, kind)
+        return self.add_channel(title, kind=kind)
+
+    async def list_topics(self, src: int) -> list[TopicInfo]:
+        self._enter("list_topics", src)
+        self._channel(src)
+        general = TopicInfo(id=1, title="General")
+        return [general, *self.topics.get(src, [])]
+
+    async def create_topic(self, dst: int, title: str) -> int:
+        self._enter("create_topic", dst, title)
+        if not self._channel(dst).can_post:
+            raise NoPermission(f"cannot post to channel {dst}")
+        return self.add_topic(dst, title).id
 
     async def iter_messages(
         self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER
@@ -224,8 +259,10 @@ class FakeGateway:
         self._channel(chat)
         return self.messages[chat][-1].id if self.messages[chat] else 0
 
-    async def copy_messages(self, src: int, dst: int, ids: list[int]) -> list[int | None]:
-        self._enter("copy_messages", src, dst, list(ids))
+    async def copy_messages(
+        self, src: int, dst: int, ids: list[int], *, topic: int | None = None
+    ) -> list[int | None]:
+        self._enter("copy_messages", src, dst, list(ids), topic)
         if not ids or len(ids) > MAX_FORWARD_IDS:
             raise ValueError(f"copy_messages takes 1..{MAX_FORWARD_IDS} ids, got {len(ids)}")
         source, target = self._channel(src), self._channel(dst)
@@ -249,7 +286,7 @@ class FakeGateway:
             if gid is not None:
                 gid = new_groups.setdefault(gid, self._alloc_group())
             new_id = self._alloc_id(dst)
-            self.messages[dst].append(replace(msg, id=new_id, grouped_id=gid))
+            self.messages[dst].append(replace(msg, id=new_id, grouped_id=gid, topic_id=topic))
             results.append(new_id)
         return results
 
@@ -297,8 +334,10 @@ class FakeGateway:
         prepared: Prepared,
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None = None,
+        *,
+        topic: int | None = None,
     ) -> list[int]:
-        self._enter("send_prepared", dst, prepared.unit.ids, caption)
+        self._enter("send_prepared", dst, prepared.unit.ids, caption, topic)
         target = self._channel(dst)
         if not target.can_post:
             raise NoPermission(f"cannot post to channel {dst}")
@@ -314,7 +353,9 @@ class FakeGateway:
         for msg in prepared.unit.messages:
             new_id = self._alloc_id(dst)
             text = _rewrite(msg, caption)
-            self.messages[dst].append(replace(msg, id=new_id, grouped_id=gid, text=text))
+            self.messages[dst].append(
+                replace(msg, id=new_id, grouped_id=gid, text=text, topic_id=topic)
+            )
             new_ids.append(new_id)
         return new_ids
 
@@ -328,11 +369,11 @@ class FakeGateway:
         return Prepared(unit)
 
     async def send_by_reference(
-        self, dst: int, prepared: Prepared, caption: CaptionPolicy
+        self, dst: int, prepared: Prepared, caption: CaptionPolicy, *, topic: int | None = None
     ) -> list[int]:
         """Posts the unit by the ids of its files. ``noforwards`` is not checked on purpose: the
         engine must never ask for this on a protected source, and a test can see that it did not."""
-        self._enter("send_by_reference", dst, prepared.unit.ids, caption)
+        self._enter("send_by_reference", dst, prepared.unit.ids, caption, topic)
         if not self._channel(dst).can_post:
             raise NoPermission(f"cannot post to channel {dst}")
         gid = self._alloc_group() if prepared.unit.is_album else None
@@ -340,18 +381,18 @@ class FakeGateway:
         for msg in prepared.unit.messages:
             new_id = self._alloc_id(dst)
             self.messages[dst].append(
-                replace(msg, id=new_id, grouped_id=gid, text=_rewrite(msg, caption))
+                replace(msg, id=new_id, grouped_id=gid, text=_rewrite(msg, caption), topic_id=topic)
             )
             new_ids.append(new_id)
         return new_ids
 
-    async def send_text(self, dst: int, text: str) -> int:
-        self._enter("send_text", dst, text)
+    async def send_text(self, dst: int, text: str, *, topic: int | None = None) -> int:
+        self._enter("send_text", dst, text, topic)
         if not self._channel(dst).can_post:
             raise NoPermission(f"cannot post to channel {dst}")
         new_id = self._alloc_id(dst)
         date = _EPOCH + timedelta(minutes=new_id)
-        self.messages[dst].append(SrcMessage(id=new_id, date=date, text=text))
+        self.messages[dst].append(SrcMessage(id=new_id, date=date, text=text, topic_id=topic))
         return new_id
 
     # ---- internals --------------------------------------------------------------------------
@@ -390,6 +431,12 @@ _NO_FILE = frozenset(
     }
 )
 
+# Self-contained media has no caption slot at all: a topic hashtag (phase 8) never applies to it,
+# unlike plain text/webpage, which have no *file* but do have a caption-like slot of their own.
+_SELF_CONTAINED = frozenset(
+    {MediaKind.POLL, MediaKind.GEO, MediaKind.CONTACT, MediaKind.GAME, MediaKind.INVOICE}
+)
+
 
 def _download(tmp: Path, msg_id: int) -> Path:
     tmp.mkdir(parents=True, exist_ok=True)
@@ -399,17 +446,26 @@ def _download(tmp: Path, msg_id: int) -> Path:
 
 
 def _rewrite(msg: SrcMessage, policy: CaptionPolicy) -> str:
-    """The caption after ``policy``; only the caption of a media message is ever rewritten."""
-    if msg.media in _NO_FILE:
+    """The caption after ``policy``; only the caption of a media message is ever rewritten. A
+    topic hashtag (phase 8) is appended last, to any text with a slot for it (a caption, or plain
+    text/webpage) but never to self-contained media, which has none."""
+    if msg.media in _SELF_CONTAINED:
         return msg.text
-    match policy.mode:
-        case CaptionMode.NONE:
-            return ""
-        case CaptionMode.APPEND:
-            return f"{msg.text}\n\n{policy.text}" if msg.text else msg.text
-        case CaptionMode.STRIP_LINKS:
-            return " ".join(w for w in msg.text.split(" ") if "t.me/" not in w)
-    return msg.text
+    if msg.media in _NO_FILE:  # plain text/webpage: the mode never touches it, the hashtag still
+        text = msg.text
+    else:
+        match policy.mode:
+            case CaptionMode.NONE:
+                text = ""
+            case CaptionMode.APPEND:
+                text = f"{msg.text}\n\n{policy.text}" if msg.text else msg.text
+            case CaptionMode.STRIP_LINKS:
+                text = " ".join(w for w in msg.text.split(" ") if "t.me/" not in w)
+            case _:
+                text = msg.text
+    if policy.hashtag:
+        text = f"{text}\n{policy.hashtag}" if text else policy.hashtag
+    return text
 
 
 class FakeAuth:

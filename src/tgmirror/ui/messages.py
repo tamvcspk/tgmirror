@@ -41,6 +41,11 @@ VI: dict[str, str] = {
     "yes": "có",
     "no": "không",
     "admin": "admin",
+    # topics (phase 8)
+    "topics.empty": "Kênh này không có topic nào.",
+    "topics.count": "{count} topic.",
+    "col.closed": "Đã đóng",
+    "err.not_a_forum": "«{title}» không phải forum nên không có topic.",
     # config
     "config.paths_title": "Đường dẫn:",
     "config.path_config": "config.toml",
@@ -144,6 +149,9 @@ VI: dict[str, str] = {
         "Nguồn bật «Restrict saving content». Bạn là admin nên có thể tắt tùy chọn này tạm thời, "
         "hoặc dùng --mode reupload (tải xuống rồi tải lên lại; có hỏi xác nhận)."
     ),
+    "warn.topic_loss": (
+        "Nguồn là forum nhưng đích không có topic: cấu trúc topic sẽ bị bỏ hoàn toàn."
+    ),
     # errors (each says what to do next)
     "err.not_logged_in": "Chưa đăng nhập hoặc phiên đã hết hạn. Chạy `tgmirror login`.",
     "err.missing_credentials": (
@@ -183,15 +191,10 @@ VI: dict[str, str] = {
         "hoặc nhờ chủ kênh tắt tùy chọn này."
     ),
     "err.dest_not_writable": "Bạn cần là admin có quyền đăng bài ở «{title}». Chọn đích khác.",
-    "err.kind_mismatch": "Nguồn là {src} còn đích là {dst}; đích có sẵn phải cùng loại với nguồn.",
     "err.same_channel": "Nguồn và đích là cùng một kênh.",
     "err.title_empty": "Tên kênh không được để trống.",
     "err.title_too_long": "Tên kênh tối đa 128 ký tự.",
     "err.about_too_long": "Mô tả tối đa 255 ký tự.",
-    "err.new_unsupported": (
-        "Chưa tạo được đích mới cho nguồn loại {kind} (có từ phase 8). "
-        "Chọn một đích có sẵn cùng loại."
-    ),
     "err.mode_unsupported": "Chế độ «{mode}» không có. Dùng auto, copy hoặc reupload.",
     "err.opt_caption_unknown": "--caption phải là keep, strip-links, append hoặc none.",
     "err.opt_caption_text_missing": '--caption append cần thêm --caption-text "<nội dung>".',
@@ -202,6 +205,10 @@ VI: dict[str, str] = {
     ),
     "err.opt_reupload_flags_need_reupload": (
         "--reset-polls, --ignore-unsupported và --placeholder chỉ có nghĩa với --mode reupload."
+    ),
+    "err.opt_topic_hashtag_needs_rewrite": (
+        "--topic-as-hashtag chỉ có nghĩa khi lần chạy viết lại được nội dung: --mode reupload, "
+        "hoặc --mode auto cùng --caption khác keep."
     ),
     "err.unsupported_media": (
         "Tin {id} là {kind}, không sao chép được. Chạy lại với --ignore-unsupported để bỏ qua "
@@ -256,6 +263,7 @@ VI: dict[str, str] = {
     "filter.ask_until": "Đến ngày YYYY-MM-DD, không tính ngày này (để trống = tới hết)",
     "filter.ask_min_size": "Dung lượng tối thiểu, ví dụ 10MB (để trống = không giới hạn)",
     "filter.ask_max_size": "Dung lượng tối đa, ví dụ 2GB (để trống = không giới hạn)",
+    "filter.ask_topics": "Chỉ lấy các topic sau (phím cách để chọn; không chọn gì = tất cả)",
     "filter.ask_file": "Đường dẫn file YAML",
     "clone.preview": (
         "Xem trước: {matched} trong {scanned} tin đầu tiên của khoảng đã chọn sẽ được sao chép."
@@ -270,6 +278,13 @@ VI: dict[str, str] = {
     "clone.confirm_protected": (
         "«{title}» bật «Restrict saving content»: chủ kênh đã cấm lưu nội dung của nó. Chỉ tiếp "
         "tục nếu bạn là chủ/admin và được phép sao chép. Tải xuống rồi tải lên lại từng tin?"
+    ),
+    "clone.confirm_unadministered": (
+        "«{title}» bật «Restrict saving content» và tài khoản này không phải admin của nó. Nếu "
+        "bạn là chủ kênh này qua một tài khoản khác và tự chịu hoàn toàn trách nhiệm về việc sao "
+        "chép nội dung này (kể cả bản quyền và Điều khoản Telegram — tgmirror không kiểm tra được "
+        "điều này), gõ nguyên văn {flag} rồi Enter để xác nhận. Gõ gì khác hoặc Esc: không sao "
+        "chép nguồn này."
     ),
     "options.protected": (
         "Nguồn cấm lưu nội dung nên chỉ còn cách tải xuống rồi tải lên lại (reupload)."
@@ -305,6 +320,15 @@ VI: dict[str, str] = {
     ),
     "clone.confirm_start": "Sao chép {src} → {dst} ngay bây giờ?",
     "clone.dst_will_be_created": "«{title}» (kênh mới sẽ được tạo)",
+    "clone.topic_as_hashtag": "Giữ tên topic dưới dạng hashtag trong mỗi tin?",
+    "clone.confirm_topic_loss": (
+        "Đích không có topic và không có cách nào giữ lại (mode hiện tại không viết lại "
+        "được nội dung): toàn bộ topic sẽ bị bỏ. Tiếp tục?"
+    ),
+    "err.topic_loss_needs_yes": (
+        "Đích không có topic; toàn bộ topic sẽ bị bỏ vì mode hiện tại không viết lại được "
+        "nội dung. Thêm --yes để đồng ý khi không có terminal."
+    ),
     "run.filter_reused": "Dùng lại filter của lần chạy trước; chỉ lấy tin mới hơn lần trước.",
     "run.filter_changed": (
         "Filter đã đổi: quét lại nguồn từ đầu. Tin đã sao chép được bỏ qua; tin khớp "
@@ -490,6 +514,10 @@ EN: dict[str, str] = {
     "yes": "yes",
     "no": "no",
     "admin": "admin",
+    "topics.empty": "This channel has no topics.",
+    "topics.count": "{count} topics.",
+    "col.closed": "Closed",
+    "err.not_a_forum": "'{title}' is not a forum, so it has no topics.",
     "config.paths_title": "Paths:",
     "config.path_config": "config.toml",
     "config.path_db": "state (SQLite)",
@@ -590,6 +618,10 @@ EN: dict[str, str] = {
         "The source has 'Restrict saving content' on. You are an admin, so you can turn it off "
         "temporarily, or use --mode reupload (download and send again; it asks to confirm)."
     ),
+    "warn.topic_loss": (
+        "The source is a forum but the destination has no topics: the topic structure will be "
+        "dropped entirely."
+    ),
     "err.not_logged_in": "Not logged in, or the session expired. Run `tgmirror login`.",
     "err.missing_credentials": (
         "No api_id/api_hash. Run `tgmirror login` (interactive), or set the TGMIRROR_API_ID and "
@@ -626,15 +658,10 @@ EN: dict[str, str] = {
         "--yes-i-administer-this-channel; or ask the owner to turn the option off."
     ),
     "err.dest_not_writable": "You must be an admin allowed to post in '{title}'. Pick another one.",
-    "err.kind_mismatch": "The source is a {src} but the destination is a {dst}; they must match.",
     "err.same_channel": "Source and destination are the same chat.",
     "err.title_empty": "The channel title must not be empty.",
     "err.title_too_long": "The channel title is at most 128 characters.",
     "err.about_too_long": "The description is at most 255 characters.",
-    "err.new_unsupported": (
-        "Creating a new destination for a {kind} source arrives in phase 8. "
-        "Pick an existing destination of the same kind."
-    ),
     "err.mode_unsupported": "There is no mode '{mode}'. Use auto, copy or reupload.",
     "err.opt_caption_unknown": "--caption must be keep, strip-links, append or none.",
     "err.opt_caption_text_missing": '--caption append needs --caption-text "<text>".',
@@ -646,6 +673,10 @@ EN: dict[str, str] = {
     "err.opt_reupload_flags_need_reupload": (
         "--reset-polls, --ignore-unsupported and --placeholder only mean something with "
         "--mode reupload."
+    ),
+    "err.opt_topic_hashtag_needs_rewrite": (
+        "--topic-as-hashtag only means something when the run can rewrite text: --mode reupload, "
+        "or --mode auto with --caption other than keep."
     ),
     "err.unsupported_media": (
         "Message {id} is a {kind}, which cannot be copied. Run again with --ignore-unsupported "
@@ -700,6 +731,7 @@ EN: dict[str, str] = {
     "filter.ask_until": "Until date YYYY-MM-DD, that day not included (empty = to the end)",
     "filter.ask_min_size": "Minimum size, e.g. 10MB (empty = no limit)",
     "filter.ask_max_size": "Maximum size, e.g. 2GB (empty = no limit)",
+    "filter.ask_topics": "Only these topics (space to select; none selected = all)",
     "filter.ask_file": "Path of the YAML file",
     "clone.preview": (
         "Preview: {matched} of the first {scanned} messages in the chosen range would be copied."
@@ -714,6 +746,13 @@ EN: dict[str, str] = {
     "clone.confirm_protected": (
         "'{title}' has 'Restrict saving content' on: its owner forbade saving its content. Go on "
         "only if you own or administer it and may copy it. Download and re-send every message?"
+    ),
+    "clone.confirm_unadministered": (
+        "'{title}' has 'Restrict saving content' on and this account is not its admin. If you "
+        "own this channel through a different account and take full responsibility for copying "
+        "its content (copyright and Telegram's terms included — tgmirror cannot check this), "
+        "type {flag} verbatim then Enter to confirm. Anything else, or Esc: this source is not "
+        "copied."
     ),
     "options.protected": (
         "The source forbids saving its content, so downloading and re-sending (reupload) is the "
@@ -750,6 +789,15 @@ EN: dict[str, str] = {
     ),
     "clone.confirm_start": "Clone {src} → {dst} now?",
     "clone.dst_will_be_created": "'{title}' (a new channel will be created)",
+    "clone.topic_as_hashtag": "Keep the topic name as a hashtag in each message?",
+    "clone.confirm_topic_loss": (
+        "The destination has no topics and there is no way to keep them (the current mode "
+        "cannot rewrite text): every topic will be dropped. Continue?"
+    ),
+    "err.topic_loss_needs_yes": (
+        "The destination has no topics; every topic will be dropped since the current mode "
+        "cannot rewrite text. Add --yes to agree when there is no terminal."
+    ),
     "run.filter_reused": (
         "Using the filter of the previous run; only messages newer than last time."
     ),

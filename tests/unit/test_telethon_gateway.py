@@ -1,5 +1,6 @@
 """The Telethon boundary, tested without a network: real Telethon types, a stub client."""
 
+from collections import deque
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -8,7 +9,8 @@ from typing import Any
 
 import pytest
 from telethon import errors, types
-from telethon.tl.functions.channels import CreateChannelRequest
+from telethon.tl.functions.channels import CreateChannelRequest, ToggleForumRequest
+from telethon.tl.functions.messages import CreateForumTopicRequest, GetForumTopicsRequest
 
 from tgmirror.core.auth import TelegramAuth
 from tgmirror.core.errors import (
@@ -231,13 +233,24 @@ def test_things_that_are_not_clonable_chats_are_skipped() -> None:
 class StubClient:
     """Just enough of ``TelegramClient`` for the calls the gateway and auth make."""
 
-    def __init__(self, *, dialogs: list[Any] | None = None, result: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        dialogs: list[Any] | None = None,
+        result: Any = None,
+        entity_result: Any = None,
+    ) -> None:
         self.dialogs = dialogs or []
         self.result = result
+        # ``get_entity`` normally answers the same ``result``; a kind that re-fetches after
+        # creating (forum) needs a different one (phase 8).
+        self.entity_result = entity_result
         self.requests: list[Any] = []
         self.raises: BaseException | None = None
         self.authorized = True
         self.signed_in: list[tuple[Any, ...]] = []
+        # a call answers each of these in order (list_topics pages), then falls back to ``result``
+        self.results: deque[Any] = deque()
 
     async def iter_dialogs(self) -> AsyncIterator[Any]:
         for dialog in self.dialogs:
@@ -247,12 +260,17 @@ class StubClient:
         self.requests.append(request)
         if self.raises:
             raise self.raises
-        return self.result
+        return self.results.popleft() if self.results else self.result
 
     async def get_entity(self, ref: int) -> Any:
         if self.raises:
             raise self.raises
-        return self.result
+        return self.result if self.entity_result is None else self.entity_result
+
+    async def get_input_entity(self, ref: int) -> Any:
+        if self.raises:
+            raise self.raises
+        return f"peer:{ref}"
 
     async def is_user_authorized(self) -> bool:
         return self.authorized
@@ -318,6 +336,109 @@ async def test_create_channel_maps_flood_wait() -> None:
         await TelethonGateway(client).create_channel("Copy")  # type: ignore[arg-type]
 
     assert caught.value.seconds == 300
+
+
+async def test_create_channel_supergroup_sends_megagroup() -> None:
+    """Phase 8: every non-broadcast kind is a megagroup (docs/01-kien-truc.md, "Loại nguồn")."""
+    created = channel(id=1, title="G", megagroup=True, creator=True)
+    client = StubClient(result=SimpleNamespace(chats=[created]))
+
+    info = await TelethonGateway(client).create_channel(  # type: ignore[arg-type]
+        "G", kind=ChatKind.SUPERGROUP
+    )
+
+    (request,) = client.requests
+    assert isinstance(request, CreateChannelRequest)
+    assert (request.broadcast, request.megagroup) == (None, True)
+    assert info.kind is ChatKind.SUPERGROUP
+
+
+async def test_create_channel_forum_also_toggles_forum_and_refetches() -> None:
+    """A fresh megagroup does not report ``forum=True`` until ``ToggleForumRequest`` runs, so the
+    gateway re-fetches the entity afterwards (unverified on a real account, phase 8)."""
+    created = channel(id=1, title="F", megagroup=True, creator=True)  # not a forum yet
+    refetched = channel(id=1, title="F", megagroup=True, forum=True, creator=True)
+    client = StubClient(result=SimpleNamespace(chats=[created]), entity_result=refetched)
+
+    info = await TelethonGateway(client).create_channel(  # type: ignore[arg-type]
+        "F", kind=ChatKind.FORUM
+    )
+
+    create_request, toggle_request = client.requests
+    assert isinstance(create_request, CreateChannelRequest) and create_request.megagroup
+    assert isinstance(toggle_request, ToggleForumRequest)
+    assert (toggle_request.enabled, toggle_request.tabs) == (True, False)
+    assert info.kind is ChatKind.FORUM
+
+
+async def test_list_topics_maps_forum_topics_and_paginates() -> None:
+    page1 = [
+        types.ForumTopic(
+            id=i,
+            date=None,
+            peer=types.PeerChannel(1),
+            title=f"T{i}",
+            icon_color=0,
+            top_message=i,
+            read_inbox_max_id=0,
+            read_outbox_max_id=0,
+            unread_count=0,
+            unread_mentions_count=0,
+            unread_reactions_count=0,
+            unread_poll_votes_count=0,
+            from_id=types.PeerUser(user_id=1),
+            notify_settings=types.PeerNotifySettings(),
+            closed=(i == 3),
+        )
+        for i in range(1, 101)
+    ]
+    page2 = [
+        types.ForumTopic(
+            id=101,
+            date=None,
+            peer=types.PeerChannel(1),
+            title="T101",
+            icon_color=0,
+            top_message=101,
+            read_inbox_max_id=0,
+            read_outbox_max_id=0,
+            unread_count=0,
+            unread_mentions_count=0,
+            unread_reactions_count=0,
+            unread_poll_votes_count=0,
+            from_id=types.PeerUser(user_id=1),
+            notify_settings=types.PeerNotifySettings(),
+        )
+    ]
+    client = StubClient()
+    client.results.extend([SimpleNamespace(topics=page1), SimpleNamespace(topics=page2)])
+
+    topics = await TelethonGateway(client).list_topics(-1001)  # type: ignore[arg-type]
+
+    assert [t.id for t in topics] == list(range(1, 102))
+    assert topics[2].closed is True and topics[0].closed is False
+    first_request = client.requests[0]
+    assert isinstance(first_request, GetForumTopicsRequest)
+    assert (first_request.offset_date, first_request.offset_id, first_request.offset_topic) == (
+        None,
+        0,
+        0,
+    )
+
+
+async def test_create_topic_reads_the_new_id_from_updates() -> None:
+    client = StubClient(
+        result=SimpleNamespace(updates=[types.UpdateMessageID(id=777, random_id=1)])
+    )
+
+    topic_id = await TelethonGateway(client).create_topic(  # type: ignore[arg-type]
+        -1001, "Announcements"
+    )
+
+    assert topic_id == 777
+    (request,) = client.requests
+    assert isinstance(request, CreateForumTopicRequest)
+    assert request.title == "Announcements"
 
 
 async def test_get_channel_unknown_entity_is_no_permission() -> None:
