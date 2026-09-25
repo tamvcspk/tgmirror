@@ -30,7 +30,14 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 | 6b | Analyze mặc định (đếm số tin, ghi vào lần chạy), tiến độ từng file đang tải xuống/lên, trần cứng cho việc tải trước; tiếp theo: tăng tốc truyền (kế hoạch bên dưới) | `status` và dòng tiến độ nói "x / tối đa y tin"; file lớn có dòng tiến độ; tải trước không vượt `tmp_budget_mb` |
 | 7 | Giao diện Rich (xem tiến độ, chạy/dừng/chạy lại; các phím `p`/`r`/`q` và `RunControl` đã có), `doctor`, đóng gói (pipx/uv tool), tài liệu người dùng | Cài được bằng một lệnh |
 | 8 | Nguồn group/supergroup/forum: `ChatKind`, ánh xạ topic (`topic_map`), forward vào topic đích, filter `topic`/`from_user` | Clone thử một forum có nhiều topic, đúng topic và đúng thứ tự trong từng topic |
-| 9+ | Đồng bộ edit/delete | Theo nhu cầu |
+| 9 | Keyring cho `api_id`/`api_hash`, đọc credential từ file (`*_FILE`) | Credential không còn nằm trần trong `config.toml` khi máy có keyring; headless/Docker vẫn chạy như cũ |
+| 10 | Xuất/nhập app data (`tgmirror appdata export/import`), **không** chứa secret | Nhập sang máy khác, đăng nhập lại, `run` chạy tiếp delta đúng cặp cũ |
+| 11 | Backup kênh ra đĩa (`tgmirror backup`) và restore lên kênh (`tgmirror restore`) | Backup một kênh có album/topic/poll, restore sang kênh mới: đúng thứ tự, đúng album, đúng topic; kill giữa chừng cả hai chiều không trùng/sót |
+| 12 | Docker image chạy một lần (không daemon), volume + secret, SIGTERM | `docker run --rm ... tgmirror run --yes` chạy xong rồi thoát đúng mã; `docker stop` giữa chừng rồi chạy lại không trùng/sót |
+| 13 | Phát hành: CI, PyPI, binary PyInstaller trên GitHub Release, winget, kho APT/RPM ký GPG, AUR, image trên GHCR | Một tag `v*` ra đủ artifact; `winget install`, `apt install`/`dnf install`, `uv tool install tgmirror`, `docker pull` đều cài được bản đó |
+| 14+ | Đồng bộ edit/delete | Theo nhu cầu |
+
+Chi tiết Phase 9–13: "Kế hoạch Phase 9–13" bên dưới (đã duyệt, chưa bắt đầu).
 
 ### Tái thiết luồng job (2026-09-20)
 
@@ -508,6 +515,109 @@ Câu hỏi mở còn lại của phase này: mục 9 của "Việc cần xác mi
 
 **Ý tưởng cho sau (nêu 2026-09-25 khi thử thật, chưa thiết kế, chưa duyệt để làm):** với một filter lọc phần lớn tin (như ca trên: 582 bị lọc mới có 2 sao chép được) hoặc một `total` rất lớn, thanh tiến độ tổng (`x/total (~n%)`) gần như đứng yên rất lâu dù runner vẫn đang chạy thật — dễ khiến người dùng tưởng bị treo. Không phải bug (số liệu đúng), chỉ là UX gây hiểu lầm. Có thể cần thêm một dấu hiệu "còn sống" độc lập với % tổng — ví dụ tốc độ quét gần đây (tin/giây kể cả tin bị lọc, không chỉ tin đã sao chép), hoặc id/thời điểm tin nguồn đang xét — cạnh thanh tiến độ tổng, để màn hình trông đúng như đang chạy thật ngay cả khi % không nhích. Chưa quyết định cơ chế cụ thể; ghi lại để làm sau, không phải D1–D9.
 
+## Kế hoạch Phase 9–13 (duyệt 2026-09-25, chưa bắt đầu)
+
+Người dùng đưa ra năm hướng; đây là kế hoạch sau các vòng brainstorm, đã được duyệt. Người dùng chốt: **Docker chạy một lần** (một `docker run` = một lệnh `tgmirror`, xong thì thoát; không daemon, không lịch — đúng "Không phải mục tiêu" của `00-tong-quan.md`), **xuất app data không chứa secret, user đăng nhập lại sau khi nhập**, và bốn điểm ở "Đã chốt" cuối mục.
+
+Thứ tự và lý do: **tính năng trước, đóng gói và phân phối cuối cùng** (người dùng chốt 2026-09-25) — Docker và phát hành chỉ đóng gói những gì đã có, nên làm sau cùng thì chỉ phải đóng gói một lần. 9 đầu tiên vì nó quyết định credential nằm ở đâu, điều mà 10 và 12 phụ thuộc; 10 trước 11 vì nhỏ hơn nhiều; 12 trước 13 vì image được đẩy lên GHCR từ chính workflow phát hành.
+
+### Phase 9 — Keyring
+
+Hiện trạng: `api_id`/`api_hash` nằm trong `config.toml` (`core/config.py::save_credentials`, chmod 0600 nếu hệ điều hành cho), biến môi trường `TGMIRROR_API_ID`/`TGMIRROR_API_HASH` thắng file. File `.session` (SQLite của Telethon, trong `sessions/` 0700) mới là thứ tương đương quyền vào tài khoản; `api_hash` một mình không đăng nhập được.
+
+- **Phạm vi: chỉ `api_id`/`api_hash`.** Mã hóa file `.session` khi không dùng (passphrase trong keyring, giải mã ra file tạm lúc chạy) **không làm ở phase này**: phải thay cách Telethon mở session, và crash có thể để lại bản giải mã. Quyền 0700 cùng mã hóa ổ đĩa của hệ điều hành đã che phần lớn rủi ro. Làm sau nếu có lý do cụ thể.
+- **Thứ tự đọc**: biến môi trường → `*_FILE` (xem dưới) → keyring → `config.toml` (cách cũ). Một lớp `core/secrets.py` (`CredentialStore`) để `load_config` không biết gì về keyring.
+- **Ghi** (`login`): có keyring dùng được thì ghi vào keyring (service `tgmirror`, khóa `api_id`/`api_hash`) và xóa hai dòng đó khỏi `config.toml`; không có thì ghi `config.toml` như cũ kèm một dòng thông báo.
+- **"Dùng được"** nghĩa là có backend thật (Windows Credential Manager, macOS Keychain, Secret Service). `NoKeyringError`, backend `fail`/`null`, và backend lưu file trần (`keyrings.alt` plaintext) đều coi là **không có** → rơi về `config.toml`. Không bao giờ chặn lệnh vì thiếu keyring (Linux headless, container).
+- **Người đang có credential trong `config.toml`**: không tự chuyển âm thầm. `login` lần sau tự chuyển (vì nó ghi lại); ngoài ra `tgmirror doctor` gợi ý khi thấy credential trong file mà máy có keyring. Không thêm lệnh riêng.
+- **`*_FILE`**: `TGMIRROR_API_ID_FILE`/`TGMIRROR_API_HASH_FILE` trỏ tới file chứa giá trị (kiểu image chính thức của Postgres/MySQL), để Docker/Kubernetes secret mount thành file dùng được mà không lộ qua `docker inspect`. Làm ở phase này vì nó thuộc cùng chỗ đọc credential; Phase 12 (Docker) dùng nó.
+- **`doctor`**: thêm dòng "credential lấy từ đâu" (env / file / keyring `<tên backend>` / `config.toml`), không bao giờ in giá trị (luật 6).
+- **`logout`**: giữ đúng hành vi hiện tại với credential (chỉ đổi chỗ lưu, không đổi ngữ nghĩa).
+- **Test**: một fixture `autouse` đặt backend keyring trong bộ nhớ cho **mọi** test, để không test nào chạm keyring thật của máy (cùng bài học "`doctor` gọi Telegram thật" ở nhật ký 2026-09-24). Dependency mới: `keyring`.
+- Hoàn thành khi: `login` trên Windows ghi vào Credential Manager và `config.toml` không còn `api_hash`; `PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring` thì mọi thứ chạy như trước phase 9; `*_FILE` đọc được; test xanh không chạm keyring thật.
+
+### Phase 10 — Xuất/nhập app data
+
+Đã chốt: **không xuất secret**; sau khi nhập, user chạy `tgmirror login`.
+
+- **Lệnh**: `tgmirror appdata export <file.zip>` và `tgmirror appdata import <file.zip>` (tên `appdata` để không lẫn với `backup` kênh của Phase 11). Thêm vào menu sau, không bắt buộc ở phase này.
+- **Có trong gói**: `tgmirror.db` và `config.toml` đã bỏ hai dòng `api_id`/`api_hash`. **Không có**: `sessions/`, credential ở keyring hay biến môi trường, `tmp/`.
+- **DB lấy bằng `VACUUM INTO`** (bản chụp nhất quán, kể cả khi có WAL), không copy file. Có lần chạy đang sống (heartbeat còn mới) thì từ chối (mã 2), vì bản chụp giữa chừng rồi đem sang máy khác chạy song song sẽ gửi trùng.
+- **`manifest.json` trong zip**: phiên bản định dạng, phiên bản tgmirror, `PRAGMA user_version` của DB, thời điểm, danh sách file + SHA-256. Không chứa gì định danh tài khoản ngoài những gì DB đã có.
+- **Nhập**: kiểm SHA-256; DB có `user_version` mới hơn bản đang cài → từ chối (bảo cài bản mới); cũ hơn → migration chạy như bình thường khi mở. Máy đích đã có dữ liệu → **dời sang `data.bak-<thời điểm>`** rồi mới giải nén, không xóa; không terminal thì cần `--yes`.
+- **Sau khi nhập**: in nhắc `tgmirror login`. `mirrors.account` cho biết tài khoản của các cặp: lần chạy đầu sau khi đăng nhập bằng tài khoản khác thì cảnh báo (các kênh có thể không truy cập được, `limiter_state` là của tài khoản cũ).
+- Cần xác minh khi làm: DB không lưu đường dẫn tuyệt đối nào của máy cũ (tmp, session) — đọc `store/` trước khi hứa "nhập sang máy khác chạy ngay".
+- Hoàn thành khi: xuất trên Windows, nhập trên Linux (hoặc WSL), đăng nhập lại, `run` tiếp tục delta của một cặp cũ đúng con trỏ.
+
+### Phase 11 — Backup kênh ra đĩa và restore lên kênh
+
+Khác với lần brainstorm đầu: **không** cần đổi giả định "đích luôn là Telegram" của `engine/endpoints.py`. Backup là xuất một chiều (một vòng đọc riêng, nhỏ); restore là một lần chạy bình thường có nguồn là thư mục backup thay vì kênh.
+
+**Thư mục backup** (tự mô tả, đọc được không cần tgmirror):
+
+```
+<dir>/
+  backup.json      # định dạng, phiên bản tgmirror, nguồn (id, tên, loại, about, noforwards),
+                   # filter đã dùng, topic (id, tên, icon), lời tuyên bố D3 nếu có
+  messages.jsonl   # một dòng một tin, tăng dần theo id
+  media/<id>[_<n>].<ext>
+  avatar.jpg
+```
+
+- **Mỗi dòng `messages.jsonl`**: `id`, `date`, `grouped_id`, `topic_id`, `from_user_id`, `text` ở dạng **HTML của Telethon** (giữ định dạng/link mà `SrcMessage` hiện bỏ đi; restore gửi lại bằng `parse_mode="html"`), `media` (loại, tên file, mime, kích thước, thời lượng, cờ voice/round/video_note), dữ liệu poll/quiz, location, contact, `views`, `reply_to` (lưu để lưu trữ; restore v1 bỏ qua, giống clone). JSONL chứ không SQLite: đọc được bằng mắt, không thành "file SQLite thứ hai" cạnh D5, và ghi thêm được cho delta.
+- **Backup nhớ tiến độ bằng chính thư mục**: ghi file media trước, rồi mới ghi dòng JSONL (dòng là dấu "xong"). Ghi đĩa lặp lại không gây hại (khác gửi tin Telegram), nên **không cần write-ahead/reconcile**: crash thì dòng cuối có thể dở (cắt bỏ khi mở lại) và file mồ côi bị ghi đè lần sau. Chạy lại = tiếp từ id lớn nhất trong JSONL = delta.
+- **Đọc qua `FloodGuard`** (luật 1): `iter_messages` rồi `prepare` như chiến lược B, nhưng tải thẳng vào `media/` và **không xóa**. Không dùng `tmp_budget_mb` (đó là trần cho file tạm); v1 không có trần dung lượng, để lỗi đầy đĩa báo ra rõ ràng. Album không bị tách (luật 4), filter dùng lại nguyên `filters/`.
+- **D3 áp y như reupload**: backup ra đĩa chính là "lưu nội dung". Nguồn `noforwards` → từ chối, trừ lời tuyên bố `--yes-i-administer-this-channel` (hoặc câu gõ nguyên văn / câu hỏi cho admin, đúng như `clone`). Lời tuyên bố được ghi vào `backup.json`.
+- **Nhật ký**: bảng mới `backups` trong `tgmirror.db` (migration v3: một dòng mỗi lần backup, trạng thái, heartbeat, số liệu) — để `history` thấy, badge "đang chạy ở nơi khác" và `pause`/`stop` từ terminal khác hoạt động (session Telethon không dùng được bởi hai tiến trình cùng lúc). D5 giữ nguyên: nhật ký vẫn trong một file SQLite; trạng thái tiến độ của backup nằm trong thư mục backup vì nó là một phần của sản phẩm.
+- **Restore = một lần chạy với `MessageReader` đọc từ đĩa** (`engine/backup_reader.py`, cài protocol `MessageReader`): `iter_messages` đọc JSONL, `get_messages` cho `retry`, `list_topics` trả topic trong `backup.json` (nên `TopicResolver` tạo topic đích đúng tên), `prepare` trả đường dẫn file có sẵn. Runner, batcher, write-ahead, reconcile, `retry`, `status`, `history` dùng lại nguyên vẹn. Chiến lược ép thành tải lên lại (không forward được từ đĩa).
+- **Hai chỗ phải sửa trong đường tải lên lại** để restore dùng được:
+  1. `Prepared.files` hiện là file tạm và bị **xóa** sau khi gửi (`send_unit_by_reference`, `Pipeline`) → thêm cờ "file không phải của mình" để không bao giờ xóa file trong thư mục backup.
+  2. `send_prepared` của `TelethonGateway` dựng lại tin từ `Prepared.handle` (tin Telethon gốc) → cần một đường gửi từ mô tả trung lập (dòng JSONL + file) cho restore: gateway protocol thêm một phương thức hoặc `handle` nhận kiểu mô tả mới. `hachoir` tự đọc thời lượng/kích thước video khi tải lên như hiện nay.
+- **Cặp của restore dùng id kênh nguồn gốc** (có trong `backup.json`) làm `mirrors.src_id`, với `options.from_backup = <đường dẫn>`. Vì id tin giữ nguyên, `msg_map` của cặp chống trùng giữa restore và một lần clone trực tiếp cùng đích; nếu kênh nguồn còn sống, restore tới id N rồi `run` trực tiếp tiếp từ N+1.
+- **Đích**: có sẵn, hoặc tạo mới từ `backup.json` (tên, about, avatar, loại — `NewChannelSpec` + `create_channel` đã có).
+- **Không restore được** (ghi rõ ở tài liệu người dùng): view, reaction, bình luận, người gửi gốc trong group (giống clone), vote của poll (cần `--reset-polls` như clone), liên kết reply.
+- **Chưa biết, cần spike trên Telegram thật**: sticker tải lên lại từ file `.webp`/`.tgs`/`.webm` có ra đúng sticker không; video note/voice từ file có giữ đúng loại không; HTML của Telethon có giữ hết loại entity (spoiler, custom emoji — custom emoji cần Premium) không.
+- Chia hai nửa nếu lớn: 11a backup, 11b restore.
+
+### Phase 12 — Docker (chạy một lần)
+
+- **Image**: `python:3.11-slim`, nhiều stage, `uv sync --frozen --no-dev` trong stage build; user không phải root (uid 1000); `ENTRYPOINT ["tgmirror"]`, `CMD ["--help"]`. Phase này chỉ build tại máy (`docker build`); đẩy lên GHCR là việc của Phase 13. amd64 trước; arm64 khi đã xác nhận `cryptg` có wheel cho arm64 (không thì phải có compiler trong stage build).
+- **Thư mục không cần code mới**: `platformdirs` trên Linux theo `XDG_CONFIG_HOME`/`XDG_DATA_HOME`, nên image đặt `XDG_CONFIG_HOME=/config`, `XDG_DATA_HOME=/data` → `/config/tgmirror`, `/data/tgmirror`. `VOLUME ["/data", "/config"]`. Thư mục backup của Phase 11 là một bind mount thứ ba do user chọn.
+- **Secret**: `TGMIRROR_API_ID`/`TGMIRROR_API_HASH` (qua `--env-file`) hoặc `*_FILE` trỏ vào secret mount (Phase 9). Image đặt `PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring` để không thử keyring.
+- **Session phải là volume, không phải secret**: Telethon ghi vào file session trong lúc chạy, và `run` dựa vào bộ nhớ entity trong session (ghi chú Phase 2) — secret mount chỉ đọc hoặc `StringSession` đều làm hỏng điều đó. Lần đầu: `docker run -it --rm -v tgm-data:/data ... tgmirror login` (tương tác, một lần); các lần sau không cần `-it`.
+- **SIGTERM** (việc code chính của phase): `docker stop` gửi SIGTERM, hiện chỉ SIGINT được bắt (`cli/interrupt.py`). SIGTERM phải làm đúng như Ctrl+C lần một (xong batch, lưu, thoát) — cho `clone`/`run`/`retry` lẫn `backup`/`restore`. `docker stop` mặc định SIGKILL sau 10 s: tài liệu hóa `--stop-timeout 60` / `stop_grace_period`; nếu vẫn bị kill thì write-ahead + reconcile lo, không trùng/sót (đúng thứ đã test ở Phase 2).
+- **Không TTY**: phím `p`/`r`/`q` tắt, tiến độ ra `LineReporter`, không có câu hỏi nào — mọi thứ bằng cờ (luật 7 đã bảo đảm; phase này thêm test chạy `clone`/`run`/`retry`/`backup`/`restore` không terminal từ đầu tới cuối). Mã thoát giữ nguyên bảng của `cli/errors.py` để orchestrator của user (Kubernetes Job, cron của máy chủ) phản ứng — tgmirror không tự lên lịch.
+- **Giờ**: `daily_cap` tính theo ngày của máy, container mặc định UTC → tài liệu hóa `TZ`.
+- Hoàn thành khi: kịch bản trong cột lộ trình chạy được với image build tại máy; `docker stop` giữa lần chạy rồi chạy lại: không trùng, không sót.
+
+### Phase 13 — Phát hành và phân phối (làm cuối cùng)
+
+Chung cho mọi kênh:
+
+- **Hai workflow**: `ci.yml` (mỗi push/PR: `ruff check`, `ruff format --check`, `pytest` trên `windows-latest` và `ubuntu-latest`) và `release.yml` (khi push tag `v*`).
+- **`release.yml`**: kiểm tag = `version` trong `pyproject.toml` (một nguồn phiên bản duy nhất) → chạy lại test → `uv build` (wheel + sdist) → PyInstaller trên từng OS → smoke test binary vừa build (`tgmirror --version`, `tgmirror --help`, `tgmirror doctor` với thư mục rỗng và không mạng phải báo "chưa đăng nhập" chứ không crash) → đóng gói theo từng kênh (dưới) → GitHub Release kèm `SHA256SUMS` → đẩy lên từng kênh.
+- **PyInstaller dạng thư mục (`onedir`) nén zip/tar.gz, không dùng `onefile`**: `onefile` giải nén ra thư mục tạm mỗi lần chạy (chậm hơn 1–2 s) và bị antivirus báo nhầm nhiều hơn hẳn — quan trọng vì binary Windows **không ký**.
+- **Build trên đúng OS** (`cryptg` là extension biên dịch, không cross-compile được); Linux build trên runner Ubuntu cũ nhất còn hỗ trợ để binary chạy được trên glibc cũ. Chỉ Windows và Linux; macOS không làm (cần notarize).
+- **Chỗ PyInstaller hay gãy** cần test trong smoke test: backend của `keyring` được tìm qua entry point (cần `copy_metadata("keyring")`/hidden import), `hachoir` nạp parser động, `questionary`/`prompt_toolkit` trên console Windows, `platformdirs`.
+
+Từng kênh:
+
+- **PyPI bằng Trusted Publishing** (OIDC, không token trong repo; tự gắn attestation Sigstore). `uv tool install tgmirror` / `pipx install tgmirror` (Phase 7 đã xác nhận gói cài được) — rẻ nhất, cho người đã có Python.
+- **winget (Windows)**: zip `onedir` (`InstallerType: zip`, `NestedInstallerType: portable`). **Không mua chứng chỉ ký (EV/OV)**: winget chấp nhận installer không ký; cái giá là cảnh báo SmartScreen lần chạy đầu. Rủi ro thật: pipeline kiểm duyệt của `winget-pkgs` quét bằng Defender — nếu bị báo nhầm, gửi mẫu cho Microsoft để gỡ (false-positive submission). Lần đầu nộp tay (`wingetcreate new`) để giữ package id; từ bản sau `release.yml` chạy `wingetcreate update --submit` bằng một PAT của tài khoản GitHub người dùng (repo secret `WINGET_PAT`), mở PR vào `microsoft/winget-pkgs`; duyệt có thể mất vài ngày. Scoop (bucket riêng, không kiểm duyệt) là phương án phụ nếu winget kẹt.
+- **APT + RPM tự host trên GitHub Pages, ký GPG (Linux)**: `nfpm` đóng chính bản PyInstaller Linux thành `.deb` và `.rpm` (không build lại); `reprepro`/`aptly` tạo metadata APT và ký `InRelease`, `createrepo_c` tạo metadata RPM và ký `repomd.xml`; đẩy lên một repo/nhánh `gh-pages` riêng, chỉ giữ N bản gần nhất để không phình. User: thêm key vào `/usr/share/keyrings/tgmirror.gpg`, nguồn với `signed-by=` (không dùng `apt-key`, đã deprecated), rồi `apt install tgmirror` / `dnf install tgmirror`; cập nhật bằng `apt upgrade`. Ước lượng khoảng 1,5–2 ngày. Phương án bớt việc: Cloudsmith (miễn phí cho OSS, họ host và ký) — khoảng 0,5 ngày nhưng phụ thuộc bên thứ ba.
+- **Key GPG**: subkey chỉ để ký, riêng cho tgmirror; primary key cất offline; subkey + passphrase trong GitHub Actions secrets; public key công bố trên trang kho, fingerprint trong README; có ngày hết hạn và lịch gia hạn (key hết hạn là `apt update` của user báo lỗi).
+- **AUR (`tgmirror-bin`)**: PKGBUILD trỏ tới tar.gz trên GitHub Release; không cần ký; khoảng 2 giờ; cập nhật version + checksum tự động được trong `release.yml`.
+- **GHCR**: build và đẩy image của Phase 12 (`ghcr.io/<owner>/tgmirror:<version>` và `:latest`).
+- **Không làm**: kho chính thức Debian/Fedora (cần sponsor, và policy không chấp nhận Telethon ghim đúng một bản vì dùng API private), PPA/COPR (build từ source, PPA không có mạng lúc build nên phải đóng gói mọi dependency Python), Snap (cân nhắc lại nếu có nhu cầu; `platformdirs` trong snap trỏ về `$SNAP_USER_DATA` cần kiểm tra), Flathub (dành cho app GUI).
+- Hoàn thành khi: push một tag thử (ví dụ `v0.2.0rc1`, lên TestPyPI) ra đủ artifact; trên máy sạch, cài được bằng winget (Windows), `apt install` (Ubuntu), `dnf install` (Fedora), `docker pull`, và mỗi cách chạy được `tgmirror login`.
+
+### Đã chốt (người dùng duyệt 2026-09-25)
+
+1. **Phase 11, restore một backup có lời tuyên bố D3**: restore **hỏi lại lời tuyên bố** (cờ `--yes-i-administer-this-channel`, hoặc câu gõ nguyên văn khi tương tác), dù nội dung đã nằm trên đĩa, cho nhất quán "không bao giờ âm thầm"; `begin_run` **bỏ qua** bước đọc lại nguồn khi nguồn là thư mục backup (kênh gốc có thể đã mất — đó chính là lúc cần restore), thay vào đó đọc cờ `noforwards` và lời tuyên bố ghi trong `backup.json`. Đây là cách áp D3 cho một đường mới, không đổi nội dung D3.
+2. **Phase 11 mở rộng "Mục tiêu" của `00-tong-quan.md`** (thêm backup/restore) — sửa khi phase bắt đầu, không sửa trước.
+3. **Phase 11**: định dạng `messages.jsonl` + text dạng HTML của Telethon, như mô tả ở trên.
+4. **Phase 13**: package id winget `tamvcspk.tgmirror`; **có** phát hành lên PyPI thật (Trusted Publishing), không chỉ GitHub Release; kho APT/RPM **tự host trên GitHub Pages**, ký bằng GPG của người dùng (Cloudsmith không dùng).
+
 ## Việc cần xác minh sớm (spike, phase 0–1)
 
 1. ~~Phiên bản Telethon cài đặt có tham số `drop_author` của `forward_messages` không?~~ **Xong 2026-09-19:** có. Telethon 1.45.0 `forward_messages(..., drop_author=, drop_media_captions=, as_album=)`. `pyproject.toml` đặt `telethon>=1.45` nên không cần fallback `ForwardMessagesRequest`.
@@ -545,6 +655,8 @@ Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đ�
 ## Nhật ký quyết định
 
 Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và lý do ở đây.
+
+- 2026-09-25: Brainstorm và lên kế hoạch Phase 9–13 (keyring, CI/release/winget, Docker, xuất/nhập app data, backup/restore kênh ra đĩa; xem "Kế hoạch Phase 9–13"). Không viết mã, không đổi D1–D9; "Đồng bộ edit/delete" dời thành 14+. Người dùng chốt: **tính năng trước, đóng gói và phân phối cuối cùng** (thứ tự 9 keyring → 10 app data → 11 backup/restore → 12 Docker → 13 phát hành; Linux thêm kho APT/RPM ký GPG và AUR); Docker **chạy một lần** (hỏi lại vì "chạy dưới dạng job" có thể đụng quyết định bỏ job/daemon 2026-09-20 — không đụng); xuất app data **không chứa secret**, đăng nhập lại sau khi nhập. Sau đó người dùng duyệt cả bốn điểm còn mở (xem "Đã chốt" trong mục kế hoạch): restore một backup có lời tuyên bố D3 thì hỏi lại lời tuyên bố và không đọc lại kênh nguồn (cách áp D3 cho đường mới, không đổi nội dung D3); "Mục tiêu" của `00-tong-quan.md` sửa khi Phase 11 bắt đầu; `messages.jsonl` + HTML; winget `tamvcspk.tgmirror`, PyPI thật, kho APT/RPM tự host trên GitHub Pages. Phát hiện khi lập kế hoạch: backup ra đĩa một nguồn `noforwards` là "lưu nội dung" nên D3 áp y như reupload; hiện chỉ SIGINT được bắt nên `docker stop` (SIGTERM) chưa dừng êm.
 
 - 2026-09-25: **Tinh chỉnh D3** — người dùng chạy thử menu full-screen thật trên một nguồn `noforwards` mà tài khoản không phải admin, thấy màn hình cứ hỏi lại đích (đúng như "một bước lỗi thì hỏi lại chính bước đó" đã thiết kế) vì trước đây chỉ có cờ dòng lệnh mới vượt qua được D3 cho tài khoản không phải admin, mà menu không có chỗ gõ cờ. Hỏi lại người dùng trước khi đổi (D3 là D1–D9): người dùng chốt đây không phải đảo ngược nội dung quyết định (vẫn phải là lời tuyên bố cố ý của chính user), chỉ thêm một cách nhập nó trong flow tương tác — ban đầu đề xuất một câu Có/Không, người dùng yêu cầu đổi thành **gõ nguyên văn đúng chữ cờ** (`--yes-i-administer-this-channel`) vào một câu hỏi riêng, Esc để thoát, gõ gì khác thì coi như từ chối — giữ đúng mức độ "cố ý" như gõ trên dòng lệnh thay vì một cú bấm chuột/phím dễ dàng. Cài ở `cli/commands/clone.py::CloneFlow._confirm_unadministered`, dùng chung cho cả wizard cổ điển lẫn menu (cùng `CloneFlow`). Không đổi hành vi không tương tác (vẫn chỉ cờ, từ chối mã 4 như cũ).
 - 2026-09-25: Phase 8 xong (group/supergroup/forum, ánh xạ topic, `topic`/`from_user`; xem "Phase 8 — ghi chú"). Không đổi D1–D9. **Đảo "chốt 2026-09-19"**: đích có sẵn không còn phải cùng loại nguồn — người dùng yêu cầu brainstorm thêm giữa lúc duyệt kế hoạch (đưa ra ví dụ clone group→broadcast), chốt ma trận cross-kind mở hoàn toàn cộng cơ chế `topic_as_hashtag`/`_confirm_topic_loss` cho riêng trường hợp forum → không-phải-forum (chi tiết ở "Phase 8 — ghi chú"). Không phải quyết định D1–D9 (không có số D gắn với luật cũ). Việc phát sinh không lường trước, phát hiện khi cài: `mirrors` thiếu cột `dst_kind` (chỉ có `src_kind`) nên `run`/`retry` không dựng lại đúng loại đích cho một cặp cross-kind — thêm migration schema v2 và sửa một bug có sẵn (`cli/commands/run.py::pair_of` dùng nhầm `src_kind` cho đích, vô hại khi luật cũ ép hai bên cùng loại).
