@@ -120,6 +120,37 @@ class RunBusy(StoreError):
         self.run_id = run_id
 
 
+class AppDataError(TgMirrorError):
+    """A problem exporting or importing tgmirror's own state (docs/06-lo-trinh.md, Phase 10)."""
+
+
+class ExportBusy(AppDataError):
+    """A run holds the data right now (fresh heartbeat): a mid-run snapshot moved to another
+    machine and run there would send everything twice."""
+
+
+class AppDataFormatError(AppDataError):
+    """The archive is not an export ``tgmirror appdata import`` can read: no manifest, a malformed
+    one, or a manifest format version newer than this build knows."""
+
+
+class AppDataSchemaNewer(AppDataError):
+    """The archive's database was written by a newer tgmirror than this one."""
+
+    def __init__(self, found: int, known: int) -> None:
+        super().__init__(f"database schema is version {found}, this tgmirror knows {known}")
+        self.found = found
+        self.known = known
+
+
+class AppDataChecksumMismatch(AppDataError):
+    """A file in the archive does not match the checksum its manifest recorded for it."""
+
+    def __init__(self, entry: str) -> None:
+        super().__init__(f"checksum mismatch for {entry}")
+        self.entry = entry
+
+
 class UsageError(TgMirrorError):
     """The command was invoked wrongly (missing flag, no terminal for a prompt). Exit code 2."""
 

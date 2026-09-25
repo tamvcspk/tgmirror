@@ -9,6 +9,7 @@ import typer
 
 from tgmirror import __version__
 from tgmirror.cli.commands import (
+    appdata,
     auth,
     channels,
     clone,
@@ -126,3 +127,4 @@ app.command("retry")(retry.retry)
 app.command("status")(status.status)
 app.add_typer(config.config_app, name="config")
 app.command("doctor")(doctor.doctor)
+app.add_typer(appdata.appdata_app, name="appdata")

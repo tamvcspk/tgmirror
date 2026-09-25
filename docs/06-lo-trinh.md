@@ -16,6 +16,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 - [x] Phase 7 — TUI, doctor, đóng gói (2026-09-24). **TUI xong (2026-09-23)**; **Chặng 1 (2026-09-24), Chặng 2 (2026-09-24, Sao chép mới/Đăng nhập), Chặng 3 (2026-09-24, `tgmirror config get/set` + mục "Cấu hình") và badge "đang chạy ở nơi khác" (2026-09-24, mục 4 còn lại của Chặng 1) của giao diện full-screen (menu) xong**; `tgmirror doctor` (2026-09-24: session, cryptg, quyền kênh đích, cảnh báo an toàn) và đóng gói (2026-09-24: `pyproject.toml` đã đủ cho `uv tool install`/`pipx install`, xác nhận bằng build + cài vào venv cô lập, README có mục Install) xong, xem "Phase 7 — ghi chú"
 - [x] Phase 8 — Group, supergroup, forum topics (2026-09-25; kiểm bằng `FakeGateway`/client Telethon giả, xem "Phase 8 — ghi chú"; **chưa thử clone một forum thật nhiều topic** — tiêu chí lộ trình "Clone thử một forum có nhiều topic, đúng topic và đúng thứ tự" chưa được đánh dấu xong cho tới khi đó)
 - [x] Phase 9 — Keyring (2026-09-25; kiểm bằng test đơn vị với một backend keyring giả trong bộ nhớ — không test nào chạm keyring thật của máy; **chưa thử trên Telegram thật/Windows Credential Manager thật** — tiêu chí lộ trình "Credential không còn nằm trần trong config.toml khi máy có keyring; headless/Docker vẫn chạy như cũ" cần người dùng xác nhận `login` thật ghi vào Credential Manager, xem "Phase 9 — ghi chú")
+- [x] Phase 10 — Xuất/nhập app data (2026-09-25; kiểm bằng test đơn vị/CliRunner với SQLite thật trong `tmp_path`, không cần mạng — roundtrip xuất/nhập, checksum, schema mới hơn, dời dữ liệu cũ sang `.bak-`, từ chối khi có lần chạy đang sống; **chưa thử trên máy thật** — tiêu chí lộ trình "Nhập sang máy khác, đăng nhập lại, `run` chạy tiếp delta đúng cặp cũ" cần người dùng xuất trên Windows rồi nhập trên Linux/WSL, xem "Phase 10 — ghi chú")
 
 ## Lộ trình
 
@@ -38,7 +39,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 | 13 | Phát hành: CI, PyPI, binary PyInstaller trên GitHub Release, winget, kho APT/RPM ký GPG, AUR, image trên GHCR | Một tag `v*` ra đủ artifact; `winget install`, `apt install`/`dnf install`, `uv tool install tgmirror`, `docker pull` đều cài được bản đó |
 | 14+ | Đồng bộ edit/delete | Theo nhu cầu |
 
-Chi tiết Phase 9–13: "Kế hoạch Phase 9–13" bên dưới (đã duyệt; Phase 9 xong, 10–13 chưa bắt đầu).
+Chi tiết Phase 9–13: "Kế hoạch Phase 9–13" bên dưới (đã duyệt; Phase 9–10 xong, 11–13 chưa bắt đầu).
 
 ### Tái thiết luồng job (2026-09-20)
 
@@ -554,9 +555,23 @@ Chưa kiểm chứng (người dùng chạy tay): `login` thật trên Windows c
 - **DB lấy bằng `VACUUM INTO`** (bản chụp nhất quán, kể cả khi có WAL), không copy file. Có lần chạy đang sống (heartbeat còn mới) thì từ chối (mã 2), vì bản chụp giữa chừng rồi đem sang máy khác chạy song song sẽ gửi trùng.
 - **`manifest.json` trong zip**: phiên bản định dạng, phiên bản tgmirror, `PRAGMA user_version` của DB, thời điểm, danh sách file + SHA-256. Không chứa gì định danh tài khoản ngoài những gì DB đã có.
 - **Nhập**: kiểm SHA-256; DB có `user_version` mới hơn bản đang cài → từ chối (bảo cài bản mới); cũ hơn → migration chạy như bình thường khi mở. Máy đích đã có dữ liệu → **dời sang `data.bak-<thời điểm>`** rồi mới giải nén, không xóa; không terminal thì cần `--yes`.
-- **Sau khi nhập**: in nhắc `tgmirror login`. `mirrors.account` cho biết tài khoản của các cặp: lần chạy đầu sau khi đăng nhập bằng tài khoản khác thì cảnh báo (các kênh có thể không truy cập được, `limiter_state` là của tài khoản cũ).
-- Cần xác minh khi làm: DB không lưu đường dẫn tuyệt đối nào của máy cũ (tmp, session) — đọc `store/` trước khi hứa "nhập sang máy khác chạy ngay".
-- Hoàn thành khi: xuất trên Windows, nhập trên Linux (hoặc WSL), đăng nhập lại, `run` tiếp tục delta của một cặp cũ đúng con trỏ.
+- **Sau khi nhập**: in nhắc `tgmirror login`. `mirrors.account` cho biết tài khoản của các cặp: lần chạy đầu sau khi đăng nhập bằng tài khoản khác thì cảnh báo (các kênh có thể không truy cập được, `limiter_state` là của tài khoản cũ). **Chưa làm** (2026-09-25): mọi `RunSpec.account` trong code hiện đều là chuỗi `"default"` cứng, không nơi nào gán danh tính tài khoản thật — chưa có gì để so sánh, nên chưa có cảnh báo này; cần một việc riêng (đưa id/số điện thoại tài khoản thật vào `RunSpec`/`mirrors`) trước khi làm được, không thuộc phạm vi Phase 10.
+- Đã xác minh (2026-09-25, đọc `store/schema.sql` và mọi trường của `RunOptions`): không bảng nào lưu đường dẫn tuyệt đối của máy cũ (`placeholder` là cờ bool, không phải đường dẫn) — "nhập sang máy khác chạy ngay" đúng như hứa.
+- Hoàn thành khi: xuất trên Windows, nhập trên Linux (hoặc WSL), đăng nhập lại, `run` tiếp tục delta của một cặp cũ đúng con trỏ. **Chưa thử trên máy thật** (2026-09-25) — chỉ mới kiểm bằng SQLite thật trong `tmp_path`/`CliRunner`, xem "Phase 10 — ghi chú".
+
+#### Phase 10 — ghi chú (2026-09-25)
+
+Đã có: `store/appdata.py` (`Manifest`, `export_appdata`, `verify_archive`, `apply_import`, `existing_data`); `Store.schema_version`/`export_db` (`VACUUM INTO`) trong `store/db.py`; `core/config.py::config_text_without_credentials` (tách từ `strip_credentials` qua `_strip_credential_lines` dùng chung, không đụng file thật trên đĩa); lỗi mới `AppDataError`/`ExportBusy`/`AppDataFormatError`/`AppDataSchemaNewer`/`AppDataChecksumMismatch` (`core/errors.py`, mã thoát 2 ở `cli/errors.py`); lệnh `tgmirror appdata export|import` (`cli/commands/appdata.py`). Tiêu chí "test xanh, không cần mạng": `tests/unit/test_appdata.py` (roundtrip xuất/nhập, credential bị bỏ khỏi `config.toml` đóng gói, từ chối khi có lần chạy đang sống, checksum sai, schema mới hơn, dời dữ liệu cũ khi nhập đè) và `tests/unit/test_cli_appdata.py` (mã thoát, `--yes`, hỏi/từ chối khi tương tác).
+
+Các lựa chọn khi làm (không phải D1–D9; không có sẵn trong kế hoạch ở trên):
+
+- **Module nằm ở `store/appdata.py`, không phải `core/`**: nó cần `Store` (snapshot DB, kiểm lần chạy đang sống); `core/` chưa từng import `store/` ở đâu khác, còn `store/` vốn đã import `core/` bình thường.
+- **"Máy đích đã có dữ liệu" = `tgmirror.db` tồn tại và/hoặc `config.toml` tồn tại**, kiểm độc lập. Có `tgmirror.db` thì dời **cả** `data_dir` (gồm `sessions/`, `tmp/`, không chỉ file db) sang `data_dir.bak-<thời điểm>`, vì sau khi nhập user luôn phải `tgmirror login` lại (không có credential/session nào được nhập) nên session cũ ở đó coi như đã cũ; `config.toml` (nếu có) dời riêng sang `config.toml.bak-<thời điểm>` cùng mốc thời gian. Việc dời (không xóa) vẫn cần hỏi trước (`--yes` hoặc câu hỏi tương tác) dù bản thân nó không phá gì.
+- **`verify_archive` (checksum + phiên bản định dạng/schema) chạy xong trước khi hỏi hay đụng gì tới dữ liệu máy đích**: một tệp hỏng/không tương thích bị từ chối trước khi user kịp được hỏi có ghi đè không.
+- **Không làm cảnh báo "đăng nhập tài khoản khác"** dù kế hoạch có nhắc: `account` trong code hiện luôn là `"default"`, chưa có danh tính tài khoản thật nào để so sánh — ghi lại ở mục kế hoạch phía trên thay vì lờ đi.
+- **Không thêm vào menu full-screen** ở phase này, đúng như kế hoạch ("Thêm vào menu sau").
+
+Chưa kiểm chứng (người dùng chạy tay): xuất trên Windows thật, nhập trên Linux/WSL thật, `tgmirror login` rồi `tgmirror run` tiếp đúng delta của một cặp cũ.
 
 ### Phase 11 — Backup kênh ra đĩa và restore lên kênh
 

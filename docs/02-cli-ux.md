@@ -19,6 +19,7 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 | `tgmirror status` | Tiến độ, tốc độ, ETA, số lỗi, delay hiện tại và số lần Telegram giới hạn trong 24 giờ của **lần đang chạy** (không có thì lần gần nhất). Chỉ đọc DB, không kết nối Telegram nên chạy được từ terminal thứ hai trong lúc clone đang giữ session. `--json`. Xem "Xem tiến độ" dưới |
 | `tgmirror config get [KEY]` / `config set KEY VALUE` | Xem (mọi `[limits]` + đường dẫn, hoặc một khóa, `--json`) / sửa một khóa `[limits]`. Không kết nối Telegram; `get` không tham số giống `config get`. `set` kiểm tra giá trị (kể cả luật liên trường như `max_delay >= min_delay`) trước khi ghi, giữ nguyên phần còn lại của `config.toml` (comment, `api_id`/`api_hash`) như `login` đã làm |
 | `tgmirror doctor` | Kiểm tra: session hợp lệ, cryptg đã cài, quyền kênh đích, cảnh báo an toàn |
+| `tgmirror appdata export <file.zip>` / `appdata import <file.zip> [--yes]` | Xuất/nhập `tgmirror.db` (bản chụp `VACUUM INTO`) + `config.toml` (đã bỏ `api_id`/`api_hash`) để chuyển sang máy khác (Phase 10, "06-lo-trinh.md"). Không có gì là secret trong gói: không session, không credential, không `tmp/`. `export` từ chối khi có lần chạy đang sống (mã 2); `import` kiểm checksum + phiên bản schema trước khi đụng gì, rồi dời dữ liệu cũ (nếu có) sang `*.bak-<thời điểm>` thay vì xóa — máy sạch thì không hỏi gì, máy đã có dữ liệu thì cần `--yes` hoặc trả lời có ở terminal (không thì mã 2). Sau khi nhập: chạy `tgmirror login` |
 
 Tùy chọn chung: `--version`, `--debug` (hiện traceback thay vì một câu lỗi).
 

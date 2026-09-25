@@ -57,6 +57,14 @@ VI: dict[str, str] = {
     "config.path_line": "  {label}: {path}",
     "config.limits_title": "[limits]:",
     "config.saved": "Đã lưu {name} = {value}.",
+    # appdata (phase 10)
+    "appdata.export_done": "Đã xuất {files} tệp vào {path}.",
+    "appdata.confirm_overwrite": (
+        "Máy này đã có dữ liệu tgmirror; dời sang bản sao lưu rồi nhập đè lên?"
+    ),
+    "appdata.backed_up": "Dữ liệu cũ đã dời sang {path} (không bị xóa).",
+    "appdata.import_done": "Đã nhập {files} tệp.",
+    "appdata.login_reminder": "Chạy `tgmirror login` để đăng nhập lại.",
     # doctor
     "doctor.title": "tgmirror doctor",
     "doctor.session_missing_credentials": (
@@ -258,6 +266,21 @@ VI: dict[str, str] = {
     ),
     "err.store": "Lỗi cơ sở dữ liệu: {detail}",
     "err.schema_too_new": "Cơ sở dữ liệu do bản tgmirror mới hơn tạo ra. Hãy nâng cấp tgmirror.",
+    "err.appdata_export_busy": (
+        "Có lần chạy đang giữ dữ liệu (running/paused). Dừng nó (`tgmirror stop`) rồi xuất lại."
+    ),
+    "err.appdata_import_needs_yes": (
+        "Máy này đã có dữ liệu tgmirror; chạy lại với --yes để dời sang bản sao lưu rồi nhập, "
+        "hoặc chạy trong terminal để được hỏi."
+    ),
+    "err.appdata_schema_newer": (
+        "Tệp xuất dùng schema {found}, bản tgmirror này chỉ biết tới {known}. Nâng cấp tgmirror "
+        "rồi nhập lại."
+    ),
+    "err.appdata_checksum": (
+        "Tệp {entry} trong bản xuất không khớp checksum đã ghi — tệp có thể đã hỏng."
+    ),
+    "err.appdata_format": "Không đọc được tệp xuất: {detail}",
     "err.filter": "Filter không hợp lệ: {detail}",
     "err.filter_mix": (
         "Không dùng --filter-file cùng các cờ lọc khác (--media, --hashtag, --since, ...)."
@@ -543,6 +566,14 @@ EN: dict[str, str] = {
     "config.path_line": "  {label}: {path}",
     "config.limits_title": "[limits]:",
     "config.saved": "Saved {name} = {value}.",
+    # appdata (phase 10)
+    "appdata.export_done": "Exported {files} files to {path}.",
+    "appdata.confirm_overwrite": (
+        "This machine already has tgmirror data; move it aside and import over it?"
+    ),
+    "appdata.backed_up": "Existing data moved aside to {path} (not deleted).",
+    "appdata.import_done": "Imported {files} files.",
+    "appdata.login_reminder": "Run `tgmirror login` to log in again.",
     # doctor
     "doctor.title": "tgmirror doctor",
     "doctor.session_missing_credentials": (
@@ -743,6 +774,21 @@ EN: dict[str, str] = {
     ),
     "err.store": "Database error: {detail}",
     "err.schema_too_new": "The database was made by a newer tgmirror. Please upgrade tgmirror.",
+    "err.appdata_export_busy": (
+        "A run is holding the data (running/paused). Stop it (`tgmirror stop`), then export again."
+    ),
+    "err.appdata_import_needs_yes": (
+        "This machine already has tgmirror data; rerun with --yes to move it aside and import, "
+        "or run in a terminal to be asked."
+    ),
+    "err.appdata_schema_newer": (
+        "The export uses schema {found}, this tgmirror only knows up to {known}. Upgrade "
+        "tgmirror, then import again."
+    ),
+    "err.appdata_checksum": (
+        "The file {entry} in the archive does not match its recorded checksum — it may be corrupt."
+    ),
+    "err.appdata_format": "Cannot read the export file: {detail}",
     "err.filter": "Invalid filter: {detail}",
     "err.filter_mix": (
         "Do not combine --filter-file with the other filter flags (--media, --hashtag, ...)."

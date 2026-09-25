@@ -156,10 +156,22 @@ def store_credentials(paths: Paths, api_id: int, api_hash: str) -> tuple[str, st
     return "config", str(paths.config_file)
 
 
+def _strip_credential_lines(text: str) -> tuple[str, bool]:
+    """The text with any top-level ``api_id``/``api_hash`` lines removed, and whether anything
+    changed (comments, ``[limits]`` and everything else are always kept as they are)."""
+    first_table = re.search(r"^\s*\[", text, flags=re.MULTILINE)
+    head, tail = (
+        (text[: first_table.start()], text[first_table.start() :]) if first_table else (text, "")
+    )
+    kept = [ln for ln in head.splitlines() if not _CREDENTIAL_LINE.match(ln)]
+    changed = len(kept) != len(head.splitlines())
+    new_text = ("\n".join(kept).rstrip("\n") + "\n" if kept else "") + tail
+    return new_text, changed
+
+
 def strip_credentials(paths: Paths) -> None:
     """Remove any top-level ``api_id``/``api_hash`` lines from ``config.toml``, e.g. after moving
-    them to the keyring. Leaves comments, ``[limits]`` and everything else untouched; a no-op if
-    the file doesn't exist or has neither line."""
+    them to the keyring. A no-op if the file doesn't exist or has neither line."""
     if not paths.config_file.exists():
         return
     try:
@@ -167,15 +179,23 @@ def strip_credentials(paths: Paths) -> None:
     except OSError as exc:
         raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
 
-    first_table = re.search(r"^\s*\[", text, flags=re.MULTILINE)
-    head, tail = (
-        (text[: first_table.start()], text[first_table.start() :]) if first_table else (text, "")
-    )
-    kept = [ln for ln in head.splitlines() if not _CREDENTIAL_LINE.match(ln)]
-    if len(kept) == len(head.splitlines()):
-        return  # neither line was there
-    new_text = ("\n".join(kept).rstrip("\n") + "\n" if kept else "") + tail
+    new_text, changed = _strip_credential_lines(text)
+    if not changed:
+        return
     _write_config(paths, new_text)
+
+
+def config_text_without_credentials(paths: Paths) -> str | None:
+    """The text of ``config.toml`` with any ``api_id``/``api_hash`` lines removed, for
+    ``tgmirror appdata export`` (Phase 10) — the real file on disk is never touched. ``None`` when
+    there is no config file to export."""
+    if not paths.config_file.exists():
+        return None
+    try:
+        text = paths.config_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
+    return _strip_credential_lines(text)[0]
 
 
 def save_credentials(paths: Paths, api_id: int, api_hash: str) -> None:

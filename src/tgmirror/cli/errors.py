@@ -12,9 +12,14 @@ import typer
 
 from tgmirror.cli.runtime import Runtime
 from tgmirror.core.errors import (
+    AppDataChecksumMismatch,
+    AppDataError,
+    AppDataFormatError,
+    AppDataSchemaNewer,
     BadApiCredentials,
     ConfigError,
     DailyCapReached,
+    ExportBusy,
     FloodWait,
     ForwardsRestricted,
     MissingCredentials,
@@ -140,6 +145,14 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.schema_too_new")
         case StoreError():
             return t("err.store", detail=str(exc))
+        case ExportBusy():
+            return t("err.appdata_export_busy")
+        case AppDataSchemaNewer():
+            return t("err.appdata_schema_newer", found=exc.found, known=exc.known)
+        case AppDataChecksumMismatch():
+            return t("err.appdata_checksum", entry=exc.entry)
+        case AppDataFormatError():
+            return t("err.appdata_format", detail=str(exc))
     return t("err.generic", detail=str(exc))
 
 
@@ -151,7 +164,14 @@ def exit_code(exc: TgMirrorError) -> int:
     ):
         return 4
     if isinstance(
-        exc, UsageError | ConfigError | BadApiCredentials | EndpointError | RunError | FilterError
+        exc,
+        UsageError
+        | ConfigError
+        | BadApiCredentials
+        | EndpointError
+        | RunError
+        | FilterError
+        | AppDataError,
     ):
         return 2
     return 1

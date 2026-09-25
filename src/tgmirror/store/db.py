@@ -550,6 +550,22 @@ class Store:
             mirror_id = await self._mirror_id(db, run_id)
             await topicmap.save(db, mirror_id, src_topic_id, dst_topic_id, title)
 
+    # ---- app data export (phase 10) --------------------------------------------------------
+
+    async def schema_version(self) -> int:
+        """``PRAGMA user_version``, for ``tgmirror appdata export``'s manifest."""
+        async with self._lock:
+            cur = await self._conn.execute("PRAGMA user_version")
+            row = await cur.fetchone()
+            assert row is not None
+            return int(row[0])
+
+    async def export_db(self, dest: Path) -> None:
+        """A consistent snapshot of the whole database at ``dest`` (which must not exist yet), via
+        ``VACUUM INTO`` — safe even with WAL open, unlike copying the file."""
+        async with self._lock:
+            await self._conn.execute("VACUUM INTO ?", (str(dest),))
+
     # ---- internals ------------------------------------------------------------------------
 
     async def _mirror_of_pair(
