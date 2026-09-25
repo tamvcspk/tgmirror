@@ -1,6 +1,6 @@
 ---
 name: checkpoint-state
-description: Durable state rules for tgmirror runs and mirrors — SQLite schema, write-ahead pending rows, one-transaction-per-batch commits, resume/reconcile after a crash, delta via the pair's cursor, and pause/stop control. Use when touching store/*, engine/runner.py, engine/runs.py, the run/retry/history commands, or any code that changes clone progress.
+description: Durable state rules for tgmirror runs and mirrors — SQLite schema, write-ahead pending rows, one-transaction-per-batch commits, resume/reconcile after a crash, delta via the pair's cursor, and pause/stop control. Also covers the backup log (`backups` table, Phase 11a), whose actual progress lives in the backup directory, not in a transactional batch. Use when touching store/*, engine/runner.py, engine/runs.py, engine/backup.py, the run/retry/history/backup commands, or any code that changes clone or backup progress.
 ---
 
 # Checkpoint & state
@@ -48,6 +48,10 @@ Cloning the same pair again (`clone` or `run`) is a new run on the same mirror: 
 ## Retry
 
 `tgmirror retry [n]` starts an ordinary run with `options.retry_of = n` (`RunRequest.retry_of`). Only the `Unit` source of the runner differs (`Runner._failed_units`): the `failed` ids of run `n` (`run_failures(n)`, snapshot after reconcile), read by id with `get_messages` in chunks of 100 (`planner.failed_units`: albums kept whole, only their failed members; `Gone` for ids deleted at the source → `Store.mark_gone`), then the same gate → `pace` → write-ahead → `guard.write` → `commit_batch`. The source cursor and the filter are untouched (`MAX` keeps the cursor; the read never sees the filter). Rows sent again get `run_id` = the retry, so a message that fails again belongs to it and `retry` without a number goes on; a stopped retry is continued by `retry n`, not `run` (`execute` prints the right hint). Never send a `done` row again.
+
+## Backup (Phase 11a)
+
+`tgmirror backup` (`store/backups.py`, `engine/backup.py`) is the one deliberate exception to write-ahead: its `backups` row (schema v3, no `mirrors`/`msg_map` underneath it) exists only for `history`, the heartbeat/control for `pause`/`stop` from another terminal, and what `flood_log.backup_id` points at (kept separate from `flood_log.run_id`, since `runs`/`backups` number their rows independently). The *authoritative* progress is the backup directory itself (`engine/backupdir.py`): a message is durably backed up once its media file(s) are written and its `messages.jsonl` line is appended after them, and appending a JSONL line is safe to repeat — so there is nothing to write ahead of. A crash can only ever leave the last JSONL line incomplete; `backupdir.iter_records`/`last_id` simply stop there, and the next run re-fetches that one message. `Store.advance_backup` still moves `backups.cursor_to`/`stats_json` forward after each unit, but purely for display — resuming reads `backupdir.last_id`, never this row. The filter is fixed on a directory's first run (`engine.backup.FiltersChanged`): unlike a mirror, a backup keeps no `msg_map`-equivalent record of what an old filter skipped, so it cannot safely restart with a new one.
 
 ## Control
 

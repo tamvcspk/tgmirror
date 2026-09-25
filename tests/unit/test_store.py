@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 
 from tests.fakes import FakeGateway
-from tgmirror.core.errors import RunBusy, SchemaTooNew, StoreError
+from tgmirror.core.errors import BackupBusy, RunBusy, SchemaTooNew, StoreError
 from tgmirror.core.gateway import ChannelInfo, ChatKind, MediaKind, SrcMessage, Unit
 from tgmirror.core.limiter import LimiterState
+from tgmirror.store.backups import BackupSpec
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store, default_migrations
 from tgmirror.store.msgmap import MessageResult
 from tgmirror.store.runs import Control, FilterChange, RunOptions, RunSpec, RunStatus
@@ -140,6 +141,33 @@ async def test_v2_migration_backfills_dst_kind_from_src_kind(tmp_path: Path) -> 
 
     assert mirror is not None
     assert mirror.dst_kind == mirror.src_kind == ChatKind.SUPERGROUP
+
+
+async def test_v3_migration_adds_backups_and_flood_log_backup_id(tmp_path: Path) -> None:
+    """Phase 11: the ``backups`` log and ``flood_log.backup_id`` are new in v3; old data (a v2
+    ``flood_log`` row with no ``backup_id``) must survive the upgrade untouched."""
+    path = tmp_path / "state.db"
+    v2 = default_migrations()[:2]
+    async with await Store.open(path, migrations=v2):
+        pass
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO flood_log(run_id, ts, kind, seconds, method, delay_ms, batch_size) "
+        "VALUES(1, ?, 'flood_wait', 5, 'copy_messages', 100, 20)",
+        (T0.isoformat(),),
+    )
+    con.commit()
+    con.close()
+
+    async with await Store.open(path) as upgraded:  # v1 + v2 + v3
+        cols = {r[1] for r in await rows(path, "PRAGMA table_info(backups)")}
+        assert {"id", "dir", "status", "control", "cursor_to", "stats_json"} <= cols
+        flood_cols = {r[1] for r in await rows(path, "PRAGMA table_info(flood_log)")}
+        assert "backup_id" in flood_cols
+        assert await rows(path, "SELECT run_id, backup_id, kind FROM flood_log") == [
+            (1, None, "flood_wait")
+        ]
+        assert await upgraded.active_backup() is None  # no rows yet, but the table works
 
 
 async def test_a_failing_migration_leaves_the_old_version_intact(tmp_path: Path) -> None:
@@ -814,3 +842,164 @@ async def test_write_ahead_records_the_source_topic(store: Store, tmp_path: Path
     assert await rows(
         tmp_path / "state.db", "SELECT src_msg_id, src_topic_id FROM msg_map ORDER BY src_msg_id"
     ) == [(1, 7), (2, 7), (3, 7)]
+
+
+# ---- backups (phase 11) -----------------------------------------------------------------------
+
+
+def backup_spec(dir_: str = "/tmp/out") -> BackupSpec:
+    src, _ = pair()
+    return BackupSpec(src=src, dir=dir_)
+
+
+async def test_starting_a_backup_creates_its_log_row(store: Store) -> None:
+    backup = await store.start_backup(backup_spec())
+
+    assert backup.status is RunStatus.RUNNING
+    assert backup.dir == "/tmp/out"
+    assert backup.cursor_to == 0
+    assert backup.done == 0
+
+
+async def test_a_second_backup_of_the_same_directory_is_refused_while_fresh(
+    store: Store, clock: Clock
+) -> None:
+    backup = await store.start_backup(backup_spec())
+    clock.advance(seconds=HEARTBEAT_TIMEOUT.total_seconds() - 1)
+
+    with pytest.raises(BackupBusy) as busy:
+        await store.start_backup(backup_spec())
+
+    assert busy.value.backup_id == backup.id
+
+
+async def test_a_stale_backup_heartbeat_is_closed_as_interrupted(
+    store: Store, clock: Clock
+) -> None:
+    backup = await store.start_backup(backup_spec())
+    clock.advance(seconds=HEARTBEAT_TIMEOUT.total_seconds() + 1)
+
+    second = await store.start_backup(backup_spec())
+
+    assert second.status is RunStatus.RUNNING
+    dead = await store.get_backup(backup.id)
+    assert dead is not None
+    assert (dead.status, dead.fail_reason) == (RunStatus.FAILED, "interrupted")
+
+
+async def test_force_takeover_overrides_a_fresh_backup_lock(store: Store) -> None:
+    backup = await store.start_backup(backup_spec())
+
+    second = await store.start_backup(backup_spec(), force=True)
+
+    assert second.status is RunStatus.RUNNING
+    taken = await store.get_backup(backup.id)
+    assert taken is not None and (taken.status, taken.fail_reason) == (
+        RunStatus.FAILED,
+        "taken_over",
+    )
+
+
+async def test_two_different_directories_never_conflict(store: Store) -> None:
+    first = await store.start_backup(backup_spec("/tmp/a"))
+    second = await store.start_backup(backup_spec("/tmp/b"))  # different dir: not busy
+
+    assert first.status is RunStatus.RUNNING
+    assert second.status is RunStatus.RUNNING
+
+
+async def test_active_backup_is_the_live_one_with_a_fresh_heartbeat(
+    store: Store, clock: Clock
+) -> None:
+    assert await store.active_backup() is None
+    backup = await store.start_backup(backup_spec())
+
+    active = await store.active_backup()
+    assert active is not None and active.id == backup.id
+
+    clock.advance(seconds=HEARTBEAT_TIMEOUT.total_seconds() + 1)
+    assert await store.active_backup() is None
+
+    await store.heartbeat_backup(backup.id)
+    await store.finish_backup(backup.id, RunStatus.DONE)
+    assert await store.active_backup() is None
+
+
+async def test_backup_control_is_only_accepted_for_a_live_backup(store: Store) -> None:
+    backup = await store.start_backup(backup_spec())
+    await store.finish_backup(backup.id, RunStatus.STOPPED)
+
+    assert await store.set_backup_control(backup.id, Control.PAUSE) is False
+    assert await store.read_backup_control(backup.id) is Control.NONE
+
+    live = await store.start_backup(backup_spec())
+    assert await store.set_backup_control(live.id, Control.PAUSE) is True
+    assert await store.read_backup_control(live.id) is Control.PAUSE
+    await store.set_backup_status(live.id, RunStatus.PAUSED)
+    assert await store.set_backup_control(live.id, Control.NONE) is True
+
+
+async def test_advance_backup_accumulates_stats_and_moves_the_cursor_forward_only(
+    store: Store,
+) -> None:
+    backup = await store.start_backup(backup_spec())
+
+    await store.advance_backup(backup.id, 5, extra_stats={"done": 2})
+    updated = await store.advance_backup(backup.id, 3, extra_stats={"done": 1, "gone": 1})
+
+    assert updated.cursor_to == 5  # never moves backwards
+    assert updated.done == 3
+    assert updated.gone == 1
+
+
+async def test_finish_backup_sets_status_clears_control_and_closes_the_log(
+    store: Store, clock: Clock
+) -> None:
+    backup = await store.start_backup(backup_spec())
+    await store.set_backup_control(backup.id, Control.STOP)
+    resume = clock() + timedelta(minutes=5)
+    clock.advance(seconds=30)
+
+    await store.finish_backup(backup.id, RunStatus.WAITING_FLOOD, resume_at=resume)
+
+    after = await store.get_backup(backup.id)
+    assert after is not None
+    assert (after.status, after.control, after.resume_at) == (
+        RunStatus.WAITING_FLOOD,
+        Control.NONE,
+        resume,
+    )
+    assert after.ended_at == T0 + timedelta(seconds=30) and after.started_at == T0
+
+
+async def test_list_and_latest_backup(store: Store) -> None:
+    first = await store.start_backup(backup_spec("/tmp/a"))
+    second = await store.start_backup(backup_spec("/tmp/b"))
+
+    assert [b.id for b in await store.list_backups()] == [second.id, first.id]
+    assert (await store.latest_backup()).id == second.id  # type: ignore[union-attr]
+    assert (await store.latest_backup("/tmp/a")).id == first.id  # type: ignore[union-attr]
+
+
+async def test_backup_flood_log_is_separate_from_run_flood_log(
+    store: Store, tmp_path: Path
+) -> None:
+    run = (await store.start_run(spec())).run
+    backup = await store.start_backup(backup_spec())
+
+    await store.log_flood(
+        run.id, kind="flood_wait", seconds=5, method="copy_messages", delay_ms=100, batch_size=20
+    )
+    await store.log_flood(
+        None,
+        backup_id=backup.id,
+        kind="flood_wait",
+        seconds=7,
+        method="export_unit",
+        delay_ms=200,
+        batch_size=1,
+    )
+
+    events = await store.flood_events(run.id)
+    assert len(events) == 1
+    assert events[0].seconds == 5  # the backup's row (seconds=7) never counts as this run's

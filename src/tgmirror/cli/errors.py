@@ -16,6 +16,7 @@ from tgmirror.core.errors import (
     AppDataError,
     AppDataFormatError,
     AppDataSchemaNewer,
+    BackupBusy,
     BadApiCredentials,
     ConfigError,
     DailyCapReached,
@@ -34,6 +35,12 @@ from tgmirror.core.errors import (
     TooManyChannels,
     Transient,
     UsageError,
+)
+from tgmirror.engine.backup import (
+    BackupError,
+    BackupNeedsAcknowledgement,
+    FiltersChanged,
+    WrongSource,
 )
 from tgmirror.engine.endpoints import (
     AmbiguousChannel,
@@ -153,6 +160,14 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.appdata_checksum", entry=exc.entry)
         case AppDataFormatError():
             return t("err.appdata_format", detail=str(exc))
+        case BackupNeedsAcknowledgement():
+            return t("err.backup_needs_admin_ack", title=exc.title)
+        case FiltersChanged():
+            return t("err.backup_filters_changed", dir=exc.directory)
+        case WrongSource():
+            return t("err.backup_wrong_source", dir=exc.directory, title=exc.existing_title)
+        case BackupBusy():
+            return t("err.backup_busy", id=exc.backup_id)
     return t("err.generic", detail=str(exc))
 
 
@@ -171,7 +186,8 @@ def exit_code(exc: TgMirrorError) -> int:
         | EndpointError
         | RunError
         | FilterError
-        | AppDataError,
+        | AppDataError
+        | BackupError,
     ):
         return 2
     return 1

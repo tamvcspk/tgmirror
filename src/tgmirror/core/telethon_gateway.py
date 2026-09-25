@@ -25,6 +25,7 @@ from typing import Any
 
 from telethon import TelegramClient, errors, helpers, types, utils
 from telethon.errors.common import InvalidBufferError
+from telethon.extensions import html as tl_html
 from telethon.network import MTProtoSender
 from telethon.tl import custom
 from telethon.tl.functions.channels import CreateChannelRequest, ToggleForumRequest
@@ -68,6 +69,8 @@ from tgmirror.core.gateway import (
     CaptionPolicy,
     ChannelInfo,
     ChatKind,
+    ExportedMedia,
+    ExportedMessage,
     MediaKind,
     OnTransfer,
     Prepared,
@@ -387,6 +390,66 @@ def src_message(message: object) -> SrcMessage | None:
         topic_id=_topic_of(message),
         from_user_id=message.sender_id,
     )
+
+
+# ---- messages -> ExportedMessage (phase 11, backup) ------------------------------------------
+
+
+def _poll_media(media: types.MessageMediaPoll) -> ExportedMedia:
+    options = tuple(_text_of(a.text) for a in media.poll.answers)
+    correct: int | None = None
+    if media.results and media.results.results:
+        by_option = {a.option: i for i, a in enumerate(media.poll.answers)}
+        for r in media.results.results:
+            if r.correct and r.option in by_option:
+                correct = by_option[r.option]
+                break
+    return ExportedMedia(
+        kind=MediaKind.POLL,
+        poll_question=_text_of(media.poll.question),
+        poll_options=options,
+        poll_quiz=bool(media.poll.quiz),
+        poll_correct_option=correct,
+    )
+
+
+def _geo_media(media: object) -> ExportedMedia:
+    geo = getattr(media, "geo", None)
+    venue_title = media.title if isinstance(media, types.MessageMediaVenue) else None
+    return ExportedMedia(
+        kind=MediaKind.GEO,
+        geo_lat=getattr(geo, "lat", None),
+        geo_lon=getattr(geo, "long", None),
+        venue_title=venue_title,
+    )
+
+
+def _contact_media(media: types.MessageMediaContact) -> ExportedMedia:
+    return ExportedMedia(
+        kind=MediaKind.CONTACT,
+        contact_phone=media.phone_number or None,
+        contact_first_name=media.first_name or None,
+        contact_last_name=media.last_name or None,
+    )
+
+
+def _self_contained_media(media: object) -> ExportedMedia | None:
+    """The export of media with no file (docs/06-lo-trinh.md, phase 11): everything a backup can
+    save of a poll/geo/contact/game/invoice, or ``None`` for plain text/a link preview (the text
+    itself already carries what matters)."""
+    if isinstance(media, types.MessageMediaPoll):
+        return _poll_media(media)
+    if isinstance(
+        media, types.MessageMediaGeo | types.MessageMediaGeoLive | types.MessageMediaVenue
+    ):
+        return _geo_media(media)
+    if isinstance(media, types.MessageMediaContact):
+        return _contact_media(media)
+    if isinstance(media, types.MessageMediaGame):
+        return ExportedMedia(kind=MediaKind.GAME, title=media.game.title)
+    if isinstance(media, types.MessageMediaInvoice):
+        return ExportedMedia(kind=MediaKind.INVOICE, title=media.title)
+    return None
 
 
 def _forward_result_ids(req: ForwardMessagesRequest, result: object) -> list[int | None]:
@@ -1024,6 +1087,40 @@ class TelethonGateway:
                 items.append(_Item(message, path, thumb))
         files = tuple(f for item in items for f in (item.path, item.thumb) if f is not None)
         return Prepared(unit, files, _Fetched(tuple(items)))
+
+    async def export_unit(
+        self, src: int, unit: Unit, media_dir: Path, on_transfer: OnTransfer | None = None
+    ) -> list[ExportedMessage]:
+        messages = await self._read_unit(src, unit)
+        out: list[ExportedMessage] = []
+        with mapped_errors():
+            for message in messages:
+                media: ExportedMedia | None = None
+                if _has_file(message):
+                    path = await self._download(message, media_dir, on_transfer)
+                    f = message.file
+                    media = ExportedMedia(
+                        kind=media_kind(message),
+                        filename=path.name,
+                        mime=f.mime_type,
+                        size=f.size,
+                        duration=f.duration,
+                    )
+                elif message.media is not None:
+                    media = _self_contained_media(message.media)
+                out.append(
+                    ExportedMessage(
+                        id=message.id,
+                        date=message.date,
+                        grouped_id=message.grouped_id,
+                        topic_id=_topic_of(message),
+                        from_user_id=message.sender_id,
+                        text_html=tl_html.unparse(message.message or "", message.entities or []),
+                        views=message.views,
+                        media=media,
+                    )
+                )
+        return out
 
     # ---- file transfers through the request budget ---------------------------------------
 

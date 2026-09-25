@@ -11,6 +11,7 @@ from tgmirror import __version__
 from tgmirror.cli.commands import (
     appdata,
     auth,
+    backup,
     channels,
     clone,
     config,
@@ -120,6 +121,7 @@ app.command("channels")(channels.channels)
 app.command("topics")(topics.topics)
 app.command("clone")(clone.clone)
 app.command("run")(run.run_clone)
+app.command("backup")(backup.backup)
 app.command("pause")(control.pause)
 app.command("stop")(control.stop)
 app.command("history")(history.history)

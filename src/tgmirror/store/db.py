@@ -26,10 +26,11 @@ from typing import Self
 
 import aiosqlite
 
-from tgmirror.core.errors import RunBusy, SchemaTooNew, StoreError
+from tgmirror.core.errors import BackupBusy, RunBusy, SchemaTooNew, StoreError
 from tgmirror.core.gateway import Unit
 from tgmirror.core.limiter import LimiterState
 from tgmirror.store import floodlog, limiterstate, msgmap, topicmap
+from tgmirror.store.backups import BACKUP_SELECT, Backup, BackupSpec, backup_from_row
 from tgmirror.store.msgmap import MessageResult, PendingRow
 from tgmirror.store.runs import (
     RUN_SELECT,
@@ -66,13 +67,44 @@ _V2_DST_KIND = (
 )
 
 
+# Version 3 (phase 11): the ``backups`` log (``tgmirror backup``). A backup has no destination and
+# no msg_map: its progress lives in the backup directory itself (``engine/backupdir.py``), so this
+# table only carries the log (``history``), the heartbeat/control for pause|stop from another
+# terminal, and what ``flood_log.backup_id`` points at (``engine/flood.py::FloodOwner``) — the
+# ``run_id`` column stays as it was, now alongside a ``backup_id`` that a backup's events use
+# instead, so the two logs' rows are never confused even though ``runs``/``backups`` number their
+# rows independently.
+_V3_BACKUPS = (
+    "CREATE TABLE backups (\n"
+    "  id           INTEGER PRIMARY KEY,\n"
+    "  account      TEXT NOT NULL,\n"
+    "  src_id       INTEGER NOT NULL,\n"
+    "  src_title    TEXT,\n"
+    "  src_kind     TEXT NOT NULL,\n"
+    "  dir          TEXT NOT NULL,\n"
+    "  filters_json TEXT NOT NULL,\n"
+    "  status       TEXT NOT NULL,\n"
+    "  control      TEXT NOT NULL DEFAULT 'none',\n"
+    "  cursor_to    INTEGER NOT NULL DEFAULT 0,\n"
+    "  resume_at    TEXT,\n"
+    "  fail_reason  TEXT,\n"
+    "  stats_json   TEXT NOT NULL DEFAULT '{}',\n"
+    "  started_at   TEXT NOT NULL,\n"
+    "  ended_at     TEXT,\n"
+    "  updated_at   TEXT NOT NULL\n"
+    ");\n"
+    "CREATE INDEX backups_dir ON backups(dir);\n"
+    "ALTER TABLE flood_log ADD COLUMN backup_id INTEGER;\n"
+)
+
+
 def default_migrations() -> tuple[str, ...]:
     """SQL scripts by version: ``migrations[i]`` upgrades ``user_version`` ``i`` to ``i + 1``.
 
     Version 1 is ``schema.sql``. A schema change appends a script here (never edits an earlier
     one) and gets a test that upgrades a database made by the previous version.
     """
-    return (_sql("schema.sql"), _V2_DST_KIND)
+    return (_sql("schema.sql"), _V2_DST_KIND, _V3_BACKUPS)
 
 
 def utc_now() -> datetime:
@@ -505,18 +537,20 @@ class Store:
 
     async def log_flood(
         self,
-        run_id: int,
+        run_id: int | None,
         *,
         kind: str,
         seconds: int | None,
         method: str,
         delay_ms: int | None,
         batch_size: int | None,
+        backup_id: int | None = None,
     ) -> None:
         async with self._tx() as db:
             await floodlog.log_flood(
                 db,
                 run_id=run_id,
+                backup_id=backup_id,
                 ts=self._ts(),
                 kind=kind,
                 seconds=seconds,
@@ -549,6 +583,172 @@ class Store:
         async with self._tx() as db:
             mirror_id = await self._mirror_id(db, run_id)
             await topicmap.save(db, mirror_id, src_topic_id, dst_topic_id, title)
+
+    # ---- backups (phase 11) ----------------------------------------------------------------
+
+    async def start_backup(self, spec: BackupSpec, *, force: bool = False) -> Backup:
+        """Begin a backup of ``spec``'s directory: one transaction. Refuses (``BackupBusy``) when
+        another process holds the same directory with a fresh heartbeat, unless ``force``; one
+        whose heartbeat is stale is closed as ``failed`` with the reason ``interrupted``, so the
+        log stays truthful (mirrors ``start_run``, but there is no mirror to attach to: the
+        directory itself is the identity, and progress within it is the backup's own business,
+        not this table's — resuming is ``engine/backup.py`` reading ``backupdir.last_id``)."""
+        now = self._now()
+        ts = now.isoformat()
+        async with self._tx() as db:
+            await self._close_dead_backups(db, spec.dir, now, force)
+            cur = await db.execute(
+                "INSERT INTO backups(account, src_id, src_title, src_kind, dir, filters_json, "
+                "status, control, cursor_to, stats_json, started_at, updated_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, 'running', 'none', 0, '{}', ?, ?)",
+                (
+                    spec.account,
+                    spec.src.id,
+                    spec.src.title,
+                    spec.src.kind,
+                    spec.dir,
+                    spec.filters_json,
+                    ts,
+                    ts,
+                ),
+            )
+            backup_id = cur.lastrowid
+        assert backup_id is not None
+        return await self._require_backup(backup_id)
+
+    async def _close_dead_backups(
+        self, db: aiosqlite.Connection, dir_: str, now: datetime, force: bool
+    ) -> None:
+        cur = await db.execute(
+            "SELECT id, updated_at FROM backups WHERE dir = ? AND status IN ('running', 'paused')",
+            (dir_,),
+        )
+        for row in await cur.fetchall():
+            fresh = now - datetime.fromisoformat(row["updated_at"]) < HEARTBEAT_TIMEOUT
+            if fresh and not force:
+                raise BackupBusy(row["id"])
+            reason, ended = ("taken_over", now.isoformat()) if fresh else ("interrupted", row[1])
+            await db.execute(
+                "UPDATE backups SET status = 'failed', control = 'none', fail_reason = ?, "
+                "ended_at = ? WHERE id = ?",
+                (reason, ended, row["id"]),
+            )
+
+    async def get_backup(self, backup_id: int) -> Backup | None:
+        async with self._lock:
+            cur = await self._conn.execute(BACKUP_SELECT + " WHERE id = ?", (backup_id,))
+            row = await cur.fetchone()
+        return backup_from_row(row) if row is not None else None
+
+    async def _require_backup(self, backup_id: int) -> Backup:
+        backup = await self.get_backup(backup_id)
+        if backup is None:
+            raise StoreError(f"backup {backup_id} does not exist")
+        return backup
+
+    async def latest_backup(self, dir: str | None = None) -> Backup | None:
+        """The newest backup, of one directory when ``dir`` is given."""
+        sql, params = BACKUP_SELECT, ()
+        if dir is not None:
+            sql += " WHERE dir = ?"
+            params = (dir,)
+        async with self._lock:
+            cur = await self._conn.execute(sql + " ORDER BY id DESC LIMIT 1", params)
+            row = await cur.fetchone()
+        return backup_from_row(row) if row is not None else None
+
+    async def list_backups(self, limit: int = 20) -> list[Backup]:
+        """The newest backups first."""
+        async with self._lock:
+            cur = await self._conn.execute(BACKUP_SELECT + " ORDER BY id DESC LIMIT ?", (limit,))
+            return [backup_from_row(r) for r in await cur.fetchall()]
+
+    async def active_backup(self) -> Backup | None:
+        """The backup some process holds right now (fresh heartbeat), as ``active_run``."""
+        now = self._now()
+        async with self._lock:
+            cur = await self._conn.execute(
+                BACKUP_SELECT + " WHERE status IN ('running', 'paused') ORDER BY id DESC"
+            )
+            rows = await cur.fetchall()
+        for row in rows:
+            backup = backup_from_row(row)
+            if now - backup.updated_at < HEARTBEAT_TIMEOUT:
+                return backup
+        return None
+
+    async def heartbeat_backup(self, backup_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE backups SET updated_at = ? WHERE id = ?", (self._ts(), backup_id)
+            )
+
+    async def read_backup_control(self, backup_id: int) -> Control:
+        async with self._lock:
+            cur = await self._conn.execute("SELECT control FROM backups WHERE id = ?", (backup_id,))
+            row = await cur.fetchone()
+        return Control(row[0]) if row is not None else Control.NONE
+
+    async def set_backup_control(self, backup_id: int, control: Control) -> bool:
+        async with self._tx() as db:
+            cur = await db.execute(
+                "UPDATE backups SET control = ? WHERE id = ? AND status IN ('running', 'paused')",
+                (control, backup_id),
+            )
+            return cur.rowcount > 0
+
+    async def set_backup_status(self, backup_id: int, status: RunStatus) -> None:
+        assert status in _LIVE
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE backups SET status = ?, updated_at = ? "
+                "WHERE id = ? AND status IN ('running', 'paused')",
+                (status, self._ts(), backup_id),
+            )
+
+    async def finish_backup(
+        self,
+        backup_id: int,
+        status: RunStatus,
+        *,
+        fail_reason: str | None = None,
+        resume_at: datetime | None = None,
+    ) -> None:
+        ts = self._ts()
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE backups SET status = ?, control = 'none', fail_reason = ?, "
+                "resume_at = ?, ended_at = ?, updated_at = ? WHERE id = ?",
+                (
+                    status,
+                    fail_reason,
+                    resume_at.isoformat() if resume_at else None,
+                    ts,
+                    ts,
+                    backup_id,
+                ),
+            )
+
+    async def advance_backup(
+        self, backup_id: int, cursor: int, *, extra_stats: Mapping[str, int] | None = None
+    ) -> Backup:
+        """One unit written to disk: move the cursor and stats forward (informational — the backup
+        directory, not this row, is what a resume actually reads)."""
+        ts = self._ts()
+        async with self._tx() as db:
+            cur = await db.execute("SELECT stats_json FROM backups WHERE id = ?", (backup_id,))
+            row = await cur.fetchone()
+            if row is None:
+                raise StoreError(f"backup {backup_id} does not exist")
+            merged: dict[str, int] = json.loads(row[0])
+            for key, amount in (extra_stats or {}).items():
+                merged[key] = merged.get(key, 0) + amount
+            await db.execute(
+                "UPDATE backups SET cursor_to = MAX(cursor_to, ?), stats_json = ?, "
+                "updated_at = ? WHERE id = ?",
+                (cursor, json.dumps(merged, sort_keys=True), ts, backup_id),
+            )
+        return await self._require_backup(backup_id)
 
     # ---- app data export (phase 10) --------------------------------------------------------
 

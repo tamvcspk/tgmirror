@@ -12,6 +12,7 @@ Người dùng đã join một kênh Telegram. Họ muốn tạo bản sao của
 4. Pause / stop / resume có checkpoint (phím `p`/`r`/`q` khi đang chạy, hoặc `tgmirror pause|stop|run` từ terminal khác); chạy lại cùng cặp nguồn/đích là delta clone.
 5. Tốc độ tốt: ưu tiên copy phía server, gom batch.
 6. Tránh FLOOD_WAIT và hạn chế bị đánh dấu spam.
+7. Backup một nguồn ra đĩa (`tgmirror backup`, Phase 11a, 2026-09-25) và restore từ đó lên một kênh (`tgmirror restore`, Phase 11b, **chưa làm**): cùng D3, cùng pause/stop/resume, khác `clone` ở chỗ đích là một thư mục thay vì một kênh khác.
 
 ## Không phải mục tiêu (v1)
 

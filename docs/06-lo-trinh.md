@@ -17,6 +17,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 - [x] Phase 8 — Group, supergroup, forum topics (2026-09-25; kiểm bằng `FakeGateway`/client Telethon giả, xem "Phase 8 — ghi chú"; **chưa thử clone một forum thật nhiều topic** — tiêu chí lộ trình "Clone thử một forum có nhiều topic, đúng topic và đúng thứ tự" chưa được đánh dấu xong cho tới khi đó)
 - [x] Phase 9 — Keyring (2026-09-25; kiểm bằng test đơn vị với một backend keyring giả trong bộ nhớ — không test nào chạm keyring thật của máy; **chưa thử trên Telegram thật/Windows Credential Manager thật** — tiêu chí lộ trình "Credential không còn nằm trần trong config.toml khi máy có keyring; headless/Docker vẫn chạy như cũ" cần người dùng xác nhận `login` thật ghi vào Credential Manager, xem "Phase 9 — ghi chú")
 - [x] Phase 10 — Xuất/nhập app data (2026-09-25; kiểm bằng test đơn vị/CliRunner với SQLite thật trong `tmp_path`, không cần mạng — roundtrip xuất/nhập, checksum, schema mới hơn, dời dữ liệu cũ sang `.bak-`, từ chối khi có lần chạy đang sống; **chưa thử trên máy thật** — tiêu chí lộ trình "Nhập sang máy khác, đăng nhập lại, `run` chạy tiếp delta đúng cặp cũ" cần người dùng xuất trên Windows rồi nhập trên Linux/WSL, xem "Phase 10 — ghi chú")
+- [x] Phase 11a — Backup ra đĩa (2026-09-25; `tgmirror backup` + wizard, kiểm bằng `FakeGateway`/SQLite thật — album/topic/poll, D3 (cả cờ lẫn wizard, từ chối sớm), dừng rồi tiếp tục không trùng/sót, filter không đổi được khi resume (wizard bỏ qua câu hỏi, giữ filter cũ), thư mục còn chờ FloodWait bị từ chối trước câu hỏi filter, `flood_log` tách theo backup; **người dùng đã xác nhận chạy thành công trên Telegram thật, cả cờ lẫn wizard** (2026-09-25); chi tiết nào đã thử (loại nguồn, album/topic/poll, HTML entity) chưa ghi lại — xem "Phase 11 — ghi chú"; **chưa phân tích/ETA**, **chưa nối vào `tgmirror history`**, **chưa có mục trong menu full-screen**). **Phase 11b (restore) chưa bắt đầu** — tiêu chí lộ trình "restore sang kênh mới: đúng thứ tự, đúng album, đúng topic" chưa đánh giá được
 
 ## Lộ trình
 
@@ -39,7 +40,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 | 13 | Phát hành: CI, PyPI, binary PyInstaller trên GitHub Release, winget, kho APT/RPM ký GPG, AUR, image trên GHCR | Một tag `v*` ra đủ artifact; `winget install`, `apt install`/`dnf install`, `uv tool install tgmirror`, `docker pull` đều cài được bản đó |
 | 14+ | Đồng bộ edit/delete | Theo nhu cầu |
 
-Chi tiết Phase 9–13: "Kế hoạch Phase 9–13" bên dưới (đã duyệt; Phase 9–10 xong, 11–13 chưa bắt đầu).
+Chi tiết Phase 9–13: "Kế hoạch Phase 9–13" bên dưới (đã duyệt; Phase 9–10 xong, 11a xong (11b restore chưa bắt đầu), 12–13 chưa bắt đầu).
 
 ### Tái thiết luồng job (2026-09-20)
 
@@ -602,6 +603,20 @@ Khác với lần brainstorm đầu: **không** cần đổi giả định "đí
 - **Không restore được** (ghi rõ ở tài liệu người dùng): view, reaction, bình luận, người gửi gốc trong group (giống clone), vote của poll (cần `--reset-polls` như clone), liên kết reply.
 - **Chưa biết, cần spike trên Telegram thật**: sticker tải lên lại từ file `.webp`/`.tgs`/`.webm` có ra đúng sticker không; video note/voice từ file có giữ đúng loại không; HTML của Telethon có giữ hết loại entity (spoiler, custom emoji — custom emoji cần Premium) không.
 - Chia hai nửa nếu lớn: 11a backup, 11b restore.
+
+#### Phase 11a — ghi chú (2026-09-25)
+
+Đã có: `core/gateway.py` (`ExportedMedia`, `ExportedMessage`, `export_unit` thêm vào `MessageReader`/`TelegramGateway`); `core/telethon_gateway.py::TelethonGateway.export_unit` (tải media như `prepare`/`_download`, không xóa; text qua `telethon.extensions.html.unparse`; poll/geo/venue/contact/game/invoice qua các hàm `_poll_media`/`_geo_media`/`_contact_media`/`_self_contained_media` mới); `engine/backupdir.py` (định dạng thư mục: `BackupManifest`, JSONL đọc/ghi, `last_id`, ghi `backup.json` nguyên tử qua file `.tmp` + `replace`); `engine/backup.py` (`check_source_for_backup`, `begin_backup` — cũng gọi `engine.runs.check_runnable` để từ chối một thư mục còn đang chờ hết FloodWait/PeerFlood, giống `begin_run` — `BackupWriter`, lỗi `FiltersChanged`/`WrongSource`/`BackupNeedsAcknowledgement`); `store/backups.py` (`Backup`, `BackupSpec`) và các phương thức `Store` tương ứng (`start_backup`, `advance_backup`, `finish_backup`, `active_backup`, `set_backup_control`, ...); schema **v3** (`backups` + `flood_log.backup_id`); `engine/flood.py::FloodOwner` (tổng quát hóa `FloodGuard` khỏi `Run` cụ thể, để dùng chung cho cả run lẫn backup mà không lẫn `flood_log`); `cli/wizard.py::ask_backup_dir`; `cli/commands/backup.py` (`tgmirror backup [<src>] [<dir>]`, cờ **và** wizard qua `BackupFlow` — cùng hình dạng `CloneFlow`: chọn nguồn, nhập thư mục, D3 nếu cần (từ chối ngay tại bước này, không đợi `begin_backup`), filter (bỏ qua nếu thư mục đã có backup, chỉ báo giữ filter cũ), xem trước, một câu xác nhận; `--pushdown/--no-pushdown`, `--preview/--no-preview`, `--yes` thêm vào cho đủ cặp với wizard); `cli/commands/control.py` (`pause`/`stop` thử `active_run()` rồi `active_backup()`); `ui/progress.py::BackupLineReporter`. Tiêu chí "kịch bản trên `FakeGateway`": `tests/unit/test_backupdir.py`, `tests/integration/test_backup.py` (album, topic, poll, D3 cả ba nhánh, dừng-rồi-tiếp-tục và dừng-giữa-chừng không trùng/sót, filter đổi bị từ chối, nguồn sai bị từ chối, pause/stop qua store), mở rộng `tests/unit/test_store.py` (migration v3, CRUD backup, cô lập `flood_log`) và `tests/unit/test_cli_backup.py` (cờ, D3, wizard: song song với cờ ra cùng kết quả — tiêu chí luật 7 — từ chối và huỷ giữa chừng, giữ filter khi tiếp tục, từ chối sớm khi còn đang chờ flood).
+
+Khác với kế hoạch ở trên (ghi nhận, không phải lỗi):
+
+- **Không có `avatar.jpg`** và **không có icon của topic** (`TopicInfo` hiện tại không có trường icon): để sau nếu cần.
+- **Tên file media là `<id>.<ext>`, không có hậu tố `_<n>`**: mỗi tin của một unit vốn đã có id nguồn riêng (kể cả trong album), nên không có hai file trùng tên cần phân biệt.
+- **`messages.jsonl` không có `reply_to`**: bớt việc phân biệt reply thật với reply-vào-topic (vốn đã đi vào `topic_id`); plan cũng nói restore v1 bỏ qua reply, nên đây chỉ là bớt sớm hơn dự kiến, không mất gì restore cần.
+- **Chưa nối `backups` vào `tgmirror history`** và **chưa có mục trong menu full-screen**: `pause`/`stop` đã chạm tới backup được (qua `active_backup()`), nhưng không có cách xem tiến độ một backup từ terminal khác ngoài heartbeat của chính nó, và bare `tgmirror` chưa có lối vào wizard backup — để sau, không chặn tiêu chí "backup một kênh có album/topic/poll" của lộ trình.
+- **Không có phân tích/ETA và không có dòng tiến độ truyền file** (`BackupLineReporter.transfer` là no-op): cắt phạm vi có chủ đích để v1 dùng được ngay; số liệu vẫn hiện qua dòng "X tin đã lưu, tới id Y" mỗi vài giây.
+
+**Đã chạy trên Telegram thật (2026-09-25, người dùng xác nhận)**: `tgmirror backup` (cả đường cờ và đường wizard) chạy thành công. Chưa ghi lại chi tiết loại nguồn/nội dung đã thử. Chưa kiểm chứng: album/topic/poll cụ thể, D3 trên nguồn `noforwards` thật, HTML/entity của Telethon giữ được gì khi `unparse`, hành vi khi đĩa đầy giữa chừng.
 
 ### Phase 12 — Docker (chạy một lần)
 

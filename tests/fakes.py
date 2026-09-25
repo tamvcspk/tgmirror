@@ -34,6 +34,8 @@ from tgmirror.core.gateway import (
     CaptionPolicy,
     ChannelInfo,
     ChatKind,
+    ExportedMedia,
+    ExportedMessage,
     MediaKind,
     OnTransfer,
     Prepared,
@@ -56,6 +58,20 @@ class Call:
     args: tuple[object, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _ExportExtra:
+    """Poll/geo/contact data ``SrcMessage`` has no room for (phase 11, backup): set through
+    ``add_message`` and read back only by ``export_unit``, exactly like the real gateway reads it
+    from the Telethon message it re-reads."""
+
+    poll_options: tuple[str, ...] = ()
+    poll_quiz: bool = False
+    poll_correct_option: int | None = None
+    geo: tuple[float, float] | None = None
+    venue_title: str | None = None
+    contact: tuple[str, str, str] | None = None  # phone, first name, last name
+
+
 class FakeGateway:
     def __init__(self) -> None:
         self.channels: dict[int, ChannelInfo] = {}
@@ -68,6 +84,7 @@ class FakeGateway:
         self._next_group_id = 10_000
         self.topics: dict[int, list[TopicInfo]] = {}  # channel -> topics (General is implicit)
         self._next_topic_id: dict[int, int] = defaultdict(lambda: 2)  # 1 is always General
+        self._export_extra: dict[tuple[int, int], _ExportExtra] = {}  # (channel, msg_id) -> extra
 
     # ---- test setup -------------------------------------------------------------------------
 
@@ -121,6 +138,12 @@ class FakeGateway:
         title: str | None = None,
         topic_id: int | None = None,
         from_user_id: int | None = None,
+        poll_options: tuple[str, ...] = (),
+        poll_quiz: bool = False,
+        poll_correct_option: int | None = None,
+        geo: tuple[float, float] | None = None,
+        venue_title: str | None = None,
+        contact: tuple[str, str, str] | None = None,
     ) -> SrcMessage:
         msg_id = self._alloc_id(channel)
         msg = SrcMessage(
@@ -141,6 +164,10 @@ class FakeGateway:
             from_user_id=from_user_id,
         )
         self.messages[channel].append(msg)
+        if poll_options or geo is not None or contact is not None:
+            self._export_extra[(channel, msg_id)] = _ExportExtra(
+                poll_options, poll_quiz, poll_correct_option, geo, venue_title, contact
+            )
         return msg
 
     def add_album(
@@ -314,6 +341,75 @@ class FakeGateway:
             if on_transfer is not None:
                 on_transfer(TransferPhase.DOWNLOAD, msg.id, total, total)
         return Prepared(unit, tuple(files))
+
+    async def export_unit(
+        self, src: int, unit: Unit, media_dir: Path, on_transfer: OnTransfer | None = None
+    ) -> list[ExportedMessage]:
+        """As ``prepare``, but returns self-contained records instead of a ``Prepared`` (phase 11,
+        backup): downloaded files are named by message id, like the real gateway, and poll/geo/
+        contact data comes from ``_export_extra`` (``add_message``'s extra keyword arguments)."""
+        self._enter("export_unit", src, unit.ids, media_dir)
+        self._channel(src)
+        have = {m.id for m in self.messages[src]}
+        if any(i not in have for i in unit.ids):
+            raise PerMessage("gone_from_source")
+        out: list[ExportedMessage] = []
+        for msg in unit.messages:
+            media: ExportedMedia | None = None
+            if msg.media not in _NO_FILE:
+                total = msg.size or 1
+                if on_transfer is not None:
+                    on_transfer(TransferPhase.DOWNLOAD, msg.id, 0, total)
+                path = await asyncio.to_thread(_download, media_dir, msg.id)
+                if on_transfer is not None:
+                    on_transfer(TransferPhase.DOWNLOAD, msg.id, total, total)
+                media = ExportedMedia(
+                    kind=msg.media,
+                    filename=path.name,
+                    mime=msg.mime,
+                    size=msg.size,
+                    duration=msg.duration,
+                )
+            else:
+                extra = self._export_extra.get((src, msg.id))
+                if msg.media is MediaKind.POLL:
+                    media = ExportedMedia(
+                        kind=MediaKind.POLL,
+                        poll_question=msg.title,
+                        poll_options=extra.poll_options if extra else (),
+                        poll_quiz=extra.poll_quiz if extra else False,
+                        poll_correct_option=extra.poll_correct_option if extra else None,
+                    )
+                elif msg.media is MediaKind.GEO and extra is not None and extra.geo is not None:
+                    media = ExportedMedia(
+                        kind=MediaKind.GEO,
+                        geo_lat=extra.geo[0],
+                        geo_lon=extra.geo[1],
+                        venue_title=extra.venue_title,
+                    )
+                elif msg.media is MediaKind.CONTACT and extra is not None and extra.contact:
+                    phone, first, last = extra.contact
+                    media = ExportedMedia(
+                        kind=MediaKind.CONTACT,
+                        contact_phone=phone,
+                        contact_first_name=first,
+                        contact_last_name=last,
+                    )
+                elif msg.media in (MediaKind.GAME, MediaKind.INVOICE):
+                    media = ExportedMedia(kind=msg.media, title=msg.title)
+            out.append(
+                ExportedMessage(
+                    id=msg.id,
+                    date=msg.date,
+                    grouped_id=msg.grouped_id,
+                    topic_id=msg.topic_id,
+                    from_user_id=msg.from_user_id,
+                    text_html=msg.text,
+                    views=msg.views,
+                    media=media,
+                )
+            )
+        return out
 
     async def upload_prepared(
         self, prepared: Prepared, on_transfer: OnTransfer | None = None

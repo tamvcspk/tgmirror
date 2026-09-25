@@ -17,11 +17,15 @@ async def log_flood(
     method: str,
     delay_ms: int | None,
     batch_size: int | None,
+    backup_id: int | None = None,
 ) -> None:
+    """``run_id``/``backup_id`` are mutually exclusive: a run's flood events and a backup's
+    (phase 11) share this table but never the same row, so ``events_of_run`` never mixes the two
+    even though the ``runs`` and ``backups`` tables number their rows independently."""
     await db.execute(
-        "INSERT INTO flood_log(run_id, ts, kind, seconds, method, delay_ms, batch_size) "
-        "VALUES(?, ?, ?, ?, ?, ?, ?)",
-        (run_id, ts, kind, seconds, method, delay_ms, batch_size),
+        "INSERT INTO flood_log(run_id, backup_id, ts, kind, seconds, method, delay_ms, batch_size) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, backup_id, ts, kind, seconds, method, delay_ms, batch_size),
     )
 
 

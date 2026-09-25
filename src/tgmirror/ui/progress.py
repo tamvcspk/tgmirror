@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from tgmirror.core.gateway import TransferPhase
 from tgmirror.engine.transfer import Transfer
+from tgmirror.store.backups import Backup
 from tgmirror.store.runs import Run
 from tgmirror.ui.messages import t
 
@@ -124,3 +125,43 @@ class LineReporter:
                 speed=speed,
             )
         )
+
+
+class BackupLineReporter:
+    """Plain-line progress for ``tgmirror backup`` (implements ``engine.backup.Reporter``).
+
+    Per-file transfer lines are not shown yet (unlike ``LineReporter``'s ``transfer``, phase 11
+    v1 keeps this simple: a backup already says how many messages/albums it has saved)."""
+
+    def __init__(
+        self,
+        emit: Callable[[str], None],
+        *,
+        interval: float = 5.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._emit = emit
+        self._interval = interval
+        self._clock = clock
+        self._last: float | None = None
+
+    def notice(self, code: str, **params: object) -> None:
+        self._emit(t(f"backup.{code}", **{k: _plain(v) for k, v in params.items()}))
+
+    def progress(self, backup: Backup) -> None:
+        now = self._clock()
+        if self._last is not None and now - self._last < self._interval:
+            return
+        self._last = now
+        self._emit(
+            t(
+                "backup.progress",
+                id=backup.id,
+                done=backup.done,
+                skipped=backup.skipped_filter,
+                cursor=backup.cursor_to,
+            )
+        )
+
+    def transfer(self, transfer: Transfer) -> None:
+        pass

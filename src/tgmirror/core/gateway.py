@@ -193,6 +193,54 @@ class Prepared:
     uploaded: bool = False  # the bytes are already up: ``send_prepared`` only posts
 
 
+@dataclass(frozen=True, slots=True)
+class ExportedMedia:
+    """A message's media, self-contained enough to write to ``messages.jsonl`` (phase 11, backup):
+    either a downloaded file (``filename``, relative to the backup's ``media/``) or, for media
+    Telegram carries in the message itself, the payload text/HTML cannot hold.
+
+    Only one of the groups below is ever set, matching ``kind``. Restore (phase 11b, not yet built)
+    rebuilds the message from whichever one is there.
+    """
+
+    kind: MediaKind
+    filename: str | None = None  # photo/video/document/audio/voice/gif/sticker/video_note
+    mime: str | None = None
+    size: int | None = None
+    duration: float | None = None
+    # poll/quiz
+    poll_question: str | None = None
+    poll_options: tuple[str, ...] = ()
+    poll_quiz: bool = False
+    poll_correct_option: int | None = None  # index into ``poll_options``, when this account sees it
+    # geo/venue
+    geo_lat: float | None = None
+    geo_lon: float | None = None
+    venue_title: str | None = None
+    # contact
+    contact_phone: str | None = None
+    contact_first_name: str | None = None
+    contact_last_name: str | None = None
+    # game/invoice: only a title to stand in for it (docs/06-lo-trinh.md, "Không restore được")
+    title: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExportedMessage:
+    """One message as ``tgmirror backup`` writes it to ``messages.jsonl`` (phase 11): the source
+    text as Telethon's own HTML (so formatting/links survive), and its media self-contained rather
+    than by Telegram file reference (a backup outlives the reference)."""
+
+    id: int
+    date: datetime
+    grouped_id: int | None
+    topic_id: int | None
+    from_user_id: int | None
+    text_html: str
+    views: int | None
+    media: ExportedMedia | None = None
+
+
 class TransferPhase(StrEnum):
     DOWNLOAD = "download"
     UPLOAD = "upload"
@@ -253,6 +301,16 @@ class MessageReader(Protocol):
         A file already downloaded there is reused, so repeating the call after a FloodWait does
         not fetch it twice. Raises ``PerMessage`` when a message is gone or has nothing to send.
         """
+        ...
+
+    async def export_unit(
+        self, src: int, unit: Unit, media_dir: Path, on_transfer: OnTransfer | None = None
+    ) -> list[ExportedMessage]:
+        """``tgmirror backup`` (phase 11), the read half: read the unit's messages again and
+        download their media into ``media_dir`` (kept, never deleted by the caller), returning one
+        ``ExportedMessage`` per message, aligned with ``unit.messages``. Like ``prepare``, a file
+        already there is reused, so repeating the call after a FloodWait does not fetch it twice.
+        Raises ``PerMessage`` when a message is gone."""
         ...
 
 
@@ -328,6 +386,12 @@ class TelegramGateway(Protocol):
         self, src: int, unit: Unit, tmp: Path, on_transfer: OnTransfer | None = None
     ) -> Prepared:
         """As ``MessageReader.prepare``."""
+        ...
+
+    async def export_unit(
+        self, src: int, unit: Unit, media_dir: Path, on_transfer: OnTransfer | None = None
+    ) -> list[ExportedMessage]:
+        """As ``MessageReader.export_unit``."""
         ...
 
     async def send_by_reference(

@@ -1,8 +1,10 @@
-"""``tgmirror pause`` / ``tgmirror stop``: ask the clone running in another terminal to rest.
+"""``tgmirror pause`` / ``tgmirror stop``: ask the clone (or backup, phase 11) running in another
+terminal to rest.
 
-They only write ``runs.control``; the runner (another process) reads it between batches, finishes
-its batch and holds (pause) or saves and exits (stop) (docs/04-state-checkpoint.md, "Điều khiển").
-No Telegram connection. In the terminal of the clone itself the keys p/r/q and Ctrl+C do the same.
+They only write ``runs.control``/``backups.control``; the other process reads it between batches,
+finishes its batch and holds (pause) or saves and exits (stop)
+(docs/04-state-checkpoint.md, "Điều khiển"). No Telegram connection. In the terminal of the clone
+or backup itself the keys p/r/q and Ctrl+C do the same.
 """
 
 import typer
@@ -14,9 +16,10 @@ from tgmirror.ui.messages import t
 
 
 def pause(ctx: typer.Context) -> None:
-    """Ask the running clone to pause after its current batch. `tgmirror run` resumes it.
+    """Ask the running clone or backup to pause after its current batch. `tgmirror run`/
+    `tgmirror backup` resumes it.
 
-    It holds in place, keeping its terminal, until resumed (key r, or `tgmirror run`) or stopped.
+    It holds in place, keeping its terminal, until resumed (key r, or running it again) or stopped.
 
     Example: tgmirror pause
     """
@@ -24,7 +27,8 @@ def pause(ctx: typer.Context) -> None:
 
 
 def stop(ctx: typer.Context) -> None:
-    """Ask the running clone to stop after its current batch. `tgmirror run` continues it later.
+    """Ask the running clone or backup to stop after its current batch. Running it again continues
+    it later.
 
     Example: tgmirror stop
     """
@@ -35,9 +39,14 @@ def _request(rt: Runtime, control: Control) -> None:
     async def command() -> None:
         async with opened_store(rt) as store:
             live = await store.active_run()
-            if live is None or not await store.set_control(live.id, control):
-                typer.echo(t("control.nothing_running"), err=True)
-                raise typer.Exit(1)
-            typer.echo(t(f"control.{control}_requested", id=live.id))
+            if live is not None and await store.set_control(live.id, control):
+                typer.echo(t(f"control.{control}_requested", id=live.id))
+                return
+            live_backup = await store.active_backup()
+            if live_backup is not None and await store.set_backup_control(live_backup.id, control):
+                typer.echo(t(f"control.{control}_requested", id=live_backup.id))
+                return
+            typer.echo(t("control.nothing_running"), err=True)
+            raise typer.Exit(1)
 
     run(rt, command())

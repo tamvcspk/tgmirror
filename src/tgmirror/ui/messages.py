@@ -143,6 +143,35 @@ VI: dict[str, str] = {
         "Telegram giới hạn liên tiếp: tạm thời chỉ gửi {batch_size} tin mỗi lần và nghỉ "
         "{delay}s giữa các lần, cho tới khi yên ổn trở lại."
     ),
+    # backup (phase 11a)
+    "backup.pick_dir": "Thư mục backup (tạo mới nếu chưa có)",
+    "backup.pick_dir_empty": "Đường dẫn không được để trống.",
+    "backup.filter_kept": "Thư mục đã có backup trước đó: giữ nguyên filter đã dùng.",
+    "backup.preview": (
+        "Xem trước: {matched} trong {scanned} tin đầu tiên của khoảng đã chọn sẽ được lưu."
+    ),
+    "backup.preview_empty": "Xem trước: nguồn không có tin nào trong khoảng đã chọn.",
+    "backup.confirm_start": "Backup {src} vào {dir} ngay bây giờ?",
+    "backup.start": "Lần backup {id}: {src} → {dir}.",
+    "backup.progress": (
+        "Lần backup {id}: {done} tin đã lưu, {skipped} bị filter loại (tới id {cursor})."
+    ),
+    "backup.result": "Lần backup {id}: {status}. {done} tin đã lưu (tới id {cursor}).",
+    "backup.continue_hint": "Backup tiếp sau: tgmirror backup ... {dir}",
+    "backup.paused": "Đã tạm dừng. Bấm r để chạy tiếp, q để dừng.",
+    "backup.resumed": "Chạy tiếp.",
+    "backup.gone": "Tin {id} đã bị xóa ở nguồn từ lúc liệt kê, bỏ qua.",
+    "backup.flood_stopped": (
+        "Telegram yêu cầu chờ {seconds}s. Lần backup đã lưu ở trạng thái chờ đến "
+        "{resume_at}; chạy lại `tgmirror backup` sau đó."
+    ),
+    "backup.flood_waiting": (
+        "Telegram yêu cầu chờ {seconds}s; đang chờ (Ctrl+C để dừng, tiến độ đã lưu trên đĩa)."
+    ),
+    "backup.throttled": (
+        "Telegram giới hạn liên tiếp: tạm nghỉ {delay}s giữa các lần đọc, "
+        "cho tới khi yên ổn trở lại."
+    ),
     "status.running": "đang chạy",
     "status.paused": "tạm dừng",
     "status.stopped": "đã dừng",
@@ -281,6 +310,20 @@ VI: dict[str, str] = {
         "Tệp {entry} trong bản xuất không khớp checksum đã ghi — tệp có thể đã hỏng."
     ),
     "err.appdata_format": "Không đọc được tệp xuất: {detail}",
+    "err.backup_needs_admin_ack": (
+        "«{title}» bật «Restrict saving content». Tải xuống rồi lưu nội dung đó là quyết định "
+        "của bạn: nếu bạn là chủ/admin và được phép sao chép, thêm "
+        "--yes-i-administer-this-channel (--yes không thay được)."
+    ),
+    "err.backup_filters_changed": (
+        "{dir} đã được backup với filter khác. Backup không nhớ tin nào bị filter loại nên không "
+        "tiếp tục an toàn với filter mới; dùng một thư mục khác."
+    ),
+    "err.backup_wrong_source": "{dir} đã chứa backup của «{title}», không phải nguồn bạn chọn.",
+    "err.backup_busy": (
+        "Lần backup {id} đang được một tiến trình khác giữ. Nếu chắc chắn nó đã chết, "
+        "chạy lại với --force-takeover."
+    ),
     "err.filter": "Filter không hợp lệ: {detail}",
     "err.filter_mix": (
         "Không dùng --filter-file cùng các cờ lọc khác (--media, --hashtag, --since, ...)."
@@ -651,6 +694,34 @@ EN: dict[str, str] = {
         "Telegram limited us repeatedly: for now batches are {batch_size} messages and the pause "
         "between them is {delay}s, until things calm down."
     ),
+    # backup (phase 11a)
+    "backup.pick_dir": "Directory to back up into (created if missing)",
+    "backup.pick_dir_empty": "The path cannot be empty.",
+    "backup.filter_kept": "This directory already has a backup: keeping its filter.",
+    "backup.preview": (
+        "Preview: {matched} of the first {scanned} messages of the chosen range will be saved."
+    ),
+    "backup.preview_empty": "Preview: the source has no messages in the chosen range.",
+    "backup.confirm_start": "Back up {src} into {dir} now?",
+    "backup.start": "Backup {id}: {src} → {dir}.",
+    "backup.progress": (
+        "Backup {id}: {done} messages saved, {skipped} filtered out (up to id {cursor})."
+    ),
+    "backup.result": "Backup {id}: {status}. {done} messages saved (up to id {cursor}).",
+    "backup.continue_hint": "Continue with: tgmirror backup ... {dir}",
+    "backup.paused": "Paused. Press r to resume, q to stop.",
+    "backup.resumed": "Resumed.",
+    "backup.gone": "Message {id} was deleted at the source since it was listed; skipped.",
+    "backup.flood_stopped": (
+        "Telegram asked to wait {seconds}s. The backup is saved as waiting until "
+        "{resume_at}; run `tgmirror backup` again after that."
+    ),
+    "backup.flood_waiting": (
+        "Telegram asks to wait {seconds}s; waiting (Ctrl+C to stop, progress is saved on disk)."
+    ),
+    "backup.throttled": (
+        "Telegram limited us repeatedly: pausing {delay}s between reads until things calm down."
+    ),
     "status.running": "running",
     "status.paused": "paused",
     "status.stopped": "stopped",
@@ -789,6 +860,22 @@ EN: dict[str, str] = {
         "The file {entry} in the archive does not match its recorded checksum — it may be corrupt."
     ),
     "err.appdata_format": "Cannot read the export file: {detail}",
+    "err.backup_needs_admin_ack": (
+        "'{title}' restricts saving content. Downloading and keeping that content is your call: "
+        "if you own/administer it and may copy it, add --yes-i-administer-this-channel "
+        "(--yes does not stand in for it)."
+    ),
+    "err.backup_filters_changed": (
+        "{dir} was already backed up with a different filter. A backup keeps no record of what a "
+        "filter skipped, so it cannot safely continue with a new one; use another directory."
+    ),
+    "err.backup_wrong_source": (
+        "{dir} already holds a backup of '{title}', not the source you gave."
+    ),
+    "err.backup_busy": (
+        "Backup {id} is being run by another process. If you are sure it is dead, "
+        "run again with --force-takeover."
+    ),
     "err.filter": "Invalid filter: {detail}",
     "err.filter_mix": (
         "Do not combine --filter-file with the other filter flags (--media, --hashtag, ...)."

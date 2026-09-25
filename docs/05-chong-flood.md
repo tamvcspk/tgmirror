@@ -14,7 +14,7 @@
 
 ## Limiter (`core/limiter.py`)
 
-Mọi lời gọi đọc/ghi của một lần `run` đi qua `await limiter.acquire(cost, kind)` (`kind` = `write` hoặc `read`), thông qua `FloodGuard` của runner. Các lệnh một lần do người dùng khởi động (`login`, `channels`, `new`: tạo kênh, `last_message_id`, `--preview`) không qua limiter: FloodWait ở đó in một câu và thoát mã 3, không retry.
+Mọi lời gọi đọc/ghi của một lần `run` đi qua `await limiter.acquire(cost, kind)` (`kind` = `write` hoặc `read`), thông qua `FloodGuard` của runner. `tgmirror backup` (phase 11a) dùng chung `FloodGuard`, chỉ mỗi `kind = read` (backup không ghi Telegram): `FloodGuard` được tổng quát hóa bằng `FloodOwner.of_run`/`of_backup` để ghi đúng cột (`flood_log.run_id` hay `backup_id`), xem `01-kien-truc.md`. Các lệnh một lần do người dùng khởi động (`login`, `channels`, `new`: tạo kênh, `last_message_id`, `--preview`, `begin_backup`) không qua limiter: FloodWait ở đó in một câu và thoát mã 3, không retry.
 
 - **Delay mục tiêu** `delay` (giây) giữa hai lời gọi ghi: bắt đầu `min_delay` (hoặc giá trị đã lưu, kẹp trong `[min_delay, max_delay]`). Lời gọi ghi đầu tiên của một lần chạy đi ngay.
 - **AIMD**: khi flood → `delay = min(delay * 2, max_delay)`; sau mỗi 20 lời gọi thành công liên tiếp → `delay = max(delay * 0.9, min_delay)`.

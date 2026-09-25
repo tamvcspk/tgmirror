@@ -59,7 +59,7 @@ from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
 from tgmirror.engine.copy import copy_batch
-from tgmirror.engine.flood import FloodGuard, Interrupted
+from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted
 from tgmirror.engine.planner import Skip
 from tgmirror.engine.reconcile import Outcome, judge
 from tgmirror.engine.reupload import (
@@ -212,7 +212,7 @@ class Runner:
         self._guard = FloodGuard(
             limiter=self._limiter,
             store=self._store,
-            run=run,
+            owner=FloodOwner.of_run(run),
             limits=self._limits,
             notifier=self._reporter,
             nap=nap,

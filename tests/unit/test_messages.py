@@ -44,7 +44,10 @@ def test_every_key_used_in_the_source_exists() -> None:
         used |= set(re.findall(r"""\bt\(\s*["']([a-z_]+\.[a-z_]+|yes|no|admin)["']""", text))
         used |= set(re.findall(r"""\bnotify\(\s*["']([a-z_.]+)["']""", text))
         used |= set(re.findall(r"""UsageProblem\(\s*["']([a-z_.]+)["']""", text))
-        used |= {f"run.{c}" for c in re.findall(r"""\.notice\(\s*["']([a-z_]+)["']""", text)}
+        # ``.notice(...)`` calls go through ``engine.runner.Reporter`` (codes -> ``run.<code>``)
+        # or, phase 11, ``engine.backup.Reporter`` (codes -> ``backup.<code>``).
+        prefix = "backup" if path.name == "backup.py" and path.parent.name == "engine" else "run"
+        used |= {f"{prefix}.{c}" for c in re.findall(r"""\.notice\(\s*["']([a-z_]+)["']""", text)}
         used |= {
             f"warn.{w}" for w in re.findall(r"""warnings\.append\(\s*["']([a-z_]+)["']""", text)
         }

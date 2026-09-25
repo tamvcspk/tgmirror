@@ -20,6 +20,7 @@ none of this can hold up Ctrl+C.
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TypeVar
 
@@ -27,6 +28,7 @@ from tgmirror.core.config import Limits
 from tgmirror.core.errors import FloodWait, PeerFlood
 from tgmirror.core.gateway import (
     NO_FILTER,
+    ExportedMessage,
     MessageReader,
     OnTransfer,
     Prepared,
@@ -36,6 +38,7 @@ from tgmirror.core.gateway import (
     Unit,
 )
 from tgmirror.core.limiter import Limiter, Sleep
+from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store
 from tgmirror.store.runs import Run
 
@@ -54,13 +57,35 @@ class Notifier(Protocol):
     def notice(self, code: str, **params: object) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class FloodOwner:
+    """What ``FloodGuard`` paces for and logs flood events against: a run or a backup (phase 11).
+
+    ``flood_log`` has a column for each (``run_id``/``backup_id``): the two tables number their
+    rows independently, so a run's events must never be logged under a backup's id or vice versa.
+    """
+
+    account: str
+    batch_size: int  # the base batch size ``Limiter.batch_size`` scales (a backup: 1, no batching)
+    run_id: int | None = None
+    backup_id: int | None = None
+
+    @classmethod
+    def of_run(cls, run: Run) -> "FloodOwner":
+        return cls(run.account, run.options.batch_size, run_id=run.id)
+
+    @classmethod
+    def of_backup(cls, backup: Backup) -> "FloodOwner":
+        return cls(backup.account, 1, backup_id=backup.id)
+
+
 class FloodGuard:
     def __init__(
         self,
         *,
         limiter: Limiter,
         store: Store,
-        run: Run,
+        owner: FloodOwner,
         limits: Limits,
         notifier: Notifier,
         nap: Sleep,
@@ -69,7 +94,7 @@ class FloodGuard:
     ) -> None:
         self._limiter = limiter
         self._store = store
-        self._run = run
+        self._owner = owner
         self._limits = limits
         self._notifier = notifier
         self._nap = nap
@@ -129,11 +154,11 @@ class FloodGuard:
         await self._log(method, kind, exc.seconds)
         throttled = self._limiter.throttle
         self._limiter.on_flood()
-        await self._store.save_limiter_state(self._run.account, self._limiter.state)
+        await self._store.save_limiter_state(self._owner.account, self._limiter.state)
         if self._limiter.throttle > throttled:
             self._notifier.notice(
                 "throttled",
-                batch_size=self._limiter.batch_size(self._run.options.batch_size),
+                batch_size=self._limiter.batch_size(self._owner.batch_size),
                 delay=round(self._limiter.delay, 1),
             )
         if give_up or (exc.seconds > self._limits.max_auto_wait and not self._wait):
@@ -148,12 +173,13 @@ class FloodGuard:
     async def _log(self, method: str, kind: str, seconds: int | None) -> None:
         """One ``flood_log`` row; its delay is the one that led to the flood, before backing off."""
         await self._store.log_flood(
-            self._run.id,
+            self._owner.run_id,
+            backup_id=self._owner.backup_id,
             kind=kind,
             seconds=seconds,
             method=method,
             delay_ms=int(self._limiter.delay * 1000),
-            batch_size=self._limiter.batch_size(self._run.options.batch_size),
+            batch_size=self._limiter.batch_size(self._owner.batch_size),
         )
 
 
@@ -260,4 +286,21 @@ class _GuardedReader:
                 await self._guard.flooded("prepare", exc, give_up=floods >= MAX_FLOODS_PER_CALL)
             except PeerFlood:
                 await self._guard.peer_flood("prepare")
+                raise
+
+    async def export_unit(
+        self, src: int, unit: Unit, media_dir: Path, on_transfer: OnTransfer | None = None
+    ) -> list[ExportedMessage]:
+        """One paced read request (phase 11, backup: as ``prepare``, but the records kept for
+        ``messages.jsonl`` instead of a ``Prepared``)."""
+        floods = 0
+        while True:
+            await self._guard.pace_read(1)
+            try:
+                return await self._inner.export_unit(src, unit, media_dir, on_transfer)
+            except FloodWait as exc:
+                floods += 1
+                await self._guard.flooded("export_unit", exc, give_up=floods >= MAX_FLOODS_PER_CALL)
+            except PeerFlood:
+                await self._guard.peer_flood("export_unit")
                 raise

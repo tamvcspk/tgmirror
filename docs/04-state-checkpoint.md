@@ -1,6 +1,6 @@
 # 04 — State, checkpoint, delta
 
-Một file SQLite (`WAL` mode, `foreign_keys=ON`, `busy_timeout=5000` để `pause`/`stop` từ process khác không bị lỗi khóa). Phiên bản schema nằm ở `PRAGMA user_version`; `store/schema.sql` là phiên bản 1, các thay đổi sau thêm migration đánh số đăng ký ở `store/db.py::default_migrations` (mỗi migration chạy trong một transaction, có test nâng cấp từ phiên bản trước). Phiên bản 2 (phase 8, 2026-09-25): thêm `mirrors.dst_kind`, backfill từ `src_kind` cho các cặp có sẵn.
+Một file SQLite (`WAL` mode, `foreign_keys=ON`, `busy_timeout=5000` để `pause`/`stop` từ process khác không bị lỗi khóa). Phiên bản schema nằm ở `PRAGMA user_version`; `store/schema.sql` là phiên bản 1, các thay đổi sau thêm migration đánh số đăng ký ở `store/db.py::default_migrations` (mỗi migration chạy trong một transaction, có test nâng cấp từ phiên bản trước). Phiên bản 2 (phase 8, 2026-09-25): thêm `mirrors.dst_kind`, backfill từ `src_kind` cho các cặp có sẵn. Phiên bản 3 (phase 11a, 2026-09-25): thêm bảng `backups` và cột `flood_log.backup_id` (xem "Backup (Phase 11a)" bên dưới).
 
 ## Hai thứ, chỉ một thứ người dùng thấy
 
@@ -77,6 +77,7 @@ CREATE TABLE topic_map (                    -- chỉ cặp forum
 CREATE TABLE flood_log (
   id        INTEGER PRIMARY KEY,
   run_id    INTEGER,
+  backup_id INTEGER,                        -- v3: loại trừ lẫn nhau với run_id (xem "Backup")
   ts        TEXT NOT NULL,
   kind      TEXT NOT NULL,                  -- flood_wait|slow_mode|peer_flood
   seconds   INTEGER,
@@ -84,6 +85,26 @@ CREATE TABLE flood_log (
   delay_ms  INTEGER,                        -- delay của limiter tại thời điểm đó
   batch_size INTEGER
 );
+
+CREATE TABLE backups (                      -- v3 (phase 11a): nhật ký backup, không có mirror/msg_map
+  id           INTEGER PRIMARY KEY,
+  account      TEXT NOT NULL,
+  src_id       INTEGER NOT NULL,
+  src_title    TEXT,
+  src_kind     TEXT NOT NULL,
+  dir          TEXT NOT NULL,               -- thư mục backup, là "định danh" thay cho mirror
+  filters_json TEXT NOT NULL,
+  status       TEXT NOT NULL,               -- như runs.status
+  control      TEXT NOT NULL DEFAULT 'none',
+  cursor_to    INTEGER NOT NULL DEFAULT 0,  -- chỉ để hiển thị: xem "Backup" bên dưới
+  resume_at    TEXT,
+  fail_reason  TEXT,
+  stats_json   TEXT NOT NULL DEFAULT '{}',
+  started_at   TEXT NOT NULL,
+  ended_at     TEXT,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX backups_dir ON backups(dir);
 
 CREATE TABLE limiter_state (               -- persist AIMD giữa các lần chạy
   account   TEXT PRIMARY KEY,
@@ -191,5 +212,25 @@ Sở hữu:
 - Từ chối chạy: `waiting_flood` trước `resume_at` (flood, hoặc `fail_reason='daily_cap'`); `failed(peer_flood)` trong 24 giờ kể từ khi kết thúc (`engine/runs.py::check_runnable`, đọc run gần nhất của cặp; kiểm trước khi kết nối Telegram). Run mới không mang `fail_reason`/`resume_at` của run cũ.
 - Trong một process, runner và task heartbeat dùng chung một connection SQLite; `Store` khóa mọi phương thức bằng một `asyncio.Lock` để task này không chạy lệnh giữa transaction của task kia.
 - Một session Telethon chỉ nên được dùng bởi một process cùng lúc (SQLite session sẽ khóa), do đó một account chạy một clone tại một thời điểm (`Store.active_run` cho `pause`/`stop`/`run` tìm ra nó).
+
+## Backup (Phase 11a)
+
+`tgmirror backup` (`store/backups.py`, `engine/backup.py`, `engine/backupdir.py`) không có đích nên không có `mirrors`/`msg_map`: bảng `backups` chỉ là nhật ký (`history` — **chưa nối vào lệnh `history` hiện có**, xem `06-lo-trinh.md` phần "chưa làm"), heartbeat/`control` để `pause`/`stop` từ terminal khác chạm tới, và nơi `flood_log.backup_id` trỏ vào (tách khỏi `run_id`: hai bảng `runs`/`backups` tự đánh số độc lập nên nếu dùng chung cột sẽ nhầm sự kiện flood của lần chạy này sang lần backup khác trùng id).
+
+Tiến độ **thật** không nằm ở `backups.cursor_to`/`stats_json` mà nằm ở chính thư mục backup: một tin được coi là đã backup xong khi (các) file media của nó đã ghi xong **và** dòng `messages.jsonl` của nó đã được append theo sau — append là thao tác lặp lại vô hại, nên không cần write-ahead. Một crash chỉ có thể để lại đúng dòng JSONL cuối cùng dở dang; `backupdir.iter_records`/`last_id` dừng lại ở đó (bỏ dòng cuối nếu không parse được), và lần backup sau chỉ cần tiếp tục từ `last_id` — không đọc `backups.cursor_to`. Cột đó (và `stats_json`) chỉ được `Store.advance_backup` cập nhật để hiển thị.
+
+Filter chỉ được đặt ở lần backup **đầu tiên** của một thư mục (`engine.backup.FiltersChanged` nếu lần sau đưa filter khác): khác mirror, backup không giữ gì tương đương `msg_map` để biết filter cũ đã loại những tin nào, nên không thể tiếp tục an toàn với filter mới — phải dùng thư mục khác.
+
+Quyết định D3 áp dụng y như chiến lược B (`engine.backup.check_source_for_backup`): backup luôn tải xuống (không có "copy phía server" cho một thư mục) nên nguồn `noforwards` luôn cần lời tuyên bố, ghi vào `backup.json` (`BackupManifest.protected_ack`) chứ không vào `backups` — thư mục backup tự mô tả, đọc được không cần tgmirror hay DB.
+
+## Điều khiển của backup
+
+`tgmirror pause`/`stop` thử `store.active_run()` trước, rồi `store.active_backup()`: cùng cơ chế heartbeat/`control` như run (`Store.set_backup_control`, `read_backup_control`, `set_backup_status`, `finish_backup`, `heartbeat_backup`), cùng `RunControl` phía tiến trình (phím `p`/`r`/`q`, Ctrl+C dùng lại nguyên `engine/runner.py::RunControl`, không có lớp riêng cho backup). `start_backup` từ chối (`BackupBusy`) một thư mục đang có backup sống (heartbeat mới), như `RunBusy`; `--force-takeover` ghi đè.
+
+`begin_backup` cũng từ chối chạy trước khi nghỉ hết xong (`engine.runs.check_runnable`, dùng lại nguyên hàm của `run`/`clone`: `Backup` có đúng các trường `status`/`resume_at`/`fail_reason`/`ended_at`/`updated_at` mà hàm đó đọc, nên không cần bản riêng cho backup) khi lần backup gần nhất của thư mục đó là `waiting_flood` trước `resume_at`, hoặc `failed('peer_flood')` trong 24 giờ — như `RunWaiting`, mã thoát 3. Nhánh `daily_cap` của hàm đó không bao giờ xảy ra cho backup (backup không ghi Telegram nên không có cap ngày). Wizard (`cli/commands/backup.py::BackupFlow._check_existing`) gọi lại chính kiểm tra này **sớm hơn**, trước câu hỏi filter — như `CloneFlow._read_history` — để không bắt người dùng trả lời hết rồi mới bị từ chối; `begin_backup` vẫn là nơi kiểm tra thật sự (bảo vệ cả đường chỉ dùng cờ).
+
+## Chưa làm ở Phase 11a
+
+Không có phân tích/ETA (`Runner._analyze`-tương đương), không có dòng tiến độ truyền file, không tải ảnh bìa video, không ghi `reply_to`, chưa nối vào `tgmirror history`, chưa có mục trong giao diện full-screen (menu). Wizard cổ điển (`tgmirror backup` không cờ) đã có, xem `02-cli-ux.md`. Xem `06-lo-trinh.md`, "Phase 11 — ghi chú" để biết đầy đủ.
 
 Phase sau (không thuộc v1): đồng bộ edit (so `edit_date` với `ts`) và delete (kiểm tra sự tồn tại ID định kỳ).

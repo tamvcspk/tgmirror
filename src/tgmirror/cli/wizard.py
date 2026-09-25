@@ -6,12 +6,13 @@ live in ``engine/endpoints.py`` and ``filters/``, so both paths end up in the sa
 ``cli-wizard``).
 """
 
+import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-from tgmirror.cli.errors import describe
+from tgmirror.cli.errors import UsageProblem, describe
 from tgmirror.core.gateway import CaptionMode, ChannelInfo, MediaKind, TopicInfo
 from tgmirror.engine.endpoints import (
     InvalidChannelTitle,
@@ -83,6 +84,18 @@ async def _ask_valid(
                 raise
             prompter.say(describe(exc))
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+async def ask_backup_dir(prompter: Prompter) -> Path:
+    """``tgmirror backup``'s step 2: the directory to save into. Re-asks until non-empty (a typo
+    that leaves it blank should not cost the source already picked)."""
+    for attempt in range(1, MAX_TITLE_ATTEMPTS + 1):
+        answer = (await prompter.text(t("backup.pick_dir"))).strip().strip("\"'")
+        if answer:
+            return await asyncio.to_thread(Path(answer).resolve)
+        if attempt < MAX_TITLE_ATTEMPTS:
+            prompter.say(t("backup.pick_dir_empty"))
+    raise UsageProblem("err.missing_flag", flag="DIR")
 
 
 async def pick_run(prompter: Prompter, pairs: Sequence[Run]) -> Run:

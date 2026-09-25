@@ -120,6 +120,15 @@ class RunBusy(StoreError):
         self.run_id = run_id
 
 
+class BackupBusy(StoreError):
+    """Another process is backing up this same directory (fresh heartbeat); ``--force-takeover``
+    overrides (phase 11)."""
+
+    def __init__(self, backup_id: int) -> None:
+        super().__init__(f"backup {backup_id} is being run by another process")
+        self.backup_id = backup_id
+
+
 class AppDataError(TgMirrorError):
     """A problem exporting or importing tgmirror's own state (docs/06-lo-trinh.md, Phase 10)."""
 
