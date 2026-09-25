@@ -13,6 +13,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import keyring.backend
+
 from tgmirror.core.auth import AccountInfo
 from tgmirror.core.errors import (
     ForwardsRestricted,
@@ -603,3 +605,24 @@ class ScriptedPrompter:
                 f"no checkbox choice {sorted(unknown)} in {[c.label for c in choices]}"
             )
         return [c.value for c in choices if c.label in wanted]
+
+
+class FakeKeyring(keyring.backend.KeyringBackend):
+    """In-memory keyring backend (docs/06-lo-trinh.md, Phase 9): a real, usable backend as far as
+    ``core.secrets`` can tell, so tests exercise the keyring branch without ever touching the
+    machine's real Credential Manager/Keychain/Secret Service. Installed for every test by the
+    ``fake_keyring`` fixture in ``conftest.py``."""
+
+    priority = 1
+
+    def __init__(self) -> None:
+        self._store: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service: str, username: str) -> str | None:
+        return self._store.get((service, username))
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        self._store[(service, username)] = password
+
+    def delete_password(self, service: str, username: str) -> None:
+        self._store.pop((service, username), None)

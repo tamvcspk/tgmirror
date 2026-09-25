@@ -1,10 +1,11 @@
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import keyring
 import pytest
 
-from tests.fakes import ACCOUNT, FakeAuth, FakeGateway, ScriptedPrompter
+from tests.fakes import ACCOUNT, FakeAuth, FakeGateway, FakeKeyring, ScriptedPrompter
 from tgmirror.cli.keys import KeyProvider, no_keys
 from tgmirror.cli.runtime import Connection, ReporterFactory, Runtime, plain_reporter
 from tgmirror.core.config import Config
@@ -17,6 +18,19 @@ API_ENV = {"TGMIRROR_API_ID": "12345", "TGMIRROR_API_HASH": "0123456789abcdef012
 def english_messages(monkeypatch: pytest.MonkeyPatch) -> None:
     """Assertions on user-facing text use the English table; language switching has own test."""
     monkeypatch.setenv("TGMIRROR_LANG", "en")
+
+
+@pytest.fixture(autouse=True)
+def fake_keyring() -> Iterator[FakeKeyring]:
+    """No test ever touches the machine's real keyring (docs/06-lo-trinh.md, Phase 9): a fresh
+    in-memory backend per test, restored to whatever was installed before afterwards."""
+    original = keyring.get_keyring()
+    fake = FakeKeyring()
+    keyring.set_keyring(fake)
+    try:
+        yield fake
+    finally:
+        keyring.set_keyring(original)
 
 
 @pytest.fixture

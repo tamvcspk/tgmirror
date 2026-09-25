@@ -10,8 +10,9 @@ from tgmirror.cli.errors import UsageProblem, run
 from tgmirror.cli.runtime import Runtime
 from tgmirror.core.auth import AccountInfo
 from tgmirror.core.auth import login as run_login
-from tgmirror.core.config import Config, save_credentials
+from tgmirror.core.config import Config, credential_source, store_credentials
 from tgmirror.core.errors import MissingCredentials, NotLoggedIn
+from tgmirror.core.secrets import SOURCE_CONFIG, keyring_usable
 from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import Prompter
 
@@ -67,6 +68,16 @@ async def ensure_credentials(
     ``prompter``/``interactive`` default to the runtime's (the menu passes its own)."""
     config = rt.config()
     if config.api_id is not None and config.api_hash is not None:
+        # Not an automatic migration (docs/06-lo-trinh.md, Phase 9): only when the user explicitly
+        # runs `login` again, and only when it is genuinely config.toml's own value that a keyring
+        # could replace (an env/*_FILE override winning does not mean config.toml's copy is live).
+        if credential_source(rt.paths, rt.env) == SOURCE_CONFIG and keyring_usable():
+            kind, detail = store_credentials(
+                rt.paths, config.api_id, config.api_hash.get_secret_value()
+            )
+            if kind == "keyring":
+                echo(t("login.api_saved_keyring", backend=detail))
+            config = rt.config()
         return config
     if not (rt.interactive if interactive is None else interactive):
         raise MissingCredentials("api_id/api_hash are not configured")
@@ -75,8 +86,11 @@ async def ensure_credentials(
     echo(t("login.api_intro"))
     api_id = await _ask_api_id(prompter)
     api_hash = (await prompter.secret(t("login.prompt_api_hash"))).strip()
-    save_credentials(rt.paths, api_id, api_hash)
-    echo(t("login.api_saved", path=rt.paths.config_file))
+    kind, detail = store_credentials(rt.paths, api_id, api_hash)
+    if kind == "keyring":
+        echo(t("login.api_saved_keyring", backend=detail))
+    else:
+        echo(t("login.api_saved_config", path=detail))
     return rt.config()
 
 

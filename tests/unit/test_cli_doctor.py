@@ -12,6 +12,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+import keyring
+import keyring.backends.fail
 from typer.testing import CliRunner
 
 from tests.fakes import ACCOUNT, FakeAuth, FakeGateway
@@ -19,6 +21,7 @@ from tgmirror.cli.app import app
 from tgmirror.cli.runtime import Runtime
 from tgmirror.core.gateway import ChannelInfo
 from tgmirror.core.paths import Paths
+from tgmirror.core.secrets import write_keyring
 from tgmirror.engine.runs import RunRequest, begin_run
 from tgmirror.store.db import Store
 
@@ -50,6 +53,53 @@ def test_reports_missing_credentials_without_a_terminal_or_env(make_runtime: Mak
     assert "api_id" in result.output
     assert "cryptg" in result.output.lower()
     assert "no source/destination pair yet" in result.output
+
+
+def test_reports_credential_source(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
+    rt = make_runtime(gateway=gateway, auth=FakeAuth(logged_in=ACCOUNT))  # default env: API_ENV
+
+    result = runner.invoke(app, ["doctor"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Credential: from env" in result.output
+
+
+def test_reports_keyring_as_the_source(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
+    write_keyring(1, "abc")
+    rt = make_runtime(gateway=gateway, auth=FakeAuth(logged_in=ACCOUNT), env={})
+
+    result = runner.invoke(app, ["doctor"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Credential: from keyring (" in result.output
+
+
+def test_suggests_moving_config_toml_credentials_to_a_usable_keyring(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    rt = make_runtime(gateway=gateway, auth=FakeAuth(logged_in=ACCOUNT), env={})
+    rt.paths.config_dir.mkdir(parents=True)
+    rt.paths.config_file.write_text('api_id = 1\napi_hash = "abc"\n', encoding="utf-8")
+
+    result = runner.invoke(app, ["doctor"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "Credential: from config.toml" in result.output
+    assert "run `tgmirror login` again" in result.output
+
+
+def test_does_not_suggest_moving_without_a_usable_keyring(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    keyring.set_keyring(keyring.backends.fail.Keyring())
+    rt = make_runtime(gateway=gateway, auth=FakeAuth(logged_in=ACCOUNT), env={})
+    rt.paths.config_dir.mkdir(parents=True)
+    rt.paths.config_file.write_text('api_id = 1\napi_hash = "abc"\n', encoding="utf-8")
+
+    result = runner.invoke(app, ["doctor"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "run `tgmirror login` again" not in result.output
 
 
 def test_reports_not_logged_in(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:

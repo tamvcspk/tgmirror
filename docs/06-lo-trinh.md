@@ -15,6 +15,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 - [x] Phase 6b — Analyze (đếm số tin), tiến độ truyền file, trần cho việc tải trước (2026-09-20; kiểm bằng `FakeGateway`, client Telethon giả và SQLite thật; chưa thử trên Telegram thật, xem "Phase 6b — ghi chú"). **Còn lại của đợt tăng tốc** (bước 1–5 của "Kế hoạch tăng tốc" đều đã làm): relay theo part (bước 6), đo `flood_log` thật để chỉnh mặc định (bước 7) — xem "Kế hoạch tăng tốc"
 - [x] Phase 7 — TUI, doctor, đóng gói (2026-09-24). **TUI xong (2026-09-23)**; **Chặng 1 (2026-09-24), Chặng 2 (2026-09-24, Sao chép mới/Đăng nhập), Chặng 3 (2026-09-24, `tgmirror config get/set` + mục "Cấu hình") và badge "đang chạy ở nơi khác" (2026-09-24, mục 4 còn lại của Chặng 1) của giao diện full-screen (menu) xong**; `tgmirror doctor` (2026-09-24: session, cryptg, quyền kênh đích, cảnh báo an toàn) và đóng gói (2026-09-24: `pyproject.toml` đã đủ cho `uv tool install`/`pipx install`, xác nhận bằng build + cài vào venv cô lập, README có mục Install) xong, xem "Phase 7 — ghi chú"
 - [x] Phase 8 — Group, supergroup, forum topics (2026-09-25; kiểm bằng `FakeGateway`/client Telethon giả, xem "Phase 8 — ghi chú"; **chưa thử clone một forum thật nhiều topic** — tiêu chí lộ trình "Clone thử một forum có nhiều topic, đúng topic và đúng thứ tự" chưa được đánh dấu xong cho tới khi đó)
+- [x] Phase 9 — Keyring (2026-09-25; kiểm bằng test đơn vị với một backend keyring giả trong bộ nhớ — không test nào chạm keyring thật của máy; **chưa thử trên Telegram thật/Windows Credential Manager thật** — tiêu chí lộ trình "Credential không còn nằm trần trong config.toml khi máy có keyring; headless/Docker vẫn chạy như cũ" cần người dùng xác nhận `login` thật ghi vào Credential Manager, xem "Phase 9 — ghi chú")
 
 ## Lộ trình
 
@@ -37,7 +38,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc.
 | 13 | Phát hành: CI, PyPI, binary PyInstaller trên GitHub Release, winget, kho APT/RPM ký GPG, AUR, image trên GHCR | Một tag `v*` ra đủ artifact; `winget install`, `apt install`/`dnf install`, `uv tool install tgmirror`, `docker pull` đều cài được bản đó |
 | 14+ | Đồng bộ edit/delete | Theo nhu cầu |
 
-Chi tiết Phase 9–13: "Kế hoạch Phase 9–13" bên dưới (đã duyệt, chưa bắt đầu).
+Chi tiết Phase 9–13: "Kế hoạch Phase 9–13" bên dưới (đã duyệt; Phase 9 xong, 10–13 chưa bắt đầu).
 
 ### Tái thiết luồng job (2026-09-20)
 
@@ -535,6 +536,14 @@ Hiện trạng: `api_id`/`api_hash` nằm trong `config.toml` (`core/config.py::
 - **`logout`**: giữ đúng hành vi hiện tại với credential (chỉ đổi chỗ lưu, không đổi ngữ nghĩa).
 - **Test**: một fixture `autouse` đặt backend keyring trong bộ nhớ cho **mọi** test, để không test nào chạm keyring thật của máy (cùng bài học "`doctor` gọi Telegram thật" ở nhật ký 2026-09-24). Dependency mới: `keyring`.
 - Hoàn thành khi: `login` trên Windows ghi vào Credential Manager và `config.toml` không còn `api_hash`; `PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring` thì mọi thứ chạy như trước phase 9; `*_FILE` đọc được; test xanh không chạm keyring thật.
+
+#### Phase 9 — ghi chú (2026-09-25)
+
+Đã có: `core/secrets.py` (`resolve_credentials`, `keyring_usable`, `keyring_backend_label`, `read_keyring`/`write_keyring`, hằng số `ENV_API_ID_FILE`/`ENV_API_HASH_FILE`); `core/config.py` gọi `resolve_credentials` trong `load_config` thay vì tự đọc biến môi trường, cộng `credential_source` (cho `doctor`), `config_has_credentials`, `validate_credentials`, `store_credentials` (nơi `login` quyết định ghi keyring hay `config.toml`) và `strip_credentials` (xóa hai dòng khỏi `config.toml` khi chuyển sang keyring, dùng lại khung ghi file nguyên tử `_write_config` mà `save_credentials`/`set_limit` cũng dùng); `cli/commands/auth.py::ensure_credentials` gọi `store_credentials` thay vì `save_credentials` thẳng, và tự chuyển credential đang nằm ở `config.toml` sang keyring vào lần `login` kế tiếp nếu máy giờ có keyring (chỉ khi nguồn đang dùng đúng là `config.toml`, không đụng tới khi `api_id`/`api_hash` đang tới từ env/`*_FILE`); `cli/commands/doctor.py` thêm dòng "credential lấy từ đâu" và gợi ý chuyển sang keyring khi thấy credential còn nằm trong file mà máy có keyring dùng được. Dependency mới: `keyring`. Tiêu chí "test xanh không chạm keyring thật": `tests/conftest.py::fake_keyring` (autouse) cài một backend trong bộ nhớ (`tests/fakes.py::FakeKeyring`) trước mỗi test, khôi phục backend cũ sau đó; `tests/unit/test_secrets.py` (thứ tự ưu tiên các tầng, backend `fail`/`null` bị coi là không dùng được, lỗi khi file của `*_FILE` thiếu hoặc không phải số), `tests/unit/test_cli_auth.py`/`test_cli_doctor.py` (login ghi vào keyring và xóa `config.toml`, chuyển credential cũ sang keyring ở lần `login` sau, rơi về `config.toml` khi không có keyring dùng được, dòng nguồn credential và gợi ý chuyển của `doctor`).
+
+Các lựa chọn khi làm (không phải D1–D9; đúng như kế hoạch ở trên, một điểm làm rõ khi viết code): "`login` lần sau tự chuyển" nghĩa là mỗi lần `ensure_credentials` thấy `api_id`/`api_hash` đã có sẵn (không cần hỏi lại) — không phải một cơ chế nền riêng — nên chỉ chuyển khi nguồn đang dùng đúng là `config.toml` (`credential_source(...) == "config.toml"`); nếu env hay `*_FILE` đang thắng thì bỏ qua, để không vô tình đẩy một giá trị chỉ định qua biến môi trường (ví dụ trong container) vào keyring của máy.
+
+Chưa kiểm chứng (người dùng chạy tay): `login` thật trên Windows có ghi đúng vào Credential Manager không (test chỉ dùng backend giả trong bộ nhớ); `PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring` trên máy thật; hành vi keyring thật trên macOS (Keychain, có thể hỏi mật khẩu) và Linux (Secret Service cần D-Bus, không có trong SSH headless — rơi về `config.toml` đúng như thiết kế nhưng chưa thử).
 
 ### Phase 10 — Xuất/nhập app data
 

@@ -25,6 +25,7 @@ dependencies = [
     "pyyaml>=6",
     "regex>=2024.11",
     "hachoir>=3.4.0",
+    "keyring>=25.0",
 ]
 
 [project.urls]

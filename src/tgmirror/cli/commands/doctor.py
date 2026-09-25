@@ -15,8 +15,10 @@ from tgmirror.cli.commands.auth import who
 from tgmirror.cli.errors import describe, run
 from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.core.auth import AccountInfo
+from tgmirror.core.config import config_has_credentials, credential_source
 from tgmirror.core.errors import TgMirrorError
 from tgmirror.core.gateway import TelegramGateway
+from tgmirror.core.secrets import keyring_usable
 from tgmirror.store.db import Store
 from tgmirror.ui.messages import t
 
@@ -37,6 +39,11 @@ def doctor(ctx: typer.Context) -> None:
             if config.api_id is None or config.api_hash is None:
                 typer.echo(t("doctor.session_missing_credentials"))
             else:
+                typer.echo(
+                    t("doctor.credential_source", source=credential_source(rt.paths, rt.env))
+                )
+                if config_has_credentials(rt.paths) and keyring_usable():
+                    typer.echo(t("doctor.credential_move_suggested"))
                 try:
                     conn = await stack.enter_async_context(rt.connect(config))
                     account: AccountInfo | None = await conn.auth.account()

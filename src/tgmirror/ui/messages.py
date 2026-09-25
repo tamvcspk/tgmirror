@@ -15,7 +15,10 @@ VI: dict[str, str] = {
     "login.prompt_api_id": "api_id",
     "login.prompt_api_hash": "api_hash (không hiện khi nhập)",
     "login.api_id_invalid": "api_id phải là một số nguyên dương.",
-    "login.api_saved": "Đã lưu api_id/api_hash vào {path}.",
+    "login.api_saved_keyring": "Đã lưu api_id/api_hash vào keyring hệ thống ({backend}).",
+    "login.api_saved_config": (
+        "Đã lưu api_id/api_hash vào {path} (máy này không có keyring dùng được)."
+    ),
     "login.prompt_phone": "Số điện thoại (quốc tế, ví dụ +84901234567)",
     "login.prompt_code": "Mã đăng nhập Telegram vừa gửi (không hiện khi nhập)",
     "login.prompt_password": "Mật khẩu xác minh hai bước (không hiện khi nhập)",
@@ -58,6 +61,11 @@ VI: dict[str, str] = {
     "doctor.title": "tgmirror doctor",
     "doctor.session_missing_credentials": (
         "Session: chưa có api_id/api_hash (chạy `tgmirror login`)."
+    ),
+    "doctor.credential_source": "Credential: lấy từ {source}.",
+    "doctor.credential_move_suggested": (
+        "Credential: vẫn còn trong config.toml, nhưng máy này có keyring — "
+        "chạy lại `tgmirror login` để chuyển sang keyring."
     ),
     "doctor.session_not_logged_in": "Session: chưa đăng nhập (chạy `tgmirror login`).",
     "doctor.session_error": "Session: lỗi kết nối — {detail}",
@@ -496,7 +504,10 @@ EN: dict[str, str] = {
     "login.prompt_api_id": "api_id",
     "login.prompt_api_hash": "api_hash (hidden while typing)",
     "login.api_id_invalid": "api_id must be a positive integer.",
-    "login.api_saved": "Saved api_id/api_hash to {path}.",
+    "login.api_saved_keyring": "Saved api_id/api_hash to the system keyring ({backend}).",
+    "login.api_saved_config": (
+        "Saved api_id/api_hash to {path} (no usable keyring on this machine)."
+    ),
     "login.prompt_phone": "Phone number (international, e.g. +14155550123)",
     "login.prompt_code": "Login code Telegram just sent (hidden while typing)",
     "login.prompt_password": "Two-step verification password (hidden while typing)",
@@ -536,6 +547,11 @@ EN: dict[str, str] = {
     "doctor.title": "tgmirror doctor",
     "doctor.session_missing_credentials": (
         "Session: no api_id/api_hash yet (run `tgmirror login`)."
+    ),
+    "doctor.credential_source": "Credential: from {source}.",
+    "doctor.credential_move_suggested": (
+        "Credential: still in config.toml, but this machine has a keyring — "
+        "run `tgmirror login` again to move it there."
     ),
     "doctor.session_not_logged_in": "Session: not logged in (run `tgmirror login`).",
     "doctor.session_error": "Session: connection error — {detail}",

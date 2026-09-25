@@ -16,9 +16,13 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, m
 
 from tgmirror.core.errors import ConfigError
 from tgmirror.core.paths import Paths
+from tgmirror.core.secrets import (
+    keyring_backend_label,
+    keyring_usable,
+    resolve_credentials,
+    write_keyring,
+)
 
-ENV_API_ID = "TGMIRROR_API_ID"
-ENV_API_HASH = "TGMIRROR_API_HASH"
 _CREDENTIAL_LINE = re.compile(r"\s*(api_id|api_hash)\s*=")
 
 
@@ -75,24 +79,26 @@ LIMIT_KEYS: tuple[str, ...] = tuple(Limits.model_fields)  # ``tgmirror config``'
 _LIMITS_TABLE = re.compile(r"^\s*\[(?P<name>[^\]]+)\]")
 
 
-def load_config(paths: Paths, env: Mapping[str, str] | None = None) -> Config:
-    """Read ``config.toml`` (if present); ``TGMIRROR_API_ID``/``TGMIRROR_API_HASH`` win over it."""
-    env = os.environ if env is None else env
-    data: dict[str, object] = {}
-    if paths.config_file.exists():
-        try:
-            with paths.config_file.open("rb") as fh:
-                data = tomllib.load(fh)
-        except (OSError, tomllib.TOMLDecodeError) as exc:
-            raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
+def _read_toml(paths: Paths) -> dict[str, object]:
+    if not paths.config_file.exists():
+        return {}
+    try:
+        with paths.config_file.open("rb") as fh:
+            return tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
 
-    if (raw_id := env.get(ENV_API_ID)) is not None:
-        try:
-            data["api_id"] = int(raw_id)
-        except ValueError:
-            raise ConfigError(f"{ENV_API_ID} must be an integer") from None
-    if (raw_hash := env.get(ENV_API_HASH)) is not None:
-        data["api_hash"] = raw_hash
+
+def load_config(paths: Paths, env: Mapping[str, str] | None = None) -> Config:
+    """``config.toml`` merged with every other place ``api_id``/``api_hash`` can live — env vars,
+    ``*_FILE``, the OS keyring — highest priority first (``core.secrets``, Phase 9)."""
+    env = os.environ if env is None else env
+    data = dict(_read_toml(paths))
+    creds = resolve_credentials(
+        env, config_api_id=data.get("api_id"), config_api_hash=data.get("api_hash")
+    )
+    data["api_id"] = creds.api_id
+    data["api_hash"] = creds.api_hash
 
     try:
         return Config.model_validate(data)
@@ -105,15 +111,80 @@ def load_config(paths: Paths, env: Mapping[str, str] | None = None) -> Config:
         raise ConfigError(f"invalid configuration: {problems}") from None
 
 
+def credential_source(paths: Paths, env: Mapping[str, str] | None = None) -> str:
+    """Where ``api_id``/``api_hash`` currently resolve from, for ``tgmirror doctor`` — never the
+    values themselves (hard rule 6)."""
+    env = os.environ if env is None else env
+    try:
+        data = _read_toml(paths)
+    except ConfigError:
+        data = {}
+    creds = resolve_credentials(
+        env, config_api_id=data.get("api_id"), config_api_hash=data.get("api_hash")
+    )
+    return creds.source
+
+
+def config_has_credentials(paths: Paths) -> bool:
+    """Whether ``config.toml`` itself still holds ``api_id``/``api_hash`` — regardless of whether
+    another tier currently wins — so ``doctor`` can suggest moving them to a keyring that showed up
+    later. Tolerates a broken file: that is a different problem, reported elsewhere."""
+    try:
+        data = _read_toml(paths)
+    except ConfigError:
+        return False
+    return data.get("api_id") is not None or data.get("api_hash") is not None
+
+
+def validate_credentials(api_id: int, api_hash: str) -> tuple[int, str]:
+    api_hash = api_hash.strip()
+    if api_id <= 0 or not api_hash or any(ch.isspace() for ch in api_hash):
+        raise ConfigError("api_id must be a positive integer and api_hash must not be empty")
+    return api_id, api_hash
+
+
+def store_credentials(paths: Paths, api_id: int, api_hash: str) -> tuple[str, str]:
+    """Save where ``login`` should: the keyring if one is usable on this machine (and remove any
+    copy left in ``config.toml``), else ``config.toml`` as before (docs/06-lo-trinh.md, Phase 9,
+    "Ghi"). Returns ``("keyring", <backend name>)`` or ``("config", str(config_file))``."""
+    api_id, api_hash = validate_credentials(api_id, api_hash)
+    if keyring_usable():
+        write_keyring(api_id, api_hash)
+        strip_credentials(paths)
+        return "keyring", keyring_backend_label()
+    save_credentials(paths, api_id, api_hash)
+    return "config", str(paths.config_file)
+
+
+def strip_credentials(paths: Paths) -> None:
+    """Remove any top-level ``api_id``/``api_hash`` lines from ``config.toml``, e.g. after moving
+    them to the keyring. Leaves comments, ``[limits]`` and everything else untouched; a no-op if
+    the file doesn't exist or has neither line."""
+    if not paths.config_file.exists():
+        return
+    try:
+        text = paths.config_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
+
+    first_table = re.search(r"^\s*\[", text, flags=re.MULTILINE)
+    head, tail = (
+        (text[: first_table.start()], text[first_table.start() :]) if first_table else (text, "")
+    )
+    kept = [ln for ln in head.splitlines() if not _CREDENTIAL_LINE.match(ln)]
+    if len(kept) == len(head.splitlines()):
+        return  # neither line was there
+    new_text = ("\n".join(kept).rstrip("\n") + "\n" if kept else "") + tail
+    _write_config(paths, new_text)
+
+
 def save_credentials(paths: Paths, api_id: int, api_hash: str) -> None:
     """Write ``api_id``/``api_hash`` into ``config.toml``, keeping every other line as it is.
 
     The two keys are top-level, so they go above the first ``[table]`` header. The result is parsed
     before it replaces the file, so a bad edit can never leave a broken config behind.
     """
-    api_hash = api_hash.strip()
-    if api_id <= 0 or not api_hash or any(ch.isspace() for ch in api_hash):
-        raise ConfigError("api_id must be a positive integer and api_hash must not be empty")
+    api_id, api_hash = validate_credentials(api_id, api_hash)
 
     try:
         text = paths.config_file.read_text(encoding="utf-8") if paths.config_file.exists() else ""
@@ -127,7 +198,12 @@ def save_credentials(paths: Paths, api_id: int, api_hash: str) -> None:
     kept = [ln for ln in head.splitlines() if not _CREDENTIAL_LINE.match(ln)]
     lines = [f"api_id = {api_id}", f"api_hash = {json.dumps(api_hash)}", *kept]
     new_text = "\n".join(lines).rstrip("\n") + "\n" + (("\n" + tail) if tail else "")
+    _write_config(paths, new_text)
 
+
+def _write_config(paths: Paths, new_text: str) -> None:
+    """Validate ``new_text`` as TOML, then replace ``config.toml`` with it atomically (a bad edit
+    can never leave a broken config behind). Shared by every writer of the file."""
     try:
         tomllib.loads(new_text)
     except tomllib.TOMLDecodeError as exc:
@@ -240,17 +316,4 @@ def _write_limit(paths: Paths, key: str, value_text: str) -> None:
             lines.insert(limits_at + 1, f"{key} = {value_text}")
 
     new_text = "\n".join(lines) + "\n"
-    try:
-        tomllib.loads(new_text)
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"refusing to write an invalid {paths.config_file.name}: {exc}") from exc
-
-    paths.config_dir.mkdir(parents=True, exist_ok=True)
-    tmp = paths.config_file.with_suffix(".toml.tmp")
-    try:
-        tmp.write_text(new_text, encoding="utf-8")
-        with contextlib.suppress(OSError):
-            tmp.chmod(0o600)
-        tmp.replace(paths.config_file)
-    except OSError as exc:
-        raise ConfigError(f"cannot write {paths.config_file}: {exc}") from exc
+    _write_config(paths, new_text)

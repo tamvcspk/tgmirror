@@ -151,10 +151,10 @@ done 4,180 · failed 3 · skipped(filter) 27,911 · flood 2 (last 38s ago)
 ```
 <data_dir>/tgmirror.db              state
 <data_dir>/sessions/<name>.session  Telethon session (bí mật, chmod 600 nếu được)
-<config_dir>/config.toml            api_id, api_hash, [limits]
+<config_dir>/config.toml            [limits], và api_id/api_hash nếu máy không có keyring
 ```
 
-`api_id`/`api_hash` có thể lấy từ biến môi trường `TGMIRROR_API_ID` / `TGMIRROR_API_HASH` (ưu tiên hơn file). `tgmirror login` hỏi và ghi hai khóa này lên đầu `config.toml` (giữ nguyên phần còn lại và chú thích của file, không bao giờ in `api_hash`). `tgmirror config get` xem đường dẫn và mọi khóa `[limits]` (`get KEY` một khóa, `--json` cho cả hai); `config set KEY VALUE` sửa một khóa `[limits]` (kiểm tra qua đúng model `Limits`, kể cả luật liên trường, trước khi ghi) theo cùng lối "chỉ đổi khóa liên quan, giữ nguyên phần còn lại" như `login`; `long_pause_range` nhận hai số cách nhau dấu phẩy (`30,90`). Có cả trong menu full-screen ("Cấu hình").
+**`api_id`/`api_hash` (Phase 9 — keyring, `core/secrets.py`)**: đọc theo thứ tự biến môi trường `TGMIRROR_API_ID`/`TGMIRROR_API_HASH` → `TGMIRROR_API_ID_FILE`/`TGMIRROR_API_HASH_FILE` (đường dẫn tới file chứa giá trị, cho Docker/Kubernetes secret) → keyring hệ thống (Windows Credential Manager, macOS Keychain, Secret Service) → `config.toml` (cách cũ). `tgmirror login` hỏi rồi ghi vào keyring nếu máy có một keyring "dùng được" (không phải `fail`/`null`/backend lưu file trần) và xóa hai dòng đó khỏi `config.toml`; máy không có keyring thì ghi `config.toml` như trước, lên đầu file, giữ nguyên phần còn lại và chú thích (không bao giờ in `api_hash`). Ai đã có credential trong `config.toml` không tự chuyển ngầm; `login` lần sau (đang chạy lại vì lý do khác, ví dụ session hết hạn) tự chuyển nếu máy giờ có keyring, và `tgmirror doctor` cũng gợi ý việc đó. `tgmirror config get` xem đường dẫn và mọi khóa `[limits]` (`get KEY` một khóa, `--json` cho cả hai); `config set KEY VALUE` sửa một khóa `[limits]` (kiểm tra qua đúng model `Limits`, kể cả luật liên trường, trước khi ghi) theo cùng lối "chỉ đổi khóa liên quan, giữ nguyên phần còn lại" như `login`; `long_pause_range` nhận hai số cách nhau dấu phẩy (`30,90`). Có cả trong menu full-screen ("Cấu hình"). `tgmirror doctor` cho biết credential đang lấy từ đâu (env / file / keyring `<tên backend>` / `config.toml`), không bao giờ in giá trị.
 
 `TGMIRROR_LANG=en` đổi lời nhắc/thông báo sang tiếng Anh (mặc định tiếng Việt). Đầu ra luôn là UTF-8, kể cả khi bị chuyển hướng trên Windows.
 
