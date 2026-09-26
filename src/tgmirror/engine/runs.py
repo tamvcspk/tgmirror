@@ -9,9 +9,11 @@ the mirror the store keeps for it; nothing here or in the CLI ever names or list
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from tgmirror.core.errors import TgMirrorError
 from tgmirror.core.gateway import CaptionMode, ChannelInfo, TelegramGateway
+from tgmirror.engine import backupdir
 from tgmirror.engine.endpoints import SourceRestricted
 from tgmirror.engine.strategy import MODES, may_reupload
 from tgmirror.store.db import Clock, Store, utc_now
@@ -87,6 +89,9 @@ class RunRequest:
     # Phase 8: keep a forum's topic as a hashtag when the destination cannot hold topics; a forward
     # cannot carry it, so ``--mode copy`` refuses it and ``auto`` sends such units again.
     topic_as_hashtag: bool = False
+    # Phase 11b (``tgmirror restore``): the backup directory this run reads from instead of a live
+    # source, e.g. ``begin_run`` reads its ``backup.json`` instead of asking the gateway.
+    from_backup: str | None = None
 
 
 def check_options(request: RunRequest) -> None:
@@ -125,9 +130,14 @@ async def begin_run(
     """
     request = request or RunRequest()
     check_options(request)
+    manifest = backupdir.read_manifest(Path(request.from_backup)) if request.from_backup else None
     protected = False
     if may_reupload(request.mode, request.caption, request.topic_as_hashtag):
-        protected = await check_source(gateway, src, request)
+        protected = (
+            check_source_from_backup(manifest, request)
+            if manifest is not None
+            else await check_source(gateway, src, request)
+        )
     previous = await store.latest_run(src.id, dst.id)
     if previous is not None:
         check_runnable(previous, clock())
@@ -135,8 +145,15 @@ async def begin_run(
     # it is recorded once, so reconcile never scans what the destination held before.
     known = await store.find_mirror(src.id, dst.id) is not None
     base = 0 if known and not request.fresh else await gateway.last_message_id(dst.id)
-    # A retry is measured by how many failed messages are left, so it needs no source total.
-    head = 0 if request.retry_of is not None else await gateway.last_message_id(src.id)
+    # A retry is measured by how many failed messages are left, so it needs no source total. A
+    # restore's source is a directory, not a live channel (phase 11b): its highest id is already
+    # on disk, so nothing is read through the gateway for it either.
+    if request.retry_of is not None:
+        head = 0
+    elif request.from_backup is not None:
+        head = backupdir.last_id(Path(request.from_backup))
+    else:
+        head = await gateway.last_message_id(src.id)
     spec = RunSpec(
         src=src,
         dst=dst,
@@ -155,10 +172,25 @@ async def begin_run(
             src_last_id=head,
             src_protected=protected,
             retry_of=request.retry_of,
+            from_backup=request.from_backup,
         ),
         filters_json=request.filters_json,
     )
     return await store.start_run(spec, force=request.force, fresh=request.fresh)
+
+
+def check_source_from_backup(manifest: backupdir.BackupManifest, request: RunRequest) -> bool:
+    """Decision D3 for a restore (phase 11b): the original source may be long gone, so there is no
+    live channel to re-read or to test ``is_admin`` against (unlike ``check_source``) — only
+    ``manifest.src_noforwards``, read from the backup itself, and the user's statement, asked again
+    by ``tgmirror restore`` every time for consistency ("không bao giờ âm thầm") even though the
+    backup already recorded one. Returns whether the source restricted saving content.
+    """
+    if not manifest.src_noforwards:
+        return False
+    if request.protected_ack:
+        return True
+    raise NeedsAcknowledgement(manifest.src_title)
 
 
 async def check_source(gateway: TelegramGateway, src: ChannelInfo, request: RunRequest) -> bool:

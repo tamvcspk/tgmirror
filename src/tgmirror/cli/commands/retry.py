@@ -12,7 +12,7 @@ from typing import Annotated
 
 import typer
 
-from tgmirror.cli.commands.run import ReadyToRun, execute, pair_of
+from tgmirror.cli.commands.run import ReadyToRun, execute, pair_of, reader_override_for
 from tgmirror.cli.errors import run
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
 from tgmirror.engine.runs import RunRequest, begin_run, check_runnable, resolve_run
@@ -66,7 +66,8 @@ def retry(
                 started = await begin_run(
                     store, conn.gateway, result.src, result.dst, result.request
                 )
-                await execute(rt, store, conn.gateway, started, wait=wait)
+                reader = reader_override_for(result.request.from_backup)
+                await execute(rt, store, conn.gateway, started, wait=wait, reader_override=reader)
 
     run(rt, command())
 
@@ -104,6 +105,7 @@ async def retry_flow_for(
         placeholder=target.options.placeholder,
         protected_ack=target.options.protected_ack,
         topic_as_hashtag=target.options.topic_as_hashtag,
+        from_backup=target.options.from_backup,
     )
     src, dst = pair_of(target)
     return ReadyToRun(src, dst, request)

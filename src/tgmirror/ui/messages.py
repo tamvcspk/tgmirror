@@ -172,6 +172,17 @@ VI: dict[str, str] = {
         "Telegram giới hạn liên tiếp: tạm nghỉ {delay}s giữa các lần đọc, "
         "cho tới khi yên ổn trở lại."
     ),
+    # restore (phase 11b)
+    "restore.pick_dir": "Thư mục backup cần restore",
+    "restore.pick_dir_empty": "Đường dẫn không được để trống.",
+    "restore.pick_destination": "Restore vào đâu?",
+    "restore.preview": (
+        "Xem trước: {matched} trong {scanned} tin đầu tiên của khoảng đã chọn sẽ được restore."
+    ),
+    "restore.preview_empty": "Xem trước: backup không có tin nào trong khoảng đã chọn.",
+    "restore.confirm_start": "Restore {src} vào {dst} ngay bây giờ?",
+    "restore.dst": "Đích: {channel}",
+    "restore.dst_created": "Đích (mới tạo): {channel}",
     "status.running": "đang chạy",
     "status.paused": "tạm dừng",
     "status.stopped": "đã dừng",
@@ -324,6 +335,7 @@ VI: dict[str, str] = {
         "Lần backup {id} đang được một tiến trình khác giữ. Nếu chắc chắn nó đã chết, "
         "chạy lại với --force-takeover."
     ),
+    "err.not_a_backup": "{dir} không phải một thư mục backup hợp lệ (không có backup.json).",
     "err.filter": "Filter không hợp lệ: {detail}",
     "err.filter_mix": (
         "Không dùng --filter-file cùng các cờ lọc khác (--media, --hashtag, --since, ...)."
@@ -722,6 +734,17 @@ EN: dict[str, str] = {
     "backup.throttled": (
         "Telegram limited us repeatedly: pausing {delay}s between reads until things calm down."
     ),
+    # restore (phase 11b)
+    "restore.pick_dir": "Backup directory to restore",
+    "restore.pick_dir_empty": "The path cannot be empty.",
+    "restore.pick_destination": "Restore into which destination?",
+    "restore.preview": (
+        "Preview: {matched} of the first {scanned} messages of the chosen range will be restored."
+    ),
+    "restore.preview_empty": "Preview: the backup has no messages in the chosen range.",
+    "restore.confirm_start": "Restore {src} into {dst} now?",
+    "restore.dst": "Destination: {channel}",
+    "restore.dst_created": "Destination (just created): {channel}",
     "status.running": "running",
     "status.paused": "paused",
     "status.stopped": "stopped",
@@ -876,6 +899,7 @@ EN: dict[str, str] = {
         "Backup {id} is being run by another process. If you are sure it is dead, "
         "run again with --force-takeover."
     ),
+    "err.not_a_backup": "{dir} is not a valid backup directory (no backup.json).",
     "err.filter": "Invalid filter: {detail}",
     "err.filter_mix": (
         "Do not combine --filter-file with the other filter flags (--media, --hashtag, ...)."

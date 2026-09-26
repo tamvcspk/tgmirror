@@ -7,6 +7,7 @@ through ``typer.Exit``/``typer.echo`` (see ``resume_flow``'s docstring).
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -15,7 +16,9 @@ from tgmirror.cli import wizard
 from tgmirror.cli.errors import Declined, UsageProblem, run
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
-from tgmirror.core.gateway import ChannelInfo, TelegramGateway
+from tgmirror.core.gateway import ChannelInfo, MessageReader, TelegramGateway
+from tgmirror.engine.backup_reader import BackupReader
+from tgmirror.engine.backupdir import read_manifest
 from tgmirror.engine.runner import RunControl, Runner
 from tgmirror.engine.runs import RunRequest, begin_run, check_runnable, resolve_run
 from tgmirror.store.db import Store, utc_now
@@ -99,7 +102,8 @@ def run_clone(
                 started = await begin_run(
                     store, conn.gateway, result.src, result.dst, result.request
                 )
-                await execute(rt, store, conn.gateway, started, wait=wait)
+                reader = reader_override_for(result.request.from_backup)
+                await execute(rt, store, conn.gateway, started, wait=wait, reader_override=reader)
 
     run(rt, command())
 
@@ -176,12 +180,25 @@ async def resume_flow(
         placeholder=target.options.placeholder,
         protected_ack=target.options.protected_ack,
         topic_as_hashtag=target.options.topic_as_hashtag,
+        from_backup=target.options.from_backup,
     )
     src, dst = pair_of(target)
     if fresh:
         copied = await store.count_copied(src.id, dst.id)
         await confirm_fresh(rt, copied, yes, channel_label(src), channel_label(dst))
     return ReadyToRun(src, dst, request)
+
+
+def reader_override_for(from_backup: str | None) -> MessageReader | None:
+    """Phase 11b: a run/retry continuing a restore reads its backup directory again, not the
+    gateway (``begin_run`` already skips the live source checks the same way, keyed off the same
+    field). ``None`` for an ordinary clone: ``Runner`` then reads through the gateway as usual."""
+    if from_backup is None:
+        return None
+    directory = Path(from_backup)
+    manifest = read_manifest(directory)
+    assert manifest is not None, f"{directory} lost its backup.json while the run was live"
+    return BackupReader(directory, manifest)
 
 
 def pair_of(earlier: Run) -> tuple[ChannelInfo, ChannelInfo]:
@@ -224,6 +241,7 @@ async def execute(
     started: StartedRun,
     *,
     wait: bool = False,
+    reader_override: MessageReader | None = None,
 ) -> None:
     """Carry out a started run in the foreground; print progress and the result.
 
@@ -271,7 +289,7 @@ async def execute(
     ):
         runner = Runner(
             store, gateway, limits, reporter=reporter, control=control, wait=wait,
-            tmp_dir=rt.paths.tmp_dir,
+            tmp_dir=rt.paths.tmp_dir, reader_override=reader_override,
         )  # fmt: skip
         if listening and not isinstance(reporter, TuiReporter):  # the TUI shows the keys itself
             typer.echo(t("run.keys_hint"))

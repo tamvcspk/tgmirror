@@ -71,6 +71,7 @@ from tgmirror.core.gateway import (
     ChatKind,
     ExportedMedia,
     ExportedMessage,
+    FromBackup,
     MediaKind,
     OnTransfer,
     Prepared,
@@ -590,6 +591,55 @@ def _source_names(message: custom.Message) -> set[str]:
     return names
 
 
+def _source_names_from_id(src_id: int) -> set[str]:
+    """As ``_source_names``, but from just the original channel's id (phase 11b, restore): a
+    backup does not keep a username (``BackupManifest`` has none), so link-stripping only catches
+    ``t.me/c/<number>/...``, not an ``@username`` link — a known approximation, not a bug."""
+    return {str(src_id).removeprefix("-100").removeprefix("-")}
+
+
+def _backup_self_contained_media(media: ExportedMedia) -> object:
+    """The ``InputMediaX`` for a self-contained ``ExportedMedia`` (poll/geo/venue/contact) — always
+    built fresh, since a backup keeps none of these by live Telegram reference. Game/invoice never
+    reach here: ``engine/reupload.py::plan_unit`` turns them into a drop/placeholder/error first,
+    same as it already does for a live reupload."""
+    if media.kind is MediaKind.POLL:
+        poll = types.Poll(
+            id=0,
+            question=types.TextWithEntities(media.poll_question or "", []),
+            answers=[
+                types.PollAnswer(types.TextWithEntities(text, []), option=bytes([i]))
+                for i, text in enumerate(media.poll_options)
+            ],
+            hash=0,
+            quiz=media.poll_quiz,
+        )
+        correct = None
+        if media.poll_quiz and media.poll_correct_option is not None:
+            correct = [bytes([media.poll_correct_option])]
+        return types.InputMediaPoll(poll, correct_answers=correct)
+    if media.kind is MediaKind.GEO:
+        point = types.InputGeoPoint(lat=media.geo_lat or 0.0, long=media.geo_lon or 0.0)
+        if media.venue_title:
+            return types.InputMediaVenue(
+                point,
+                title=media.venue_title,
+                address="",
+                provider="",
+                venue_id="",
+                venue_type="",
+            )
+        return types.InputMediaGeoPoint(point)
+    if media.kind is MediaKind.CONTACT:
+        return types.InputMediaContact(
+            phone_number=media.contact_phone or "",
+            first_name=media.contact_first_name or "",
+            last_name=media.contact_last_name or "",
+            vcard="",
+        )
+    raise AssertionError(f"{media.kind} has no self-contained media to send")
+
+
 @dataclass(frozen=True, slots=True)
 class _Item:
     """One message of a prepared unit: the message as Telegram gave it and the files downloaded."""
@@ -658,9 +708,15 @@ async def _position(ask: Callable[[int], Awaitable[Any]], offset_id: int, total:
     return None if result.messages else total
 
 
-def _album_share(items: Sequence[_Item]) -> int:
-    """Bytes of an album's files, as the messages say (``0``: nothing to scale a report to)."""
-    return sum(i.message.file.size or 0 for i in items if i.message.file is not None)
+def _album_share(sizes: Sequence[int | None]) -> int:
+    """Bytes of an album's files (``0``: nothing to scale a report to). Takes plain sizes rather
+    than ``_Item``s so a live reupload and a restore (phase 11b, sizes from ``ExportedMedia``)
+    share this one function."""
+    return sum(s or 0 for s in sizes)
+
+
+def _item_size(item: _Item) -> int | None:
+    return item.message.file.size if item.message.file is not None else None
 
 
 class _FileAt:
@@ -1380,7 +1436,15 @@ class TelethonGateway:
         """A single document big enough for the big-file API and the request pool."""
         if self._upload_budget is None or item.path is None or item.message.document is None:
             return False
-        size = (await asyncio.to_thread(item.path.stat)).st_size
+        return await self._pooled_upload_path(item.path, media_kind(item.message))
+
+    async def _pooled_upload_path(self, path: Path, kind: MediaKind) -> bool:
+        """As ``_pooled_upload``, for a file with no live Telethon message to check
+        ``.document`` on (phase 11b, restore: only ``ExportedMedia.kind`` says what it is). A
+        bare photo is excluded, same as the live path, since it never reaches the pool either."""
+        if self._upload_budget is None or kind is MediaKind.PHOTO:
+            return False
+        size = (await asyncio.to_thread(path.stat)).st_size
         return (
             size >= BIG_FILE
             and size >= self._transfer.min_bytes
@@ -1390,6 +1454,8 @@ class TelethonGateway:
     async def upload_prepared(
         self, prepared: Prepared, on_transfer: OnTransfer | None = None
     ) -> Prepared:
+        if isinstance(prepared.handle, FromBackup):
+            return prepared  # phase 11b: no pre-upload optimization, ``send_prepared`` does it all
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
         if prepared.uploaded or len(fetched.items) != 1:
@@ -1415,6 +1481,8 @@ class TelethonGateway:
         *,
         topic: int | None = None,
     ) -> list[int]:
+        if isinstance(prepared.handle, FromBackup):
+            return await self._send_from_backup(dst, prepared.handle, caption, on_transfer, topic)
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
         peer = await self._peer(dst)
@@ -1422,6 +1490,142 @@ class TelethonGateway:
             if len(fetched.items) > 1:
                 return await self._send_album(peer, fetched.items, caption, on_transfer, topic)
             return [await self._send_one(peer, fetched.items[0], caption, on_transfer, topic)]
+
+    # ---- phase 11b (restore): sending from a backup directory, no live Telethon message --------
+
+    async def _send_from_backup(
+        self,
+        dst: int,
+        handle: FromBackup,
+        caption: CaptionPolicy,
+        on_transfer: OnTransfer | None,
+        topic: int | None,
+    ) -> list[int]:
+        """``send_prepared``'s restore path: nothing here comes from a live Telethon message, only
+        what ``messages.jsonl`` kept (``ExportedMessage``/``ExportedMedia``). One call to
+        ``send_file``/``send_message`` either way — Telethon's own attribute auto-detection
+        (hachoir) does the rest, the same as it already does for a live reupload's single files."""
+        peer = await self._peer(dst)
+        names = _source_names_from_id(handle.src_id)
+        with mapped_errors():
+            if len(handle.messages) > 1:
+                return await self._send_backup_album(
+                    peer, handle, caption, names, on_transfer, topic
+                )
+            one = handle.messages[0]
+            return [
+                await self._send_backup_one(
+                    peer, one, handle.media_dir, caption, names, on_transfer, topic
+                )
+            ]
+
+    async def _send_backup_one(
+        self,
+        peer: object,
+        message: ExportedMessage,
+        media_dir: Path,
+        caption: CaptionPolicy,
+        names: Collection[str],
+        on_transfer: OnTransfer | None,
+        topic: int | None,
+    ) -> int:
+        text, entities = tl_html.parse(message.text_html)
+        media = message.media
+        if media is not None and media.filename is not None:
+            text, entities = rewrite_caption(text, entities, caption, names)
+            path = media_dir / media.filename
+            extra: dict[str, object] = {}
+            if media.kind is MediaKind.VOICE:
+                extra["voice_note"] = True
+            elif media.kind is MediaKind.VIDEO_NOTE:
+                extra["video_note"] = True
+            elif media.kind is MediaKind.DOCUMENT:
+                extra["force_document"] = True
+            source: Any = str(path)
+            if await self._pooled_upload_path(path, media.kind):
+                # many parts in flight over several connections instead of Telethon's own
+                # single-connection uploader — this is what a live reupload's big files get too
+                source = await self._upload_parallel(path, message.id, on_transfer)
+            elif progress := _reporting(on_transfer, TransferPhase.UPLOAD, message.id):
+                extra["progress_callback"] = progress
+            sent = await self._client.send_file(
+                peer,
+                source,
+                caption=text,
+                formatting_entities=entities or None,
+                parse_mode=None,
+                mime_type=media.mime,
+                reply_to=topic,
+                **extra,
+            )
+        elif media is not None:
+            sent = await self._client.send_message(
+                peer,
+                text,
+                file=_backup_self_contained_media(media),
+                formatting_entities=entities or None,
+                parse_mode=None,
+                reply_to=topic,
+            )
+        else:
+            if caption.hashtag:
+                text = f"{text}\n{caption.hashtag}" if text else caption.hashtag
+            sent = await self._client.send_message(
+                peer, text, formatting_entities=entities or None, parse_mode=None, reply_to=topic
+            )
+        return int(sent.id)
+
+    async def _backup_album_member(
+        self,
+        peer: object,
+        media_dir: Path,
+        message: ExportedMessage,
+        on_transfer: OnTransfer | None,
+    ) -> types.TypeInputMedia:
+        media = message.media
+        assert media is not None and media.filename is not None
+        return await self._upload_album_member(
+            peer,
+            media_dir / media.filename,
+            media.kind,
+            message.id,
+            mime=media.mime,
+            force_document=media.kind is MediaKind.DOCUMENT,
+            on_transfer=on_transfer,
+        )
+
+    async def _send_backup_album(
+        self,
+        peer: object,
+        handle: FromBackup,
+        caption: CaptionPolicy,
+        names: Collection[str],
+        on_transfer: OnTransfer | None,
+        topic: int | None,
+    ) -> list[int]:
+        """An album never mixes in a self-contained kind (poll/geo/contact never group), so every
+        member here has a file. Goes through the same ``_upload_album_member``/
+        ``_post_multi_media`` core as a live reupload's album (``_send_album``) — added
+        2026-09-26 in place of one ``send_file([...])`` call, which neither pooled a big member
+        nor reported transfer progress."""
+        plain = replace(caption, hashtag=None)
+        sizes = [m.media.size if m.media is not None else None for m in handle.messages]
+        total = _album_share(sizes)
+        album_id = handle.messages[0].id
+        done = 0
+        parts: list[tuple[types.TypeInputMedia, str, Sequence[Any]]] = []
+        for message, size in zip(handle.messages, sizes, strict=True):
+            text, entities = tl_html.parse(message.text_html)
+            text, entities = rewrite_caption(text, entities, plain, names)
+            progress = self._album_progress(on_transfer, album_id, total, done)
+            fm = await self._backup_album_member(peer, handle.media_dir, message, progress)
+            done += _album_share([size])
+            parts.append((fm, text, entities))
+        if caption.hashtag and parts:
+            at = next((i for i, (_, text, _) in enumerate(parts) if text), 0)
+            fm, text, entities = parts[at]
+            parts[at] = (fm, f"{text}\n{caption.hashtag}" if text else caption.hashtag, entities)
+        return await self._post_multi_media(peer, parts, topic)
 
     async def _send_one(
         self,
@@ -1527,58 +1731,83 @@ class TelethonGateway:
 
         return callback
 
-    async def _album_media(
-        self, peer: object, item: _Item, on_transfer: OnTransfer | None
+    async def _upload_album_member(
+        self,
+        peer: object,
+        path: Path,
+        kind: MediaKind,
+        msg_id: int,
+        *,
+        mime: str | None = None,
+        attributes: Sequence[Any] = (),
+        thumb: Path | None = None,
+        force_document: bool = False,
+        on_transfer: OnTransfer | None = None,
     ) -> types.TypeInputMedia:
         """One album member's bytes, uploaded (through the pool when big enough) and turned into
         media ``SendMultiMediaRequest`` will actually accept: it refuses a bare
         ``InputMediaUploadedDocument``/``Photo`` (``MediaInvalidError``), so ``UploadMediaRequest``
-        converts it first, same as Telethon's own album path does."""
-        message = item.message
-        assert item.path is not None
-        kind = media_kind(message)
+        converts it first, same as Telethon's own album path does.
+
+        Shared by a live reupload (``_album_media``) and a restore, phase 11b (``_backup_album_
+        member``): only how the caller gets ``path``/``mime``/``attributes``/``thumb`` differs —
+        the upload, the pooling decision and the request are the same code and the same
+        ``[limits]``/``TransferSettings`` for both.
+        """
         fm: types.TypeInputMedia
         if kind is MediaKind.PHOTO:
-            handle = await self._upload_one(item.path, on_transfer)
+            handle = await self._upload_one(path, on_transfer)
             fm = types.InputMediaUploadedPhoto(file=handle)
         else:
-            doc = message.document
-            assert doc is not None
-            if await self._pooled_upload(item):
-                handle = await self._upload_parallel(item.path, message.id, on_transfer)
+            if await self._pooled_upload_path(path, kind):
+                handle = await self._upload_parallel(path, msg_id, on_transfer)
             else:
-                handle = await self._upload_one(item.path, on_transfer)
-            thumb = None if item.thumb is None else await self._upload_one(item.thumb, None)
+                handle = await self._upload_one(path, on_transfer)
+            thumb_handle = None if thumb is None else await self._upload_one(thumb, None)
             fm = types.InputMediaUploadedDocument(
                 file=handle,
-                mime_type=doc.mime_type,
-                attributes=list(doc.attributes),
-                thumb=thumb,
-                force_file=kind is MediaKind.DOCUMENT,
+                mime_type=mime or "application/octet-stream",
+                attributes=list(attributes),
+                thumb=thumb_handle,
+                force_file=force_document,
                 nosound_video=True if kind is MediaKind.VIDEO else None,
             )
         uploaded = await self._client(UploadMediaRequest(peer, media=fm))
         got = uploaded.photo if kind is MediaKind.PHOTO else uploaded.document
         return utils.get_input_media(got)
 
-    async def _send_album(
+    async def _album_media(
+        self, peer: object, item: _Item, on_transfer: OnTransfer | None
+    ) -> types.TypeInputMedia:
+        message = item.message
+        assert item.path is not None
+        kind = media_kind(message)
+        doc = message.document
+        assert kind is MediaKind.PHOTO or doc is not None
+        return await self._upload_album_member(
+            peer,
+            item.path,
+            kind,
+            message.id,
+            mime=doc.mime_type if doc is not None else None,
+            attributes=doc.attributes if doc is not None else (),
+            thumb=item.thumb,
+            force_document=kind is MediaKind.DOCUMENT,
+            on_transfer=on_transfer,
+        )
+
+    async def _post_multi_media(
         self,
         peer: object,
-        items: Sequence[_Item],
-        caption: CaptionPolicy,
-        on_transfer: OnTransfer | None = None,
-        topic: int | None = None,
+        parts: Sequence[tuple[types.TypeInputMedia, str, Sequence[Any]]],
+        topic: int | None,
     ) -> list[int]:
-        total = _album_share(items)
-        album_id = items[0].message.id
-        done = 0
-        media: list[types.InputSingleMedia] = []
-        captions = _album_captions([item.message for item in items], caption)
-        for item, (text, entities) in zip(items, captions, strict=True):
-            progress = self._album_progress(on_transfer, album_id, total, done)
-            fm = await self._album_media(peer, item, progress)
-            done += _album_share((item,))
-            media.append(types.InputSingleMedia(fm, message=text, entities=entities or None))
+        """``SendMultiMediaRequest`` for already-uploaded members, mapping ids back by
+        ``random_id`` — the write half of every album, live or restored alike."""
+        media = [
+            types.InputSingleMedia(fm, message=text, entities=list(entities) or None)
+            for fm, text, entities in parts
+        ]
         reply_to = (
             None
             if topic is None
@@ -1591,6 +1820,27 @@ class TelethonGateway:
         updates = result.updates if isinstance(result, has_updates) else []
         id_map = {u.random_id: u.id for u in updates if isinstance(u, types.UpdateMessageID)}
         return [id_map[m.random_id] for m in media]
+
+    async def _send_album(
+        self,
+        peer: object,
+        items: Sequence[_Item],
+        caption: CaptionPolicy,
+        on_transfer: OnTransfer | None = None,
+        topic: int | None = None,
+    ) -> list[int]:
+        sizes = [_item_size(i) for i in items]
+        total = _album_share(sizes)
+        album_id = items[0].message.id
+        done = 0
+        captions = _album_captions([item.message for item in items], caption)
+        parts: list[tuple[types.TypeInputMedia, str, Sequence[Any]]] = []
+        for item, size, (text, entities) in zip(items, sizes, captions, strict=True):
+            progress = self._album_progress(on_transfer, album_id, total, done)
+            fm = await self._album_media(peer, item, progress)
+            done += _album_share([size])
+            parts.append((fm, text, entities))
+        return await self._post_multi_media(peer, parts, topic)
 
     async def send_text(self, dst: int, text: str, *, topic: int | None = None) -> int:
         peer = await self._peer(dst)

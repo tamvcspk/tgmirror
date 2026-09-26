@@ -173,10 +173,15 @@ class Runner:
         wait: bool = False,
         tmp_dir: Path | None = None,
         mono: Callable[[], float] = time.monotonic,
+        reader_override: MessageReader | None = None,
     ) -> None:
         self._store = store
         self._gateway = gateway
         self._limits = limits
+        # Phase 11b: a restore's reads come from a backup directory, not through the gateway or
+        # the limiter at all (there is no Telegram call on that side to pace) — writes still go
+        # through the guard exactly as for any other run.
+        self._reader_override = reader_override
         self._reporter: Reporter = reporter or NullReporter()
         self._control = control or RunControl()
         self._sleep = sleep
@@ -191,6 +196,7 @@ class Runner:
         self._limiter: Limiter | None = None
         self._guard: FloodGuard | None = None
         self._reader: MessageReader | None = None
+        self._dst_reader: MessageReader | None = None
         self._topics: TopicResolver | None = None
 
     async def run(self, run: Run) -> Run:
@@ -219,7 +225,11 @@ class Runner:
             rng=self._rng,
             wait=self._wait,
         )
-        self._reader = self._guard.reader(self._gateway)
+        live_reader = self._guard.reader(self._gateway)
+        self._reader = self._reader_override or live_reader
+        # The destination is always live Telegram, even for a restore (phase 11b) whose *source*
+        # reads are overridden — ``_reconcile`` needs both readers, one per side.
+        self._dst_reader = live_reader
         heartbeat = asyncio.create_task(self._heartbeat(run.id))
         await self._clear_tmp()  # what a killed run left behind
         try:
@@ -622,9 +632,13 @@ class Runner:
         if not pending:
             return
         ids = [p.src_msg_id for p in pending]  # ascending
-        source = await self._read(run.src_id, after=ids[0] - 1, until=ids[-1], only=set(ids))
+        source = await self._read(
+            self._reader, run.src_id, after=ids[0] - 1, until=ids[-1], only=set(ids)
+        )
         base = max(await self._store.last_done_dst_id(run.id), run.options.dst_base_id)
-        tail = await self._read(run.dst_id, after=base)
+        # The destination is always live Telegram (``self._dst_reader``), even when the source
+        # read is a restore's backup directory (``self._reader``, phase 11b).
+        tail = await self._read(self._dst_reader, run.dst_id, after=base)
 
         if len(source) != len(ids):  # a pending message vanished from the source: cannot compare
             outcome, dst_ids = (Outcome.AMBIGUOUS if tail else Outcome.RESEND), []
@@ -642,12 +656,18 @@ class Runner:
             self._reporter.notice("reconcile_ambiguous", count=len(ids))
 
     async def _read(
-        self, chat: int, *, after: int, until: int | None = None, only: set[int] | None = None
+        self,
+        reader: MessageReader | None,
+        chat: int,
+        *,
+        after: int,
+        until: int | None = None,
+        only: set[int] | None = None,
     ) -> list[SrcMessage]:
         """Non-service messages of ``chat`` with ``after < id <= until`` (and in ``only``)."""
-        assert self._reader is not None
+        assert reader is not None
         found: list[SrcMessage] = []
-        async with aclosing(self._reader.iter_messages(chat, min_id=after)) as stream:
+        async with aclosing(reader.iter_messages(chat, min_id=after)) as stream:
             async for m in stream:
                 if until is not None and m.id > until:
                     break

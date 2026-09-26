@@ -674,6 +674,12 @@ class ScriptedPrompter:
         self.asked.append(("text", message))
         return self._text.popleft() if self._text else default
 
+    async def path(self, message: str, *, only_directories: bool = False) -> str:
+        """Shares the ``text`` queue: a scripted answer for a directory/file question is given
+        the same way (``text=[str(dir)]``), regardless of which prompt method asks it."""
+        self.asked.append(("path", message))
+        return self._text.popleft() if self._text else ""
+
     async def secret(self, message: str) -> str:
         self.asked.append(("secret", message))
         return self._secret.popleft()

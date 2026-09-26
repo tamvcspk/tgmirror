@@ -156,7 +156,7 @@ Kết quả của một lời gọi copy:
 Cả hai là cùng một đường code: `tgmirror clone` (cùng cặp) hoặc `tgmirror run` mở một run mới trên mirror có sẵn (`Store.start_run`), rồi:
 
 1. Nếu có hàng `pending` (lần trước chết giữa lời gọi) → **reconcile** (`engine/reconcile.py` quyết định, `engine/runner.py` đọc và ghi):
-   - Đọc lại các tin nguồn đang `pending` (một lần quét ngắn từ `min(pending) - 1`) để biết loại media và cấu trúc album.
+   - Đọc lại các tin nguồn đang `pending` (một lần quét ngắn từ `min(pending) - 1`) để biết loại media và cấu trúc album. Với một restore (Phase 11b), đây là nơi duy nhất đọc *nguồn* có thể khác gateway thật: `Runner._reader` (đọc nguồn) là `reader_override` khi có, `Runner._dst_reader` (đọc đuôi đích, dòng dưới) luôn là gateway thật — hai reader riêng, vì phía nguồn của một restore không biết đọc một kênh Telegram thật.
    - Đọc đuôi kênh đích: các tin không phải service có id > `max(dst_msg_id của các hàng done, options.dst_base_id)`.
    - Số tin, loại media từng tin và cấu trúc album (tin nào cùng album, đánh số theo lần xuất hiện đầu; `grouped_id` ở đích là mới nên không so trực tiếp) đều khớp với batch `pending` → coi là đã gửi, gán `dst_msg_id` theo thứ tự, đánh `done` và đẩy `cursor_src_id` (một transaction).
    - Không có tin mới ở đích → xóa `pending`, gửi lại batch.
@@ -232,5 +232,14 @@ Quyết định D3 áp dụng y như chiến lược B (`engine.backup.check_sou
 ## Chưa làm ở Phase 11a
 
 Không có phân tích/ETA (`Runner._analyze`-tương đương), không có dòng tiến độ truyền file, không tải ảnh bìa video, không ghi `reply_to`, chưa nối vào `tgmirror history`, chưa có mục trong giao diện full-screen (menu). Wizard cổ điển (`tgmirror backup` không cờ) đã có, xem `02-cli-ux.md`. Xem `06-lo-trinh.md`, "Phase 11 — ghi chú" để biết đầy đủ.
+
+## Restore (Phase 11b)
+
+Ngược với backup, `tgmirror restore` **là** một `Run` bình thường — dùng lại nguyên `mirrors`/`msg_map`/write-ahead/reconcile ở trên, không phải một cơ chế mới. Chỉ khác hai chỗ:
+
+- **`options_json.from_backup`** (ghi ở `runs`, như `retry_of`, không đưa vào `mirrors.options_json` qua `RunOptions.for_pair`): đường dẫn thư mục backup lần chạy này đọc thay vì gateway. Thuộc về lần chạy chứ không phải cặp, vì sau khi restore xong cặp đó có thể quay lại là một clone sống bình thường (`clone`/`run` không có `from_backup`) mà không cần dọn gì. `tgmirror run`/`tgmirror retry` tiếp tục một restore bị dừng đọc lại giá trị này từ dòng `runs` trước đó (`cli/commands/run.py::reader_override_for`), dựng lại `BackupReader` đúng thư mục.
+- **`mirrors.src_id` là id kênh gốc** (`BackupManifest.src_id`, kênh gốc có thể đã mất): vì khóa duy nhất của `mirrors` chỉ là `(src_id, dst_id)`, không có `mode`, một restore và một lần `clone`/`run` trực tiếp của **đúng kênh gốc đó** vào cùng đích chia sẻ một mirror/`msg_map`. Vì id tin Telegram giữ nguyên qua backup, việc này chống trùng tự nhiên: một tin đã "done" qua restore thì một clone trực tiếp sau đó bỏ qua nó (bước 3 của "Resume và delta" ở trên), và ngược lại.
+
+Không có bảng mới, không có migration: `RunOptions.from_backup` là một khóa mới trong `options_json` (cơ chế "khóa lạ bị bỏ qua" của `to_json`/`from_json` đã có sẵn chỗ cho việc này, như `02-cli-ux.md`/`06-lo-trinh.md` đã ghi cho các khóa khác).
 
 Phase sau (không thuộc v1): đồng bộ edit (so `edit_date` với `ts`) và delete (kiểm tra sự tồn tại ID định kỳ).

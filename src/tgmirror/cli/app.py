@@ -18,6 +18,7 @@ from tgmirror.cli.commands import (
     control,
     doctor,
     history,
+    restore,
     retry,
     run,
     status,
@@ -122,6 +123,7 @@ app.command("topics")(topics.topics)
 app.command("clone")(clone.clone)
 app.command("run")(run.run_clone)
 app.command("backup")(backup.backup)
+app.command("restore")(restore.restore)
 app.command("pause")(control.pause)
 app.command("stop")(control.stop)
 app.command("history")(history.history)

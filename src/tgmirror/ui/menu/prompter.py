@@ -224,6 +224,11 @@ class MenuPrompter:
 
         return await self._ask(message, build)
 
+    async def path(self, message: str, *, only_directories: bool = False) -> str:
+        """No line editor to attach a path completer to in this hand-drawn frame (unlike the
+        classic wizard's ``QuestionaryPrompter``): falls back to a plain text question."""
+        return await self.text(message)
+
     async def secret(self, message: str) -> str:
         return await self._ask(message, lambda hint: TextQuestion(message, masked=True))
 

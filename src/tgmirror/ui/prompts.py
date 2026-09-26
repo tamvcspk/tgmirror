@@ -28,6 +28,13 @@ class Prompter(Protocol):
 
     async def text(self, message: str, default: str = "") -> str: ...
 
+    async def path(self, message: str, *, only_directories: bool = False) -> str:
+        """A filesystem path. Tab-completes like a shell where the concrete prompter can
+        (``QuestionaryPrompter``, via prompt_toolkit's ``PathCompleter``); elsewhere (the
+        full-screen menu's own key handling has no line editor to attach one to) this is a
+        plain text prompt, same as ``text``."""
+        ...
+
     async def secret(self, message: str) -> str:
         """Input that is not echoed (api_hash, login code, password)."""
         ...
@@ -66,6 +73,11 @@ class QuestionaryPrompter:
 
     async def text(self, message: str, default: str = "") -> str:
         return await questionary.text(message, default=default).unsafe_ask_async()
+
+    async def path(self, message: str, *, only_directories: bool = False) -> str:
+        return await questionary.path(
+            message, only_directories=only_directories
+        ).unsafe_ask_async()
 
     async def secret(self, message: str) -> str:
         return await questionary.password(message).unsafe_ask_async()

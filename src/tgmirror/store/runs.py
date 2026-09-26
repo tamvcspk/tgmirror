@@ -86,6 +86,10 @@ class RunOptions:
     src_protected: bool = False
     # Set on a ``tgmirror retry``: the run whose ``failed`` messages this run sends again.
     retry_of: int | None = None
+    # Phase 11b: the backup directory this run reads from instead of a live source. A run-only
+    # property (like ``retry_of``), not carried into ``for_pair`` — after a restore the same pair
+    # can go back to being driven by a live ``clone``/``run``.
+    from_backup: str | None = None
 
     def for_pair(self, dst_base_id: int) -> "RunOptions":
         """What the mirror remembers: the run-only keys dropped, ``dst_base_id`` as given."""

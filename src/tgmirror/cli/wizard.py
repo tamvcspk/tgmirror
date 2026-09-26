@@ -89,12 +89,22 @@ async def _ask_valid(
 async def ask_backup_dir(prompter: Prompter) -> Path:
     """``tgmirror backup``'s step 2: the directory to save into. Re-asks until non-empty (a typo
     that leaves it blank should not cost the source already picked)."""
+    return await _ask_dir(prompter, "backup.pick_dir", "backup.pick_dir_empty")
+
+
+async def ask_restore_dir(prompter: Prompter) -> Path:
+    """``tgmirror restore``'s step 1 (phase 11b): the directory to read the backup from."""
+    return await _ask_dir(prompter, "restore.pick_dir", "restore.pick_dir_empty")
+
+
+async def _ask_dir(prompter: Prompter, key: str, empty_key: str) -> Path:
+    """Tab-completes like a shell (``Prompter.path``, directories only)."""
     for attempt in range(1, MAX_TITLE_ATTEMPTS + 1):
-        answer = (await prompter.text(t("backup.pick_dir"))).strip().strip("\"'")
+        answer = (await prompter.path(t(key), only_directories=True)).strip().strip("\"'")
         if answer:
             return await asyncio.to_thread(Path(answer).resolve)
         if attempt < MAX_TITLE_ATTEMPTS:
-            prompter.say(t("backup.pick_dir_empty"))
+            prompter.say(t(empty_key))
     raise UsageProblem("err.missing_flag", flag="DIR")
 
 
@@ -294,4 +304,5 @@ async def _ask_criteria(prompter: Prompter, *, topics: Sequence[TopicInfo] = ())
 
 
 async def _ask_file(prompter: Prompter) -> FilterSpec:
-    return from_file(Path((await prompter.text(t("filter.ask_file"))).strip().strip("\"'")))
+    """Tab-completes like a shell (``Prompter.path``): a YAML file, so files are shown too."""
+    return from_file(Path((await prompter.path(t("filter.ask_file"))).strip().strip("\"'")))

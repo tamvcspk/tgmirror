@@ -199,8 +199,8 @@ class ExportedMedia:
     either a downloaded file (``filename``, relative to the backup's ``media/``) or, for media
     Telegram carries in the message itself, the payload text/HTML cannot hold.
 
-    Only one of the groups below is ever set, matching ``kind``. Restore (phase 11b, not yet built)
-    rebuilds the message from whichever one is there.
+    Only one of the groups below is ever set, matching ``kind``. Restore (phase 11b) rebuilds the
+    message from whichever one is there (``core.telethon_gateway``'s ``_send_from_backup_*``).
     """
 
     kind: MediaKind
@@ -239,6 +239,19 @@ class ExportedMessage:
     text_html: str
     views: int | None
     media: ExportedMedia | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FromBackup:
+    """``Prepared.handle`` for a unit read from a backup directory (phase 11b, restore): its
+    messages, described the way ``ExportedMessage``/``ExportedMedia`` already describe them for
+    ``messages.jsonl``, plus where their files live. Defined here rather than in
+    ``core/telethon_gateway.py`` so ``engine/backup_reader.py`` can build one without importing
+    Telethon (hard rule 8)."""
+
+    messages: tuple[ExportedMessage, ...]
+    media_dir: Path
+    src_id: int  # the original channel's id (``BackupManifest.src_id``), for caption link-stripping
 
 
 class TransferPhase(StrEnum):
