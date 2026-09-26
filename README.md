@@ -2,7 +2,7 @@
 
 CLI tool that clones a Telegram channel, group or forum you have joined into another one (existing or newly created; forum topics are mapped topic to topic), using your own Telegram API credentials (MTProto, via [Telethon](https://github.com/LonamiWebs/Telethon)).
 
-> Status: **all 10 phases done**, including group/supergroup/forum sources with topic mapping (phase 8), OS keyring for `api_id`/`api_hash` (phase 9), and `tgmirror appdata export`/`import` to move to another machine (phase 10) — but phases 8-10 have only been checked against a fake Telegram/keyring/filesystem in tests so far, **not yet run for real** (a real forum, a real keyring, a real cross-machine export/import). `clone` copies at once (server-side copy, or download-then-reupload for protected/caption-changing cases), Ctrl+C stops it and saves progress; running the same pair again is a **delta** (only new messages). A destination no longer has to match the source's kind (e.g. group → channel is fine); a forum source paired with a non-forum destination can keep each topic's name as a hashtag instead of losing it. Filters (media/hashtag/regex/date/id/size/topic/sender, with server-side narrowing), the rate limiter (AIMD delay, FloodWait auto-wait, daily cap), `retry`/`status`, and reupload (captions, polls/quizzes/locations, prefetching) all exist and have each been run by hand on a real account at least once except phases 8-10's mechanics (see `docs/06-lo-trinh.md` for exactly what has and has not been tried live). Typing bare `tgmirror` on a real terminal opens a full-screen, keyboard-driven app (menu) instead of typing each command by hand; `tgmirror doctor` checks the session, `cryptg`, destination permissions and prints the safety notes below. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
+> Status: **phases 0-13 done** (of 16+; see `docs/06-lo-trinh.md`), including group/supergroup/forum sources with topic mapping (phase 8), OS keyring for `api_id`/`api_hash` (phase 9), `tgmirror appdata export`/`import` to move to another machine (phase 10), `tgmirror backup`/`restore` to and from a plain directory (phase 11), a Docker image (phase 12, **confirmed working against real Telegram** by hand), and CI plus a release workflow that builds a wheel/sdist and pushes the Docker image to Docker Hub on a tag (phase 13, not yet run against a real tag) — but phases 8-11 and 13 have each only been checked against a fake Telegram/keyring/filesystem in tests so far, **not yet run end to end with a real account** (a real forum, a real keyring, a real cross-machine export/import, a real restore, a real tagged release). PyInstaller binaries, PyPI, winget, and the APT/RPM/AUR channels (phase 14) and a full-screen menu entry for `backup`/`restore` (phase 15) are not started. `clone` copies at once (server-side copy, or download-then-reupload for protected/caption-changing cases), Ctrl+C or `docker stop` stops it and saves progress; running the same pair again is a **delta** (only new messages). A destination no longer has to match the source's kind (e.g. group → channel is fine); a forum source paired with a non-forum destination can keep each topic's name as a hashtag instead of losing it. Filters (media/hashtag/regex/date/id/size/topic/sender, with server-side narrowing), the rate limiter (AIMD delay, FloodWait auto-wait, daily cap), `retry`/`status`, and reupload (captions, polls/quizzes/locations, prefetching) all exist and have each been run by hand on a real account at least once except phases 8-11 and 13's mechanics (see `docs/06-lo-trinh.md` for exactly what has and has not been tried live). Typing bare `tgmirror` on a real terminal opens a full-screen, keyboard-driven app (menu) instead of typing each command by hand; `tgmirror doctor` checks the session, `cryptg`, destination permissions and prints the safety notes below. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
 
 ## Goals
 
@@ -24,6 +24,26 @@ pipx install .                                                  # pipx works the
 ```
 
 Any of these put a `tgmirror` command on your PATH, in its own isolated environment (`uv tool`/`pipx` both manage that for you — no manual venv needed). Run `tgmirror doctor` afterwards to check the session, `cryptg`, and destination permissions.
+
+### Docker
+
+A tagged release (`v*`) has CI push the image to `docker.io/tamvo1808/tgmirror:<version>` (and `:latest` for a non-prerelease version) — `docker pull tamvo1808/tgmirror`. That hasn't happened for a real tag yet (the workflow exists but hasn't been run against one: see `docs/06-lo-trinh.md`), so build it locally in the meantime:
+
+```bash
+docker build -t tgmirror .
+
+# first run: log in interactively, session goes on the /data volume
+docker run -it --rm -v tgm-data:/data -v tgm-config:/config tgmirror login
+
+# every run after that: no -it needed, everything is flags
+docker run --rm -v tgm-data:/data -v tgm-config:/config tgmirror run --yes
+```
+
+- `-v tgm-data:/data -v tgm-config:/config` are required: the session, database and config live there, and `run`/`retry` depend on the session's cached channel entities surviving between runs. Use a bind-mounted host directory instead of named volumes if you want to look at the files; a bind mount keeps the host's ownership, so `chown -R 1000:1000` it (or pass `--user "$(id -u):$(id -g)"`) so the non-root `tgmirror` user inside the container can write to it.
+- Credentials: `-e TGMIRROR_API_ID=... -e TGMIRROR_API_HASH=...`, or `-e TGMIRROR_API_ID_FILE=/run/secrets/api_id` pointing at a Docker/Kubernetes secret mount (the value never shows up in `docker inspect`). The image disables the OS keyring (`PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring`) since a container has none to use.
+- One `docker run` is one `tgmirror` command that copies once and exits — no daemon inside the image, matching the CLI itself; schedule repeat runs with your own cron/Kubernetes CronJob if you want that.
+- `docker stop` sends SIGTERM, which the container handles exactly like the first Ctrl+C (finishes the current batch, saves, exits) for `clone`/`run`/`retry`/`backup`/`restore`. Its default 10s grace period before `SIGKILL` can be too short for a batch plus a possible FloodWait; raise it with `docker stop -t 60 <container>` (or `stop_grace_period: 60s` in Compose). A `SIGKILL` mid-batch is still safe — the same write-ahead/reconcile that protects a killed local process covers it.
+- `daily_cap` is counted by the container's calendar day; the image defaults `TZ=UTC`, override with `-e TZ=...` if you want the cap's midnight to match your own.
 
 ## Usage
 
@@ -74,6 +94,8 @@ uv run ruff check .     # lint
 uv run ruff format .    # format
 uv run tgmirror --version
 ```
+
+`.github/workflows/ci.yml` runs `ruff check`, `ruff format --check` and `pytest` on `ubuntu-latest` and `windows-latest` for every push to `main` and every PR. `.github/workflows/release.yml` runs on a pushed `v*` tag: re-runs the checks, builds the wheel/sdist, builds and pushes the Docker image (see "Docker" above), and attaches everything plus `SHA256SUMS` to a GitHub Release.
 
 ## Docs
 

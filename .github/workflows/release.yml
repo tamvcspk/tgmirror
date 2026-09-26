@@ -1,0 +1,119 @@
+# Phase 13, first slice (docs/06-lo-trinh.md, "Phase 13 — ghi chú"): tests, a wheel/sdist attached
+# to the GitHub Release, and the Docker image pushed to Docker Hub. PyPI publishing, PyInstaller
+# binaries, winget, the APT/RPM repo and AUR are deliberately not here yet — each needs its own
+# external account/secret setup with the user first.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Check the tag matches pyproject.toml's version
+        run: |
+          set -euo pipefail
+          PY_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag v$TAG_VERSION does not match pyproject.toml version $PY_VERSION"
+            exit 1
+          fi
+          echo "version=$PY_VERSION" >> "$GITHUB_OUTPUT"
+        id: version
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: pytest
+        run: uv run pytest
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Smoke test the wheel in a clean venv
+        run: |
+          set -euo pipefail
+          uv venv /tmp/smoke-venv
+          uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
+          /tmp/smoke-venv/bin/tgmirror --version
+          /tmp/smoke-venv/bin/tgmirror --help
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the image (load only, for the smoke test)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: tgmirror:smoke
+
+      - name: Smoke test the image
+        run: |
+          docker run --rm tgmirror:smoke --help
+          docker run --rm tgmirror:smoke doctor
+
+      - name: Determine version metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          TAGS="docker.io/tamvo1808/tgmirror:$VERSION"
+          IS_PRERELEASE=false
+          # a pre-release version (e.g. 0.2.0rc1) never becomes `:latest` or a non-prerelease Release
+          if [[ "$VERSION" =~ (a|b|rc|dev)[0-9] ]]; then
+            IS_PRERELEASE=true
+          else
+            TAGS="${TAGS}"$'\n'"docker.io/tamvo1808/tgmirror:latest"
+          fi
+          echo "prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push the image to Docker Hub
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ steps.meta.outputs.prerelease }}

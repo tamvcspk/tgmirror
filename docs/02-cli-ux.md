@@ -25,7 +25,7 @@ Lệnh chính: `tgmirror` (entry point của package `tgmirror`).
 
 Tùy chọn chung: `--version`, `--debug` (hiện traceback thay vì một câu lỗi).
 
-Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, file YAML, regex; kiểm tra trước khi hỏi hay ghi gì), `3` lần chạy dừng vì flood/peer_flood/chạm `daily_cap` (hoặc `clone`/`run` bị từ chối vì phải chờ), `4` thiếu quyền (kể cả nguồn cấm forward), `130` Ctrl+C (đã lưu, lần chạy `stopped`). `clone`/`run`/`retry`/`backup`/`restore` trả mã của lần chạy (`0` xong hoặc dừng bằng phím `q`/`tgmirror stop`, `3`, `130`, ...).
+Mã thoát: `0` ok, `1` lỗi chung, `2` dùng sai (kể cả filter sai: cờ, file YAML, regex; kiểm tra trước khi hỏi hay ghi gì), `3` lần chạy dừng vì flood/peer_flood/chạm `daily_cap` (hoặc `clone`/`run` bị từ chối vì phải chờ), `4` thiếu quyền (kể cả nguồn cấm forward), `130` Ctrl+C hoặc SIGTERM/`docker stop` (Phase 12; đã lưu, lần chạy `stopped`). `clone`/`run`/`retry`/`backup`/`restore` trả mã của lần chạy (`0` xong hoặc dừng bằng phím `q`/`tgmirror stop`, `3`, `130`, ...).
 
 ## Giao diện full-screen (menu)
 
@@ -116,7 +116,7 @@ tgmirror clone --src ... --dst ... --mode reupload \
 
 ## Điều khiển khi đang chạy
 
-Khi `clone`/`run` đang chạy (foreground): có terminal thật thì hiện TUI (Rich Live, xem dưới), phím đã hoạt động và hiện ngay trong khung nên không có dòng nhắc riêng. Không có terminal (chuyển hướng, chạy từ script, test) thì phím cũng không hoạt động, và tiến độ là dòng chữ thường (không ANSI, dùng được khi chuyển hướng): `Lần chạy 3: 4,180 tin đã sao chép, 3 lỗi (tin nguồn tới id …)` tối đa một dòng mỗi 5 giây (thêm số tin bị filter loại khi có, và một dòng tổng kết cuối), cộng các thông báo (reconcile, flood, tạm dừng) và một dòng kết quả.
+Khi `clone`/`run` đang chạy (foreground): có terminal thật thì hiện TUI (Rich Live, xem dưới), phím đã hoạt động và hiện ngay trong khung nên không có dòng nhắc riêng. Không có terminal (chuyển hướng, chạy từ script, test, hay bên trong container Docker của Phase 12) thì phím cũng không hoạt động, và tiến độ là dòng chữ thường (không ANSI, dùng được khi chuyển hướng): `Lần chạy 3: 4,180 tin đã sao chép, 3 lỗi (tin nguồn tới id …)` tối đa một dòng mỗi 5 giây (thêm số tin bị filter loại khi có, và một dòng tổng kết cuối), cộng các thông báo (reconcile, flood, tạm dừng) và một dòng kết quả. SIGTERM (hàng dưới) không cần terminal — chỉ là một tín hiệu OS — nên nó vẫn hoạt động trong trường hợp này, khác với phím.
 
 | Cách | Tác dụng |
 |---|---|
@@ -124,6 +124,7 @@ Khi `clone`/`run` đang chạy (foreground): có terminal thật thì hiện TUI
 | Phím `r` | Chạy tiếp sau khi tạm dừng |
 | Phím `q` | Dừng: xong batch hiện tại, lưu, thoát (lần chạy `stopped`, mã 0) |
 | Ctrl+C | Như `q` nhưng thoát mã 130; lần hai thoát ngay (batch dở dang được xử lý theo quy tắc reconcile ở `04-state-checkpoint.md`) |
+| SIGTERM (Phase 12: `docker stop`) | Y hệt Ctrl+C — lần đầu như `q` (mã 130), lần hai thoát ngay; cùng chia sẻ một `Interruption` với SIGINT (`cli/interrupt.py::stop_on_interrupt`) nên một SIGTERM rồi một Ctrl+C tính là "lần hai" chứ không phải hai lần đầu |
 | `tgmirror pause` / `run` / `stop` từ terminal khác | Như `p` / `r` / `q` (qua cờ `control` trong DB) |
 
 Dùng phím thường (không phải Ctrl+P/Ctrl+R) vì terminal tích hợp của VS Code giữ hai tổ hợp đó cho chính nó nên chúng không tới được chương trình. Phím chỉ hoạt động khi có terminal; Windows dùng `msvcrt`, POSIX dùng `termios` ở chế độ cbreak (Ctrl+C vẫn là SIGINT). Chúng và các lệnh `pause`/`stop`/`run` cùng điều khiển một `RunControl` (`engine/runner.py`), nên TUI Rich (dưới) chỉ cần gọi cùng ba việc, không có đường riêng.

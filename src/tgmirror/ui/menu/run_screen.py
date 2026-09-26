@@ -8,9 +8,11 @@ own ``Live`` (``ui/tui.py``) — this screen calls ``notice``/``progress``/``tra
 ``Runner``) and pulls ``render()`` each redraw, never entering ``TuiReporter`` as a context manager.
 
 Ctrl+C keeps its meaning (dừng run và thoát cả app): ``stop_on_interrupt`` only touches
-``signal.SIGINT``, so it composes fine with the app's own key-reading loop; when it was the *first*
-Ctrl+C that ended the run, ``tick()`` returns ``"quit"`` and the whole app exits, matching the
-classic CLI's ``EXIT_INTERRUPTED`` (130).
+``signal.SIGINT``/``SIGTERM`` (Phase 12), so it composes fine with the app's own key-reading loop;
+when it was the *first* Ctrl+C/SIGTERM that ended the run, ``tick()`` returns ``"quit"`` and the
+whole app exits, matching the classic CLI's ``EXIT_INTERRUPTED`` (130). The full-screen menu needs
+a TTY, so it never runs inside the Docker image (which has none) — SIGTERM there only ever reaches
+the classic CLI path.
 """
 
 import asyncio

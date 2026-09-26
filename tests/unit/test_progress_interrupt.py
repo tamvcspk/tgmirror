@@ -108,6 +108,39 @@ def test_the_second_ctrl_c_quits_at_once() -> None:
     assert signal.getsignal(signal.SIGINT) is not None  # restored, not left as our handler
 
 
+def test_the_first_sigterm_asks_to_stop_the_same_way_as_ctrl_c() -> None:
+    """Phase 12: `docker stop` sends SIGTERM, and it must behave exactly like the first Ctrl+C."""
+    control, told = RunControl(), []
+    before = signal.getsignal(signal.SIGTERM)
+
+    with stop_on_interrupt(control, lambda: told.append(True)) as interruption:
+        signal.raise_signal(signal.SIGTERM)
+        assert control.stop_requested and told == [True] and interruption.hit
+
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_the_second_sigterm_quits_at_once() -> None:
+    control = RunControl()
+
+    with pytest.raises(KeyboardInterrupt), stop_on_interrupt(control, lambda: None):
+        signal.raise_signal(signal.SIGTERM)
+        signal.raise_signal(signal.SIGTERM)
+
+    assert signal.getsignal(signal.SIGTERM) is not None  # restored, not left as our handler
+
+
+def test_sigterm_then_ctrl_c_is_the_second_hit_not_two_firsts() -> None:
+    """The two signals share one `Interruption`, so a mix counts the same as two of either."""
+    control, told = RunControl(), []
+
+    with pytest.raises(KeyboardInterrupt), stop_on_interrupt(control, lambda: told.append(True)):
+        signal.raise_signal(signal.SIGTERM)
+        signal.raise_signal(signal.SIGINT)
+
+    assert told == [True]
+
+
 def test_stopping_with_a_key_is_not_a_ctrl_c() -> None:
     control = RunControl()
 
