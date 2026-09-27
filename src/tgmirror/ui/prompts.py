@@ -75,9 +75,7 @@ class QuestionaryPrompter:
         return await questionary.text(message, default=default).unsafe_ask_async()
 
     async def path(self, message: str, *, only_directories: bool = False) -> str:
-        return await questionary.path(
-            message, only_directories=only_directories
-        ).unsafe_ask_async()
+        return await questionary.path(message, only_directories=only_directories).unsafe_ask_async()
 
     async def secret(self, message: str) -> str:
         return await questionary.password(message).unsafe_ask_async()
