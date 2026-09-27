@@ -102,6 +102,7 @@ async def begin_backup(
     filters_json: str | None = None,
     protected_ack: bool = False,
     force: bool = False,
+    clock: Clock = utc_now,
 ) -> tuple[Backup, backupdir.BackupManifest]:
     """Validate and start a backup into ``directory``; one already there continues (delta, by
     ``backupdir.last_id``) as long as the source and the filter match what is on disk.
@@ -122,7 +123,7 @@ async def begin_backup(
         await asyncio.to_thread(backupdir.repair_trailing_line, directory)
     dir_key = str(directory)
     if (previous := await store.latest_backup(dir_key)) is not None:
-        check_runnable(previous, utc_now())  # refuse what Telegram already told us it would reject
+        check_runnable(previous, clock())  # refuse what Telegram already told us it would reject
     spec = BackupSpec(src=current, dir=dir_key, filters_json=filters, protected_ack=protected_ack)
     backup = await store.start_backup(spec, force=force)
     topics: tuple[backupdir.BackupTopic, ...] = ()

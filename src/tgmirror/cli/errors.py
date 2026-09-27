@@ -69,6 +69,8 @@ from tgmirror.filters.parser import FilterMix
 from tgmirror.ui.messages import t
 from tgmirror.ui.tables import channel_label
 
+EXIT_INTERRUPTED = 130  # a first Ctrl+C: progress saved, not an error (CLI and full-screen menu)
+
 
 class Declined(Exception):  # noqa: N818 - a user's answer, not a failure
     """The user said no to a confirmation (``err.aborted``, exit code 1). Raised by the shared
@@ -236,7 +238,7 @@ def run(rt: Runtime, coro: Coroutine[Any, Any, T]) -> T:
         return asyncio.run(coro)
     except KeyboardInterrupt:
         typer.echo(t("err.aborted"), err=True)
-        raise typer.Exit(130) from None
+        raise typer.Exit(EXIT_INTERRUPTED) from None
     except Declined:
         typer.echo(t("err.aborted"), err=True)
         raise typer.Exit(1) from None

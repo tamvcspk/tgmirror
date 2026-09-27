@@ -18,7 +18,7 @@ from typing import Annotated
 import typer
 
 from tgmirror.cli import wizard
-from tgmirror.cli.errors import Declined, UsageProblem, describe, run
+from tgmirror.cli.errors import EXIT_INTERRUPTED, Declined, UsageProblem, describe, run
 from tgmirror.cli.filter_options import (
     AlbumOption,
     ContainsOption,
@@ -48,14 +48,11 @@ from tgmirror.engine.runs import check_runnable
 from tgmirror.filters.model import FilterSpec
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store, utc_now
-from tgmirror.store.runs import RunStatus
+from tgmirror.ui.lines import backup_result_lines, backup_start_line
 from tgmirror.ui.messages import t
 from tgmirror.ui.progress import BackupLineReporter
 from tgmirror.ui.prompts import Prompter, run_steps
 from tgmirror.ui.tables import channel_label
-
-ADMIN_ACK_FLAG = "--yes-i-administer-this-channel"
-EXIT_INTERRUPTED = 130
 
 
 def backup(
@@ -178,11 +175,8 @@ def backup(
                     force=options.force_takeover,
                 )
                 typer.echo(
-                    t(
-                        "backup.start",
-                        id=backup_row.id,
-                        src=channel_label(ready.source),
-                        dir=ready.directory,
+                    backup_start_line(
+                        backup_row.id, channel_label(ready.source), str(ready.directory)
                     )
                 )
                 await execute(
@@ -342,9 +336,11 @@ class BackupFlow:
             self._take_responsibility = True
             return
         if self._interactive:
-            question = t("clone.confirm_unadministered", title=source.title, flag=ADMIN_ACK_FLAG)
+            question = t(
+                "clone.confirm_unadministered", title=source.title, flag=wizard.ADMIN_ACK_FLAG
+            )
             typed = await self._prompter.text(question)
-            if typed.strip() == ADMIN_ACK_FLAG:
+            if typed.strip() == wizard.ADMIN_ACK_FLAG:
                 self._take_responsibility = True
                 return
         raise SourceRestricted(source)
@@ -429,18 +425,7 @@ async def execute(
         if listening:
             typer.echo(t("run.keys_hint"))
         final = await writer.run(backup_row, directory, manifest, pushdown=pushdown)
-    typer.echo(
-        t(
-            "backup.result",
-            id=final.id,
-            status=t(f"status.{final.status}"),
-            done=final.done,
-            cursor=final.cursor_to,
-        )
-    )
-    if final.skipped_filter:
-        typer.echo(t("run.skipped", count=final.skipped_filter))
-    if final.status is RunStatus.STOPPED:
-        typer.echo(t("backup.continue_hint", dir=directory))
+    for line in backup_result_lines(final):
+        typer.echo(line)
     if interrupt.hit:
         raise typer.Exit(EXIT_INTERRUPTED)

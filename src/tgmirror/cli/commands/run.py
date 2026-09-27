@@ -13,7 +13,7 @@ from typing import Annotated
 import typer
 
 from tgmirror.cli import wizard
-from tgmirror.cli.errors import Declined, UsageProblem, run
+from tgmirror.cli.errors import EXIT_INTERRUPTED, Declined, UsageProblem, run
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
 from tgmirror.core.gateway import ChannelInfo, MessageReader, TelegramGateway
@@ -28,14 +28,12 @@ from tgmirror.engine.runs import (
     resolve_run,
 )
 from tgmirror.store.db import Store, utc_now
-from tgmirror.store.runs import Control, FilterChange, Run, RunStatus, StartedRun
+from tgmirror.store.runs import Control, Run, RunStatus, StartedRun
+from tgmirror.ui.lines import run_result_lines, run_start_lines
 from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import Prompter
 from tgmirror.ui.tables import channel_label
 from tgmirror.ui.tui import TuiReporter
-
-EXIT_INTERRUPTED = 130
-PAIR_CHOICES = 10  # how many recently active pairs the wizard offers when none was named
 
 
 def run_clone(
@@ -134,7 +132,7 @@ async def _pick_target(rt: Runtime, store: Store, number: str | None) -> Run:
     """The run ``tgmirror run`` continues: ``number`` when given, else the wizard's choice among
     recently active pairs when there is a real one to make, else the latest run as before."""
     if number is None and rt.interactive:
-        pairs = await store.list_pairs(PAIR_CHOICES)
+        pairs = await store.list_pairs(wizard.PAIR_CHOICES)
         if len(pairs) > 1:
             return await wizard.pick_run(rt.prompter, pairs)
     return await resolve_run(store, number)
@@ -288,34 +286,9 @@ async def execute(
     if current.options.protected_ack:  # decision D3: the user answers for this copy
         typer.echo(t("warn.responsibility"), err=True)
     retry_of = current.options.retry_of
-    if retry_of is not None:  # no source cursor or filter to talk about
-        count = await store.count_failed(retry_of)
-        typer.echo(
-            t(
-                "run.retry_start",
-                id=current.id,
-                of=retry_of,
-                count=count,
-                src=current.src_title,
-                dst=current.dst_title,
-            )
-        )
-    else:
-        typer.echo(
-            t(
-                "run.start",
-                id=current.id,
-                src=current.src_title,
-                dst=current.dst_title,
-                cursor=current.cursor_from,
-            )
-        )
-        if started.forgot is not None:
-            typer.echo(t("run.fresh_started", count=started.forgot))
-        elif started.filters is FilterChange.CHANGED:
-            typer.echo(t("run.filter_changed"))
-        if started.filters is FilterChange.SAME and current.filters_json != "{}":
-            typer.echo(t("run.filter_reused"))
+    failed_count = await store.count_failed(retry_of) if retry_of is not None else None
+    for line in run_start_lines(started, failed_count):
+        typer.echo(line)
     with (
         rt.reporter(limits, current) as reporter,
         stop_on_interrupt(control, lambda: typer.echo(t("run.stopping"), err=True)) as interrupt,
@@ -328,28 +301,7 @@ async def execute(
         if listening and not isinstance(reporter, TuiReporter):  # the TUI shows the keys itself
             typer.echo(t("run.keys_hint"))
         final = await runner.run(current)
-    typer.echo(
-        t(
-            "run.result",
-            id=final.id,
-            status=t(f"status.{final.status}"),
-            done=final.done,
-            failed=final.failed,
-        )
-    )
-    if final.skipped_filter:
-        typer.echo(t("run.skipped", count=final.skipped_filter))
-    if final.skipped_unsupported:
-        typer.echo(t("run.unsupported_total", count=final.skipped_unsupported, id=final.id))
-    if final.gone:
-        typer.echo(t("retry.gone", count=final.gone))
-    if final.failed:
-        key = "retry.still_failing" if retry_of is not None else "run.retry_hint"
-        typer.echo(t(key, count=final.failed, id=final.id))
-    if final.status is RunStatus.STOPPED:
-        if retry_of is not None:  # `run` would start a delta: the messages left are retry's job
-            typer.echo(t("run.retry_continue_hint", of=retry_of))
-        else:
-            typer.echo(t("run.continue_hint", id=final.id))
+    for line in run_result_lines(final, retry_of):
+        typer.echo(line)
     if interrupt.hit:  # Ctrl+C: saved cleanly, but the clone is not finished
         raise typer.Exit(EXIT_INTERRUPTED)

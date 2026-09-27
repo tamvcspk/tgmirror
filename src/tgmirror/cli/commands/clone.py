@@ -59,8 +59,6 @@ from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import Prompter, run_steps
 from tgmirror.ui.tables import channel_label
 
-ADMIN_ACK_FLAG = "--yes-i-administer-this-channel"
-
 
 def clone(
     ctx: typer.Context,
@@ -485,9 +483,9 @@ class CloneFlow:
         "no" and falls through to ``plan_endpoints``'s ordinary ``SourceRestricted`` refusal."""
         if not self._interactive:
             return False
-        question = t("clone.confirm_unadministered", title=source.title, flag=ADMIN_ACK_FLAG)
+        question = t("clone.confirm_unadministered", title=source.title, flag=wizard.ADMIN_ACK_FLAG)
         typed = await self._prompter.text(question)
-        return typed.strip() == ADMIN_ACK_FLAG
+        return typed.strip() == wizard.ADMIN_ACK_FLAG
 
     async def _pick_strategy(self) -> None:
         o, plan = self._o, self._plan

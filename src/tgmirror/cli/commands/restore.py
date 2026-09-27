@@ -54,8 +54,6 @@ from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import Choice, Prompter, run_steps
 from tgmirror.ui.tables import channel_label
 
-ADMIN_ACK_FLAG = "--yes-i-administer-this-channel"
-
 
 def restore(
     ctx: typer.Context,
@@ -434,10 +432,10 @@ class RestoreFlow:
             return
         if self._interactive:
             question = t(
-                "clone.confirm_unadministered", title=manifest.src_title, flag=ADMIN_ACK_FLAG
+                "clone.confirm_unadministered", title=manifest.src_title, flag=wizard.ADMIN_ACK_FLAG
             )
             typed = await self._prompter.text(question)
-            if typed.strip() == ADMIN_ACK_FLAG:
+            if typed.strip() == wizard.ADMIN_ACK_FLAG:
                 return
             raise Declined
         raise UsageProblem("err.needs_admin_ack", title=manifest.src_title)

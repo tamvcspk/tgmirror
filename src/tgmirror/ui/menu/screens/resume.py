@@ -13,7 +13,7 @@ from tgmirror.cli.commands.retry import retry_flow_for
 from tgmirror.cli.commands.run import ReadyToRun, ResumeElsewhere, reader_override_for, resume_flow
 from tgmirror.cli.errors import describe
 from tgmirror.cli.keys import MenuKey
-from tgmirror.cli.wizard import resolve_dir_answer
+from tgmirror.cli.wizard import PAIR_CHOICES, resolve_dir_answer
 from tgmirror.core.errors import TgMirrorError
 from tgmirror.engine.runs import BackupDirMissing, begin_run
 from tgmirror.store.runs import Run, StartedRun
@@ -26,8 +26,6 @@ from tgmirror.ui.menu.screens.wizard import WizardScreen
 from tgmirror.ui.menu.widgets import SelectList
 from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import Choice
-
-PAIR_CHOICES = 10  # same as `cli/commands/run.py`'s wizard offer
 
 
 class ResumeScreen(Screen):

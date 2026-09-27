@@ -113,6 +113,11 @@ class TuiReporter:
         self._paused = False
         self._run: Run = run
 
+    @property
+    def run(self) -> Run:
+        """The run as of the last ``progress()`` — what the next ``render()`` will show."""
+        return self._run
+
     def _buffer(self, line: str) -> None:
         self._recent.append(line)
         del self._recent[:-RECENT_LINES]
@@ -172,8 +177,11 @@ class TuiReporter:
             Text(counts),
         ]
         if self._silent:
+            # the menu's footer already shows the hotkey hint (``Screen.footer_hint``); the
+            # classic CLI has no footer of its own, so its private ``Live`` keeps this line.
             body += [Text(line, style="dim") for line in self._recent]
-        body.append(Text(t("tui.keys"), style="dim"))
+        else:
+            body.append(Text(t("tui.keys"), style="dim"))
         return Group(*body)
 
     def _refresh(self) -> None:

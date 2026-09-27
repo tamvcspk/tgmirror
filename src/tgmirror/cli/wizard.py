@@ -29,6 +29,8 @@ from tgmirror.ui.tables import channel_label
 
 MAX_TITLE_ATTEMPTS = 3
 MAX_FILTER_ATTEMPTS = 3
+PAIR_CHOICES = 10  # how many recently active pairs the wizard offers when none was named
+ADMIN_ACK_FLAG = "--yes-i-administer-this-channel"  # D3's typed statement (CLAUDE.md rule 5)
 
 T = TypeVar("T")
 

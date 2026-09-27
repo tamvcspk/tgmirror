@@ -100,7 +100,7 @@ def pump_menu_keys(
             decoded = decode_menu_key(raw)
             # a typed character may be a login code, a password or an api_hash (CLAUDE.md rule 6)
             debug.log("keys.read", key=str(decoded) if isinstance(decoded, MenuKey) else "<char>")
-            loop.call_soon_threadsafe(queue.put_nowait, decode_menu_key(raw))
+            loop.call_soon_threadsafe(queue.put_nowait, decoded)
         if time.monotonic() - last_beat >= 2.0:  # proves the thread is alive, without flooding
             debug.log("keys.alive", reads=reads)
             last_beat = time.monotonic()
