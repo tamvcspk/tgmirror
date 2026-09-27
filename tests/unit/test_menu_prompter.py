@@ -2,6 +2,8 @@
 question — inside a step, across steps, and out of the flow at the very first question."""
 
 import asyncio
+import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,7 +11,7 @@ from rich.console import Console
 
 from tgmirror.cli.keys import MenuKey
 from tgmirror.core.errors import UsageError
-from tgmirror.ui.menu.prompter import GoBack, MenuPrompter
+from tgmirror.ui.menu.prompter import GoBack, MenuPrompter, complete_path
 from tgmirror.ui.prompts import Choice
 
 Key = MenuKey | str
@@ -185,3 +187,95 @@ async def test_an_error_before_asking_ends_the_flow() -> None:
 
     with pytest.raises(UsageError):
         await prompter.run_steps([step])
+
+
+def test_complete_path_completes_a_single_directory_match_with_a_trailing_separator(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "backups").mkdir()
+
+    text, matches = complete_path(str(tmp_path / "back"), only_directories=True)
+
+    assert text == str(tmp_path / "backups") + os.sep
+    assert matches == []
+
+
+def test_complete_path_matches_case_sensitively_like_the_classic_wizards_completer(
+    tmp_path: Path,
+) -> None:
+    """``complete_path`` adapts ``questionary``'s own ``GreatUXPathCompleter`` (what
+    ``QuestionaryPrompter.path`` already uses via ``questionary.path``) rather than a second,
+    hand-rolled matcher — so it inherits that completer's case sensitivity too, instead of quietly
+    behaving differently between the classic wizard and the full-screen menu."""
+    (tmp_path / "backups").mkdir()
+
+    text, matches = complete_path(str(tmp_path / "BACK"), only_directories=True)
+
+    assert text == str(tmp_path / "BACK")  # no match: case differs, same as prompt_toolkit's own
+    assert matches == []
+
+
+def test_complete_path_completes_several_matches_to_their_common_prefix(tmp_path: Path) -> None:
+    (tmp_path / "backup_a").mkdir()
+    (tmp_path / "backup_b").mkdir()
+    (tmp_path / "other").mkdir()
+
+    text, matches = complete_path(str(tmp_path / "back"), only_directories=True)
+
+    assert text == str(tmp_path / "backup_")
+    assert matches == ["backup_a" + os.sep, "backup_b" + os.sep]
+
+
+def test_complete_path_only_directories_ignores_files(tmp_path: Path) -> None:
+    (tmp_path / "backup.txt").write_text("x")
+
+    text, matches = complete_path(str(tmp_path / "back"), only_directories=True)
+
+    assert text == str(tmp_path / "back")  # no directory matches: unchanged
+    assert matches == []
+
+
+def test_complete_path_no_match_leaves_text_unchanged() -> None:
+    text, matches = complete_path("/does/not/exist-zzz")
+    assert text == "/does/not/exist-zzz"
+    assert matches == []
+
+
+async def test_path_question_tab_completes_a_single_match_end_to_end(tmp_path: Path) -> None:
+    (tmp_path / "backups").mkdir()
+    prompter = MenuPrompter()
+
+    result = await drive(
+        prompter,
+        prompter.path("dir?", only_directories=True),
+        [[*str(tmp_path / "back"), MenuKey.TAB, MenuKey.ENTER]],
+    )
+
+    assert result == str(tmp_path / "backups") + os.sep
+
+
+async def test_path_question_tab_with_several_matches_shows_them_until_narrowed(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "backup_a").mkdir()
+    (tmp_path / "backup_b").mkdir()
+    prompter = MenuPrompter()
+
+    task = asyncio.ensure_future(prompter.path("dir?", only_directories=True))
+    while not prompter.asking:  # noqa: ASYNC110 - no event to await
+        await asyncio.sleep(0)
+    for key in str(tmp_path / "back"):
+        prompter.handle_key(key)
+    prompter.handle_key(MenuKey.TAB)
+
+    assert prompter.question is not None
+    assert prompter.question.text == str(tmp_path / "backup_")  # completed to the common prefix
+    assert prompter.question.matches == ["backup_a" + os.sep, "backup_b" + os.sep]
+
+    for key in "a":  # narrows to one match; typing clears the shown candidates
+        prompter.handle_key(key)
+    assert prompter.question.matches == []
+    prompter.handle_key(MenuKey.TAB)
+    prompter.handle_key(MenuKey.ENTER)
+
+    assert await asyncio.wait_for(task, 1) == str(tmp_path / "backup_a") + os.sep

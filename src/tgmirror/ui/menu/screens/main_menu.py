@@ -11,11 +11,13 @@ from tgmirror.cli.keys import MenuKey
 from tgmirror.ui.menu.context import AppContext
 from tgmirror.ui.menu.screen import Screen, ScreenResult
 from tgmirror.ui.menu.screens.account import AccountScreen
+from tgmirror.ui.menu.screens.backup import backup_screen
 from tgmirror.ui.menu.screens.channels import ChannelsScreen
 from tgmirror.ui.menu.screens.clone import clone_screen
 from tgmirror.ui.menu.screens.config import ConfigScreen
 from tgmirror.ui.menu.screens.history import HistoryScreen
 from tgmirror.ui.menu.screens.login import login_screen
+from tgmirror.ui.menu.screens.restore import restore_screen
 from tgmirror.ui.menu.screens.resume import ResumeScreen
 from tgmirror.ui.menu.screens.status_dashboard import StatusDashboardScreen
 from tgmirror.ui.menu.widgets import SelectList
@@ -24,6 +26,8 @@ from tgmirror.ui.messages import t
 _Action = Literal[
     "login",
     "clone",
+    "backup",
+    "restore",
     "resume",
     "retry",
     "status",
@@ -64,7 +68,11 @@ class MainMenuScreen(Screen):
                 (t("menu.item_quit"), "quit"),
             ]
         else:
-            items = [(t("menu.item_clone"), "clone")]
+            items = [
+                (t("menu.item_clone"), "clone"),
+                (t("menu.item_backup"), "backup"),
+                (t("menu.item_restore"), "restore"),
+            ]
             if await self._app.store.list_pairs(1):
                 items.append((t("menu.item_resume"), "resume"))
                 items.append((t("menu.item_retry"), "retry"))
@@ -98,6 +106,10 @@ class MainMenuScreen(Screen):
                 return ("push", login_screen(self._app))
             case "clone":
                 return ("push", clone_screen(self._app))
+            case "backup":
+                return ("push", backup_screen(self._app))
+            case "restore":
+                return ("push", restore_screen(self._app))
             case "resume" | "retry":
                 return ("push", ResumeScreen(self._app, mode=action))
             case "status":

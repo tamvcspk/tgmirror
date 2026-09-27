@@ -18,6 +18,7 @@ from tgmirror.cli.keys import MenuKey, decode_menu_key, menu_key_queue, pump_men
         ("\x1b", MenuKey.ESC),
         ("\x7f", MenuKey.BACKSPACE),
         ("\x08", MenuKey.BACKSPACE),
+        ("\t", MenuKey.TAB),
         ("\x1b[A", MenuKey.UP),  # POSIX arrow up
         ("\xe0H", MenuKey.UP),  # Windows arrow up
         ("\x1b[B", MenuKey.DOWN),

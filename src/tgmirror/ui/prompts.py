@@ -29,10 +29,10 @@ class Prompter(Protocol):
     async def text(self, message: str, default: str = "") -> str: ...
 
     async def path(self, message: str, *, only_directories: bool = False) -> str:
-        """A filesystem path. Tab-completes like a shell where the concrete prompter can
-        (``QuestionaryPrompter``, via prompt_toolkit's ``PathCompleter``); elsewhere (the
-        full-screen menu's own key handling has no line editor to attach one to) this is a
-        plain text prompt, same as ``text``."""
+        """A filesystem path, Tab-completing like a shell: ``QuestionaryPrompter`` hands this to
+        prompt_toolkit's ``PathCompleter``; the full-screen menu (``MenuPrompter``) has no line
+        editor to attach one to, so it reads the filesystem itself one directory at a time
+        (``ui/menu/prompter.py::complete_path``)."""
         ...
 
     async def secret(self, message: str) -> str:

@@ -10,7 +10,7 @@ from typing import Literal
 from rich.console import RenderableType
 
 from tgmirror.cli.commands.retry import retry_flow_for
-from tgmirror.cli.commands.run import ReadyToRun, ResumeElsewhere, resume_flow
+from tgmirror.cli.commands.run import ReadyToRun, ResumeElsewhere, reader_override_for, resume_flow
 from tgmirror.cli.errors import describe
 from tgmirror.cli.keys import MenuKey
 from tgmirror.core.errors import TgMirrorError
@@ -85,6 +85,7 @@ class ResumeScreen(Screen):
             limits=limits,
             tmp_dir=self._app.rt.paths.tmp_dir,
             failed_count=failed_count,
+            reader_override=reader_override_for(outcome.run.options.from_backup),
         )
         return ("push", screen)
 

@@ -57,6 +57,7 @@ class MenuKey(StrEnum):
     ENTER = "enter"
     ESC = "esc"
     BACKSPACE = "backspace"
+    TAB = "tab"
 
 
 def decode_menu_key(raw: str) -> MenuKey | str:
@@ -70,6 +71,8 @@ def decode_menu_key(raw: str) -> MenuKey | str:
             return MenuKey.ESC
         case "\x7f" | "\x08":
             return MenuKey.BACKSPACE
+        case "\t":
+            return MenuKey.TAB
         case "\x1b[A" | "\xe0H":
             return MenuKey.UP
         case "\x1b[B" | "\xe0P":

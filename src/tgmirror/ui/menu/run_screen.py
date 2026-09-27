@@ -27,7 +27,7 @@ from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.keys import MenuKey, apply_key
 from tgmirror.core.config import Limits
 from tgmirror.core.errors import TgMirrorError
-from tgmirror.core.gateway import TelegramGateway
+from tgmirror.core.gateway import MessageReader, TelegramGateway
 from tgmirror.engine.runner import RunControl, Runner
 from tgmirror.store.db import Store
 from tgmirror.store.runs import FilterChange, Run, RunStatus, StartedRun
@@ -53,6 +53,7 @@ class RunScreen(Screen):
         wait: bool = False,
         failed_count: int | None = None,
         intro: list[str] | None = None,
+        reader_override: MessageReader | None = None,
     ) -> None:
         current = started.run
         self.run_id = current.id  # MenuApp reads this so its "running elsewhere" badge skips it
@@ -62,6 +63,7 @@ class RunScreen(Screen):
         self._limits = limits
         self._tmp_dir = tmp_dir
         self._wait = wait
+        self._reader_override = reader_override
         self._reporter = TuiReporter(limits, current)
         self._control = RunControl()
         self._lines: list[str] = [*(intro or []), *_start_lines(started, failed_count)]
@@ -92,6 +94,7 @@ class RunScreen(Screen):
                     control=self._control,
                     wait=self._wait,
                     tmp_dir=self._tmp_dir,
+                    reader_override=self._reader_override,
                 )
                 final = await runner.run(self._current)
                 debug.log("run.drive_done", run=final.id, status=str(final.status))

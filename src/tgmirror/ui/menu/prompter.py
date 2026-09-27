@@ -16,11 +16,15 @@ only on the answers given within it and on the steps before it (which are not re
 """
 
 import asyncio
+import os
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
+from prompt_toolkit.completion import CompleteEvent
+from prompt_toolkit.document import Document
+from questionary.prompts.path import GreatUXPathCompleter
 from rich.console import Group, RenderableType
 from rich.text import Text
 
@@ -90,6 +94,76 @@ class TextQuestion:
         if self.masked:
             return "••••"
         return "" if self.private else str(value)
+
+
+MAX_SHOWN_MATCHES = 8  # candidates listed under a path question after Tab; more just says "…"
+
+
+def complete_path(text: str, *, only_directories: bool = False) -> tuple[str, list[str]]:
+    """One Tab press on ``text``, through the same completer the classic wizard's
+    ``QuestionaryPrompter.path`` already uses (``questionary.path`` → ``GreatUXPathCompleter``, a
+    thin wrapper over prompt_toolkit's ``PathCompleter``) — one matching engine for both, not a
+    second, hand-rolled one that could quietly disagree with it (case sensitivity, what counts as
+    a match, the trailing separator on a directory). This only adapts its output (a list of
+    ``Completion``s, each a *suffix* to append) to what the hand-drawn frame can show, since there
+    is no line editor here to hand the completer to directly.
+
+    One match completes ``text`` in full (a directory's completion already carries the trailing
+    separator, so the very next Tab looks inside it); several complete it to their longest common
+    suffix and are returned to show under the field. No match, or the directory does not exist
+    (yet): ``text`` unchanged, no matches shown.
+    """
+    completer = GreatUXPathCompleter(only_directories=only_directories)
+    completions = list(completer.get_completions(Document(text), CompleteEvent()))
+    if not completions:
+        return text, []
+    if len(completions) == 1:
+        return text + completions[0].text, []
+    common = os.path.commonprefix([c.text for c in completions])
+    return text + common, [c.display_text for c in completions]
+
+
+@dataclass
+class PathQuestion:
+    """A filesystem path: like ``TextQuestion``, plus Tab completion (``complete_path``) — the
+    hand-drawn frame has no line editor to attach a real completer to (unlike the classic wizard's
+    ``QuestionaryPrompter``), so this adapts the same completer's output by hand instead."""
+
+    message: str
+    text: str = ""
+    only_directories: bool = False
+    matches: list[str] = field(default_factory=list)
+    footer: str = field(default_factory=lambda: t("menu.footer_path"))
+
+    def render(self, height: int | None) -> RenderableType:
+        line = Text("› ", style="bold cyan")
+        line.append(self.text)
+        line.append("▏", style="blink")
+        body: list[RenderableType] = [Text(self.message, style="bold"), line]
+        if self.matches:
+            shown = ", ".join(self.matches[:MAX_SHOWN_MATCHES])
+            if len(self.matches) > MAX_SHOWN_MATCHES:
+                shown += ", …"
+            body.append(Text(shown, style="dim"))
+        return Group(*body)
+
+    def handle_key(self, key: MenuKey | str) -> tuple[bool, Any]:
+        if key == MenuKey.ENTER:
+            return True, self.text
+        if key == MenuKey.TAB:
+            only_dirs = self.only_directories
+            self.text, self.matches = complete_path(self.text, only_directories=only_dirs)
+            return False, None
+        if key == MenuKey.BACKSPACE:
+            self.text = self.text[:-1]
+            self.matches = []
+        elif isinstance(key, str) and not isinstance(key, MenuKey) and key.isprintable():
+            self.text += key
+            self.matches = []
+        return False, None
+
+    def shown(self, value: Any) -> str:
+        return str(value)
 
 
 class SelectQuestion:
@@ -225,9 +299,11 @@ class MenuPrompter:
         return await self._ask(message, build)
 
     async def path(self, message: str, *, only_directories: bool = False) -> str:
-        """No line editor to attach a path completer to in this hand-drawn frame (unlike the
-        classic wizard's ``QuestionaryPrompter``): falls back to a plain text question."""
-        return await self.text(message)
+        def build(hint: Any) -> Question:
+            text = "" if hint is _NO_HINT else str(hint)
+            return PathQuestion(message, text, only_directories=only_directories)
+
+        return await self._ask(message, build)
 
     async def secret(self, message: str) -> str:
         return await self._ask(message, lambda hint: TextQuestion(message, masked=True))
