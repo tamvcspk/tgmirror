@@ -43,6 +43,17 @@ TESTS = [
     "tests/unit/test_status.py",
     "tests/unit/test_limiter.py",
     "tests/integration/test_runner_split.py",
+    # Phase 15b, Đợt 1/2 mechanisms (N2/N3, N4, N7): whole small files where fast enough, else
+    # only the specific test node that exercises the mechanism, to keep every run's cost down.
+    "tests/unit/test_backupdir.py",
+    "tests/unit/test_session_lock.py",
+    "tests/unit/test_cli_errors.py",
+    "tests/integration/test_runner.py::test_crash_closes_the_run_failed_instead_of_leaving_it_running",
+    "tests/integration/test_backup.py::test_crash_closes_the_backup_failed_instead_of_leaving_it_running",
+    "tests/unit/test_cli_run.py::test_ctrl_c_saves_and_exits_130_then_run_finishes_without_duplicates",
+    "tests/unit/test_telethon_gateway.py::test_map_exception",
+    "tests/unit/test_telethon_gateway.py::test_an_operational_error_for_another_reason_is_not_mapped_to_session_busy",
+    "tests/unit/test_telethon_gateway.py::test_telethon_session_refuses_a_second_open_on_the_same_session",
 ]
 
 
@@ -94,8 +105,18 @@ MUTATIONS = [
     Mutation(
         "D3: a run does not read the source again",
         "src/tgmirror/engine/runs.py",
-        "    if may_reupload(request.mode, request.caption):\n        protected = await check_source(",
-        "    if False:\n        protected = await check_source(",
+        "    if may_reupload(request.mode, request.caption, request.topic_as_hashtag):\n"
+        "        protected = (\n"
+        "            check_source_from_backup(manifest, request)\n"
+        "            if manifest is not None\n"
+        "            else await check_source(gateway, src, request)\n"
+        "        )",
+        "    if False:\n"
+        "        protected = (\n"
+        "            check_source_from_backup(manifest, request)\n"
+        "            if manifest is not None\n"
+        "            else await check_source(gateway, src, request)\n"
+        "        )",
     ),
     Mutation(
         "D3: a protected source is copied without the user's word",
@@ -118,13 +139,13 @@ MUTATIONS = [
     Mutation(
         "D3: the statement is ignored when the pair runs again",
         "src/tgmirror/engine/runs.py",
-        "    if request.protected_ack:\n        return True\n",
-        "",
+        "    if not current.noforwards:\n        return False\n    if request.protected_ack:\n        return True\n",
+        "    if not current.noforwards:\n        return False\n",
     ),
     Mutation(
         "D3: run forgets the confirmation",
         "src/tgmirror/cli/commands/run.py",
-        "                protected_ack=target.options.protected_ack,\n",
+        "        protected_ack=target.options.protected_ack,\n",
         "",
     ),
     Mutation(
@@ -145,8 +166,8 @@ MUTATIONS = [
     Mutation(
         "a strategy change does not end the batch",
         "src/tgmirror/engine/batcher.py",
-        "wanted is not strategy or count",
-        "count",
+        "wanted is not strategy or item.topic_id != topic or count + len(item.messages) > limit",
+        "item.topic_id != topic or count + len(item.messages) > limit",
     ),
     Mutation(
         "a flood while fetching is not waited out",
@@ -196,8 +217,8 @@ MUTATIONS = [
     Mutation(
         "append adds to a caption that does not exist",
         "src/tgmirror/core/telethon_gateway.py",
-        'return (f"{text}\\n\\n{policy.text}" if text else text), list(entities)',
-        'return (f"{text}\\n\\n{policy.text}" if text else policy.text), list(entities)',
+        'text, kept = (f"{text}\\n\\n{policy.text}" if text else text), list(entities)',
+        'text, kept = (f"{text}\\n\\n{policy.text}" if text else policy.text), list(entities)',
     ),
     Mutation(
         "a video is forced to a file",
@@ -206,10 +227,10 @@ MUTATIONS = [
         '"force_document": True,',
     ),
     Mutation(
-        "an album of songs or videos is forced to files",
+        "an album member is forced to a file regardless of its real kind",
         "src/tgmirror/core/telethon_gateway.py",
-        "as_documents = all(media_kind(i.message) is MediaKind.DOCUMENT for i in items)",
-        "as_documents = all(i.message.document is not None for i in items)",
+        "            thumb=item.thumb,\n            force_document=kind is MediaKind.DOCUMENT,\n            on_transfer=on_transfer,\n        )\n",
+        "            thumb=item.thumb,\n            force_document=True,\n            on_transfer=on_transfer,\n        )\n",
     ),
     Mutation(
         "markdown parsing left on",
@@ -233,8 +254,8 @@ MUTATIONS = [
     Mutation(
         "placeholder id not kept on the skipped row",
         "src/tgmirror/engine/reupload.py",
-        "        return left_out(unit, action, await gateway.send_text(dst, action.text))",
-        "        await gateway.send_text(dst, action.text)\n        return left_out(unit, action)",
+        "        return left_out(unit, action, await gateway.send_text(dst, text, topic=topic))",
+        "        await gateway.send_text(dst, text, topic=topic)\n        return left_out(unit, action)",
     ),
     Mutation(
         "D3: a protected source is sent by file id",
@@ -379,6 +400,79 @@ MUTATIONS = [
         "src/tgmirror/core/telethon_gateway.py",
         '                log.warning(\n                    "download connection could not be made',
         '                (lambda *a: None)(\n                    "download connection could not be made',
+    ),
+    # Phase 15b, Đợt 1/2 (N2/N3, N4, N7) ---------------------------------------------------
+    Mutation(
+        "U+2028/U+2029/U+0085 in text splits a backup line in two",
+        "src/tgmirror/engine/backupdir.py",
+        '    lines = text.split("\\n")\n    if lines and lines[-1] == "":\n        lines.pop()\n    return lines',
+        "    return text.splitlines()",
+    ),
+    Mutation(
+        "a corrupt line in the middle of messages.jsonl is silently dropped",
+        "src/tgmirror/engine/backupdir.py",
+        "            data = json.loads(line)\n        except json.JSONDecodeError:\n            if i == len(lines) - 1:\n                break  # only ever the last line may be an unfinished write\n            raise CorruptMessagesFile(path, i + 1) from None",
+        "            data = json.loads(line)\n        except json.JSONDecodeError:\n            break",
+    ),
+    Mutation(
+        "a killed mid-write last line is never repaired",
+        "src/tgmirror/engine/backupdir.py",
+        "    except json.JSONDecodeError:\n        pass\n    else:",
+        "    except json.JSONDecodeError:\n        return\n    else:",
+    ),
+    Mutation(
+        "a second process is not refused the session lock",
+        "src/tgmirror/core/session_lock.py",
+        '    if os.name == "nt":\n'
+        "        import msvcrt\n"
+        "\n"
+        "        fh.seek(0)\n"
+        '        if fh.read(1) == b"":  # a brand new, empty file: give the byte-range lock a byte to hold\n'
+        '            fh.write(b"0")\n'
+        "            fh.flush()\n"
+        "        fh.seek(0)\n"
+        "        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)\n"
+        "    else:\n"
+        "        import fcntl\n"
+        "\n"
+        "        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)",
+        "    pass",
+    ),
+    Mutation(
+        "a mid-call 'database is locked' is not mapped to SessionBusy",
+        "src/tgmirror/core/telethon_gateway.py",
+        '        case sqlite3.OperationalError() if "locked" in str(exc).lower():',
+        "        case sqlite3.OperationalError() if False:",
+    ),
+    Mutation(
+        "a crash outside TgMirrorError leaves the run row 'running' forever",
+        "src/tgmirror/engine/runner.py",
+        "            with contextlib.suppress(asyncio.CancelledError):\n"
+        "                await asyncio.shield(\n"
+        "                    self._store.finish(run.id, RunStatus.FAILED, fail_reason=reason[:200])\n"
+        "                )\n"
+        "            raise",
+        "            raise",
+    ),
+    Mutation(
+        "a crash outside TgMirrorError leaves the backup row 'running' forever",
+        "src/tgmirror/engine/backup.py",
+        "            with contextlib.suppress(asyncio.CancelledError):\n"
+        "                await asyncio.shield(\n"
+        "                    self._store.finish_backup(backup.id, RunStatus.FAILED, fail_reason=reason[:200])\n"
+        "                )\n"
+        "            raise",
+        "            raise",
+    ),
+    Mutation(
+        "a first Ctrl+C's exit code 130 is swallowed by the catch-all",
+        "src/tgmirror/cli/errors.py",
+        "    except typer.Exit:\n"
+        "        # a command already decided its own exit code (e.g. ``run.py::execute``'s 130 for a first\n"
+        "        # Ctrl+C) — N4's catch-alls below are for an exception nobody meant to raise, not this.\n"
+        "        raise\n"
+        "    except TgMirrorError as exc:",
+        "    except TgMirrorError as exc:",
     ),
 ]
 
