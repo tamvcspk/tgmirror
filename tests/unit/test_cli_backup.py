@@ -208,6 +208,32 @@ def test_wizard_backs_up_the_same_source_as_the_flags(
     assert flags_ids == wizard_ids == [1, 2]
 
 
+def test_wizard_reasks_the_directory_when_it_holds_a_different_source(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    """T3, Phase 15b: a directory that already backs up a different source used to end the whole
+    wizard (``_check_existing`` was a separate step that asked nothing) instead of just asking for
+    another directory, the way every other refused answer in this flow already does."""
+    other_gateway = FakeGateway()
+    other_gateway.add_channel("Decoy")  # so "Source" here gets a different id than in `gateway`
+    fill(other_gateway, 1)
+    wrong_dir = tmp_path / "wrong"
+    other_rt = make_runtime(gateway=other_gateway, root=tmp_path / "other_state")
+    assert cli.invoke(app, ["backup", "Source", str(wrong_dir)], obj=other_rt).exit_code == 0
+
+    fill(gateway, 2)
+    right_dir = tmp_path / "right"
+    prompter = ScriptedPrompter(
+        select=["Source", "No filter"], text=[str(wrong_dir), str(right_dir)], confirm=[True]
+    )
+    rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
+
+    result = cli.invoke(app, ["backup"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert [r.id for r in backupdir.iter_records(right_dir)] == [1, 2]  # not left in `wrong_dir`
+
+
 def test_wizard_declining_the_confirmation_backs_up_nothing(
     make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
 ) -> None:

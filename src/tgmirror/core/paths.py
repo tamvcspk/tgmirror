@@ -1,5 +1,6 @@
 """Filesystem locations for config, state and sessions (docs/02-cli-ux.md, "Config")."""
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,8 +53,13 @@ class Paths:
         return self.sessions_dir / f"{name}.session"
 
     def ensure(self) -> None:
-        """Create the directories. Sessions dir is owner-only where the OS supports it."""
+        """Create the directories. Sessions dir is owner-only where the OS supports it — tightened
+        even when it already existed (T5, Phase 15b): ``mkdir``'s own ``mode=`` is only applied
+        the moment it actually creates the directory, silently ignored once ``exist_ok=True``
+        finds one already there with wider permissions."""
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir.mkdir(mode=0o700, exist_ok=True)
+        if os.name != "nt":  # POSIX only: chmod bits do not mean the same thing on Windows
+            self.sessions_dir.chmod(0o700)
         self.tmp_dir.mkdir(exist_ok=True)

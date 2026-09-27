@@ -331,13 +331,24 @@ class MenuPrompter:
 
     # -- driven by WizardScreen ------------------------------------------------------------------
 
-    def handle_key(self, key: MenuKey | str) -> bool:
-        """Feed one key to the open question. ``False``: no question is open (the flow is busy)."""
+    async def handle_key(self, key: MenuKey | str) -> bool:
+        """Feed one key to the open question. ``False``: no question is open (the flow is busy).
+
+        A ``PathQuestion``'s Tab (T3, Phase 15b) scans the filesystem (``complete_path``), which
+        can block on a slow path (a network share): run it in a thread so a slow scan only stalls
+        this one question, never the whole frame — every other key still goes straight to
+        ``question.handle_key`` (no filesystem access, nothing to gain from a thread there).
+        """
         question, future = self.question, self._future
         if question is None or future is None or future.done():
             return False  # not ``asking``
         if key == MenuKey.ESC:
             future.set_exception(GoBack())
+            return True
+        if isinstance(question, PathQuestion) and key == MenuKey.TAB:
+            question.text, question.matches = await asyncio.to_thread(
+                complete_path, question.text, only_directories=question.only_directories
+            )
             return True
         answered, value = question.handle_key(key)
         if answered:

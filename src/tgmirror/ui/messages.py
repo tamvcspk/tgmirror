@@ -82,6 +82,12 @@ VI: dict[str, str] = {
     "doctor.cryptg_missing": (
         "cryptg: chưa cài — chạy chậm hơn nhưng vẫn hoạt động (uv sync cài lại)."
     ),
+    "doctor.sessions_perm_ok": "Quyền thư mục session: chỉ chủ sở hữu đọc/ghi được (0700).",
+    "doctor.sessions_perm_warn": (
+        "Quyền thư mục session: {mode}, rộng hơn 0700 — người khác trên máy có thể đọc được "
+        "session (một khi có nó là đăng nhập được, không cần mật khẩu). Chạy tgmirror lại một "
+        "lần để tự siết, hoặc tự chmod 700."
+    ),
     "doctor.no_destinations": "Đích: chưa có cặp nguồn/đích nào (chạy `tgmirror clone` trước).",
     "doctor.destinations_need_session": "Đích: cần đăng nhập để kiểm tra quyền.",
     "doctor.destination_ok": "Đích {title}: vẫn đăng được.",
@@ -335,6 +341,22 @@ VI: dict[str, str] = {
         "Lần backup {id} đang được một tiến trình khác giữ. Nếu chắc chắn nó đã chết, "
         "chạy lại với --force-takeover."
     ),
+    "err.corrupt_messages_file": (
+        "{path}: dòng {line} không phải JSON hợp lệ. Tệp có thể đã hỏng — sửa hoặc xoá dòng đó "
+        "rồi thử lại; tgmirror sẽ không tự bỏ qua để tránh mất dữ liệu phía sau dòng hỏng."
+    ),
+    "err.disk_full": (
+        "Hết chỗ đĩa: {detail}. Tiến độ đã lưu, không mất gì — giải phóng dung lượng rồi chạy lại."
+    ),
+    "err.os_error": "Lỗi hệ điều hành/tệp: {detail}",
+    "err.crashed": "Có lỗi ngoài dự kiến: {detail}. Chạy lại với --debug để xem traceback đầy đủ.",
+    "err.backup_dir_missing": (
+        "{dir} không còn đọc được (mất backup.json) — thư mục có thể đã bị xoá hoặc chuyển chỗ. "
+        "Dùng --from-backup THƯ_MỤC_MỚI để trỏ lại cặp này, hoặc --fresh để chạy lại từ đầu."
+    ),
+    "err.wrong_backup_source": (
+        "{dir} là backup của nguồn khác (id {found}), không phải nguồn của cặp này (id {expected})."
+    ),
     "err.not_a_backup": "{dir} không phải một thư mục backup hợp lệ (không có backup.json).",
     "err.filter": "Filter không hợp lệ: {detail}",
     "err.filter_mix": (
@@ -435,6 +457,10 @@ VI: dict[str, str] = {
     "run.resumed_elsewhere": "Lần chạy {id} đang tạm dừng ở terminal khác; đã cho chạy tiếp ở đó.",
     "run.pick_pair": "Chạy tiếp cặp nào? (gõ để lọc)",
     "run.pick_pair_line": "#{id}  {src} → {dst}   {mode}   {status}",
+    "resume.backup_dir_missing_title": "Cặp {id}: thư mục backup không đọc được",
+    "resume.pick_new_dir": "Chọn thư mục backup khác",
+    "resume.start_fresh": "Chạy lại từ đầu (quên tiến độ)",
+    "resume.cancel": "Huỷ",
     # foreground TUI (Rich Live, ui/tui.py)
     "tui.header": 'tgmirror ▸ lần chạy {id}  "{src} → {dst}"   mode={mode}   delay={delay}s',
     "tui.progress_total": "{handled}/{total} tin (~{percent}%)",
@@ -447,7 +473,9 @@ VI: dict[str, str] = {
     "control.nothing_running": "Không có clone nào đang chạy.",
     "history.empty": "Chưa có lần chạy nào. Bắt đầu bằng `tgmirror clone`.",
     "history.title": "Các lần chạy gần đây",
-    "history.col_run": "Lần",
+    "history.col_run": "Mã",
+    "history.kind_run": "Chạy",
+    "history.kind_backup": "Backup",
     "history.col_started": "Bắt đầu",
     "history.col_pair": "Nguồn → đích",
     "history.col_status": "Trạng thái",
@@ -460,6 +488,7 @@ VI: dict[str, str] = {
     "history.line_counts": (
         "Kết quả:     {done} đã sao chép, {failed} lỗi, {skipped} bị filter loại"
     ),
+    "history.line_counts_backup": "Kết quả:     {done} đã lưu, {skipped} bị filter loại",
     "history.line_cursor": "Tin nguồn:   từ id {start} tới id {end}",
     "history.line_filter": "Filter:      {filter}",
     "history.no_filter": "không lọc",
@@ -562,6 +591,7 @@ VI: dict[str, str] = {
     "menu.item_config": "Cấu hình",
     "menu.item_quit": "Thoát",
     "menu.history_counts": "{done} tin, {failed} lỗi",
+    "menu.history_counts_backup": "{done} tin",
     "menu.yes": "Có",
     "menu.no": "Không",
     "menu.confirm_logout": "Đăng xuất {who}?",
@@ -648,6 +678,12 @@ EN: dict[str, str] = {
     "doctor.cryptg_ok": "cryptg: installed (faster crypto).",
     "doctor.cryptg_missing": (
         "cryptg: not installed — slower but still works (uv sync to add it)."
+    ),
+    "doctor.sessions_perm_ok": "Session directory permissions: owner-only (0700).",
+    "doctor.sessions_perm_warn": (
+        "Session directory permissions: {mode}, wider than 0700 — another user on this machine "
+        "could read the session (having it is enough to log in, no password needed). Run "
+        "tgmirror once more to tighten it automatically, or chmod 700 it yourself."
     ),
     "doctor.no_destinations": (
         "Destinations: no source/destination pair yet (run `tgmirror clone`)."
@@ -902,6 +938,23 @@ EN: dict[str, str] = {
         "Backup {id} is being run by another process. If you are sure it is dead, "
         "run again with --force-takeover."
     ),
+    "err.corrupt_messages_file": (
+        "{path}: line {line} is not valid JSON. The file may be damaged — fix or remove that "
+        "line and try again; tgmirror will not silently skip it, to avoid losing what comes after."
+    ),
+    "err.disk_full": (
+        "Out of disk space: {detail}. Progress is already saved — free up space and run again."
+    ),
+    "err.os_error": "OS/file error: {detail}",
+    "err.crashed": "Something unexpected went wrong: {detail}. Run again with --debug for the "
+    "full traceback.",
+    "err.backup_dir_missing": (
+        "{dir} is no longer readable (backup.json is missing) — it may have been deleted or "
+        "moved. Use --from-backup NEW_DIR to point this pair at it, or --fresh to start over."
+    ),
+    "err.wrong_backup_source": (
+        "{dir} backs up a different source (id {found}), not this pair's (id {expected})."
+    ),
     "err.not_a_backup": "{dir} is not a valid backup directory (no backup.json).",
     "err.filter": "Invalid filter: {detail}",
     "err.filter_mix": (
@@ -1004,6 +1057,10 @@ EN: dict[str, str] = {
     "run.resumed_elsewhere": "Run {id} was paused in another terminal; it is running again there.",
     "run.pick_pair": "Continue which pair? (type to filter)",
     "run.pick_pair_line": "#{id}  {src} → {dst}   {mode}   {status}",
+    "resume.backup_dir_missing_title": "Pair {id}: the backup directory is not readable",
+    "resume.pick_new_dir": "Choose a different backup directory",
+    "resume.start_fresh": "Start over (forget progress)",
+    "resume.cancel": "Cancel",
     # foreground TUI (Rich Live, ui/tui.py)
     "tui.header": 'tgmirror ▸ run {id}  "{src} → {dst}"   mode={mode}   delay={delay}s',
     "tui.progress_total": "{handled}/{total} messages (~{percent}%)",
@@ -1016,7 +1073,9 @@ EN: dict[str, str] = {
     "control.nothing_running": "No clone is running.",
     "history.empty": "No runs yet. Start with `tgmirror clone`.",
     "history.title": "Recent runs",
-    "history.col_run": "Run",
+    "history.col_run": "ID",
+    "history.kind_run": "Run",
+    "history.kind_backup": "Backup",
     "history.col_started": "Started",
     "history.col_pair": "Source → destination",
     "history.col_status": "Status",
@@ -1029,6 +1088,7 @@ EN: dict[str, str] = {
     "history.line_counts": (
         "Result:      {done} copied, {failed} failed, {skipped} left out by the filter"
     ),
+    "history.line_counts_backup": "Result:      {done} copied, {skipped} left out by the filter",
     "history.line_cursor": "Source:      from id {start} to id {end}",
     "history.line_filter": "Filter:      {filter}",
     "history.no_filter": "no filter",
@@ -1133,6 +1193,7 @@ EN: dict[str, str] = {
     "menu.item_config": "Config",
     "menu.item_quit": "Quit",
     "menu.history_counts": "{done} copied, {failed} failed",
+    "menu.history_counts_backup": "{done} copied",
     "menu.yes": "Yes",
     "menu.no": "No",
     "menu.confirm_logout": "Log out {who}?",

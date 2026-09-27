@@ -97,12 +97,22 @@ async def ask_restore_dir(prompter: Prompter) -> Path:
     return await _ask_dir(prompter, "restore.pick_dir", "restore.pick_dir_empty")
 
 
+async def resolve_dir_answer(answer: str) -> Path:
+    """A typed directory answer, absolute (T3, Phase 15b): strips quotes a shell would already
+    have removed and expands ``~`` — ``Path.resolve()`` alone does not do the latter, so typing
+    ``~/backups`` used to create a literal directory named ``~`` under the current one instead.
+    Shared by ``_ask_dir`` below and the menu's restore-recovery dialog
+    (``ui/menu/screens/resume.py``), which asks a directory outside the normal wizard flow."""
+    cleaned = answer.strip().strip("\"'")
+    return await asyncio.to_thread(lambda: Path(cleaned).expanduser().resolve())
+
+
 async def _ask_dir(prompter: Prompter, key: str, empty_key: str) -> Path:
     """Tab-completes like a shell (``Prompter.path``, directories only)."""
     for attempt in range(1, MAX_TITLE_ATTEMPTS + 1):
-        answer = (await prompter.path(t(key), only_directories=True)).strip().strip("\"'")
-        if answer:
-            return await asyncio.to_thread(Path(answer).resolve)
+        answer = await prompter.path(t(key), only_directories=True)
+        if answer.strip():
+            return await resolve_dir_answer(answer)
         if attempt < MAX_TITLE_ATTEMPTS:
             prompter.say(t(empty_key))
     raise UsageProblem("err.missing_flag", flag="DIR")

@@ -83,6 +83,7 @@ from tgmirror.core.gateway import (
 )
 from tgmirror.core.paths import Paths
 from tgmirror.core.pool import RequestBudget, run_parts
+from tgmirror.core.session_lock import session_lock
 
 # The Telethon version this module was last checked against. ``pyproject.toml`` pins the same one
 # and ``tests/unit/test_telethon_pin.py`` fails on any other, because the request pool and the
@@ -202,6 +203,11 @@ def map_exception(exc: BaseException) -> GatewayError | None:
             return Transient(f"connection problem: {type(exc).__name__}")
         case errors.RPCError():
             return GatewayError(f"Telegram error: {_rpc_name(exc)}")
+        case sqlite3.OperationalError() if "locked" in str(exc).lower():
+            # N7, Phase 15b: ``session_lock`` (``telethon_session``) stops a second process before
+            # it ever connects; this is only the belt-and-suspenders case that lock does not cover
+            # (some other, non-tgmirror process holding the session file's own SQLite lock).
+            return SessionBusy("session file is locked by another process")
     return None
 
 
@@ -638,6 +644,26 @@ def _backup_self_contained_media(media: ExportedMedia) -> object:
             vcard="",
         )
     raise AssertionError(f"{media.kind} has no self-contained media to send")
+
+
+def _backup_attributes(media: ExportedMedia) -> list[types.TypeDocumentAttribute]:
+    """``DocumentAttribute*`` a restore reconstructs from what the backup kept (C2, Phase 15b): the
+    original filename and, for audio, its title/performer — never present for a backup made before
+    this field existed, so nothing is added and Telegram/hachoir fall back to detecting them from
+    the file itself, exactly as restore already did before this."""
+    attrs: list[types.TypeDocumentAttribute] = []
+    if media.original_filename:
+        attrs.append(types.DocumentAttributeFilename(media.original_filename))
+    if media.audio_title or media.audio_performer:
+        attrs.append(
+            types.DocumentAttributeAudio(
+                duration=int(media.duration or 0),
+                voice=media.kind is MediaKind.VOICE,
+                title=media.audio_title,
+                performer=media.audio_performer,
+            )
+        )
+    return attrs
 
 
 @dataclass(frozen=True, slots=True)
@@ -1161,6 +1187,9 @@ class TelethonGateway:
                         mime=f.mime_type,
                         size=f.size,
                         duration=f.duration,
+                        original_filename=f.name,
+                        audio_title=f.title,
+                        audio_performer=f.performer,
                     )
                 elif message.media is not None:
                     media = _self_contained_media(message.media)
@@ -1556,6 +1585,7 @@ class TelethonGateway:
                 parse_mode=None,
                 mime_type=media.mime,
                 reply_to=topic,
+                attributes=_backup_attributes(media) or None,
                 **extra,
             )
         elif media is not None:
@@ -1590,6 +1620,7 @@ class TelethonGateway:
             media.kind,
             message.id,
             mime=media.mime,
+            attributes=_backup_attributes(media),
             force_document=media.kind is MediaKind.DOCUMENT,
             on_transfer=on_transfer,
         )
@@ -1855,21 +1886,29 @@ class TelethonGateway:
 async def telethon_session(
     paths: Paths, config: Config, name: str = "default"
 ) -> AsyncIterator[tuple[TelethonAuth, TelethonGateway]]:
-    """Connect with the saved session (creating it on first use) and disconnect on exit."""
+    """Connect with the saved session (creating it on first use) and disconnect on exit.
+
+    One process per session (hard rule 1, CLAUDE.md; N7, Phase 15b): ``session_lock`` (an
+    OS-level exclusive lock on a file beside the session, ``core/session_lock.py``) fails at once
+    as ``SessionBusy`` if another process already holds it — the session file's own SQLite lock
+    only shows up on a *write*, so without this a second process could ``connect()`` successfully
+    and only fail later, deep inside whatever Telethon call happens to write first.
+    """
     if config.api_id is None or config.api_hash is None:
         raise MissingCredentials("api_id/api_hash are not configured")
     paths.ensure()
-    try:  # the session file is opened when the client is built, so a lock shows up here
-        client = make_client(
-            paths.session_path(name), config.api_id, config.api_hash.get_secret_value()
-        )
-        with mapped_errors():
-            await client.connect()
-    except sqlite3.OperationalError as exc:
-        raise SessionBusy("session file is locked by another process") from exc
-    gateway = TelethonGateway(client, TransferSettings.of(config.limits))
-    try:
-        yield TelethonAuth(client), gateway
-    finally:
-        await gateway.aclose()
-        await client.disconnect()
+    session_path = paths.session_path(name)
+    lock_path = session_path.with_name(session_path.name + ".lock")
+    with session_lock(lock_path):
+        try:
+            client = make_client(session_path, config.api_id, config.api_hash.get_secret_value())
+            with mapped_errors():
+                await client.connect()
+        except sqlite3.OperationalError as exc:  # some other, non-tgmirror process: still clean
+            raise SessionBusy("session file is locked by another process") from exc
+        gateway = TelethonGateway(client, TransferSettings.of(config.limits))
+        try:
+            yield TelethonAuth(client), gateway
+        finally:
+            await gateway.aclose()
+            await client.disconnect()

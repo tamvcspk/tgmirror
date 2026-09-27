@@ -1,5 +1,6 @@
 """The Telethon boundary, tested without a network: real Telethon types, a stub client."""
 
+import sqlite3
 from collections import deque
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -8,11 +9,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from telethon import errors, types
+from pydantic import SecretStr
+from telethon import TelegramClient, errors, types
 from telethon.tl.functions.channels import CreateChannelRequest, ToggleForumRequest
 from telethon.tl.functions.messages import CreateForumTopicRequest, GetForumTopicsRequest
 
 from tgmirror.core.auth import TelegramAuth
+from tgmirror.core.config import Config
 from tgmirror.core.errors import (
     BadApiCredentials,
     CodeExpired,
@@ -27,10 +30,12 @@ from tgmirror.core.errors import (
     NotLoggedIn,
     PasswordRequired,
     PeerFlood,
+    SessionBusy,
     TooManyChannels,
     Transient,
 )
 from tgmirror.core.gateway import ChatKind, TelegramGateway
+from tgmirror.core.paths import Paths
 from tgmirror.core.telethon_gateway import (
     TelethonAuth,
     TelethonGateway,
@@ -38,6 +43,7 @@ from tgmirror.core.telethon_gateway import (
     make_client,
     map_exception,
     mapped_errors,
+    telethon_session,
 )
 
 PHOTO = types.ChatPhotoEmpty()
@@ -81,6 +87,7 @@ def channel(**kw: Any) -> types.Channel:
         (TimeoutError(), Transient),
         (errors.ServerError(None, "INTERNAL", 500), Transient),
         (errors.RPCError(None, "SOMETHING_NEW", 400), GatewayError),
+        (sqlite3.OperationalError("database is locked"), SessionBusy),
     ],
 )
 def test_map_exception(raised: BaseException, expected: type[GatewayError]) -> None:
@@ -103,6 +110,13 @@ def test_unknown_rpc_error_is_named_by_telegram_string() -> None:
 
 def test_unrelated_exceptions_are_not_mapped() -> None:
     assert map_exception(ValueError("bug")) is None
+
+
+def test_an_operational_error_for_another_reason_is_not_mapped_to_session_busy() -> None:
+    """N7, Phase 15b: only the "locked" message means another process holds the session — any
+    other ``sqlite3.OperationalError`` (a genuinely broken database, say) must not be mistaken
+    for that and hidden behind the wrong error."""
+    assert map_exception(sqlite3.OperationalError("no such table: sessions")) is None
 
 
 def test_mapped_errors_chains_the_original() -> None:
@@ -536,5 +550,35 @@ def test_slow_mode_is_a_flood_wait_that_says_so() -> None:
     mapped = map_exception(errors.SlowModeWaitError(None, capture=15))
 
     assert isinstance(mapped, FloodWait) and (mapped.seconds, mapped.slow_mode) == (15, True)
+
+
+# ---- N7, Phase 15b: one process per session ------------------------------------------------
+
+
+async def test_telethon_session_refuses_a_second_open_on_the_same_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second open on the same session, while the first is still connected, fails at once with
+    ``SessionBusy`` instead of connecting successfully and only failing later on some write deep
+    inside Telethon (the bug this locks against)."""
+
+    async def no_connect(self: TelegramClient) -> bool:
+        return True
+
+    async def close_session(self: TelegramClient) -> None:
+        self.session.close()  # real client, real SQLite session — close it like `disconnect()`
+
+    monkeypatch.setattr(TelegramClient, "connect", no_connect)
+    monkeypatch.setattr(TelegramClient, "disconnect", close_session)
+    paths = Paths.under(tmp_path)
+    config = Config(api_id=12345, api_hash=SecretStr("0123456789abcdef0123456789abcdef"))
+
+    async with telethon_session(paths, config):
+        with pytest.raises(SessionBusy):
+            async with telethon_session(paths, config):
+                pass  # never reached
+
+    async with telethon_session(paths, config):  # released once the first closed
+        pass
     plain = map_exception(errors.FloodWaitError(None, capture=15))
     assert isinstance(plain, FloodWait) and plain.slow_mode is False

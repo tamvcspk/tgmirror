@@ -8,12 +8,14 @@ running loop, so any ``Store``/``begin_run`` setup below also goes through a bar
 """
 
 import asyncio
+import os
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
 import keyring
 import keyring.backends.fail
+import pytest
 from typer.testing import CliRunner
 
 from tests.fakes import ACCOUNT, FakeAuth, FakeGateway
@@ -148,6 +150,39 @@ def test_reports_a_still_writable_destination(
     assert result.exit_code == 0, result.output
     assert "Copy" in result.output
     assert "still writable" in result.output
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits only")
+def test_reports_session_directory_permissions_ok(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    paths = Paths.under(tmp_path)
+    paths.ensure()
+    rt = make_runtime(gateway=gateway, auth=FakeAuth(logged_in=ACCOUNT), root=tmp_path)
+
+    result = runner.invoke(app, ["doctor"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "owner-only (0700)" in result.output
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits only")
+def test_warns_about_a_widened_session_directory(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    """T5, Phase 15b: nothing used to report this at all — a ``sessions/`` directory widened by
+    something else on the machine went unnoticed. Checked *before* anything in ``doctor`` itself
+    gets a chance to call ``Paths.ensure()`` (which would silently re-tighten it first) — this
+    must report what it found, not what running doctor itself just fixed."""
+    paths = Paths.under(tmp_path)
+    paths.ensure()
+    paths.sessions_dir.chmod(0o755)
+    rt = make_runtime(gateway=gateway, auth=FakeAuth(logged_in=None), env={}, root=tmp_path)
+
+    result = runner.invoke(app, ["doctor"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "wider than 0700" in result.output
 
 
 def test_reports_a_destination_that_lost_write_access(

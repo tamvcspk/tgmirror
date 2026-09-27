@@ -15,7 +15,7 @@ from typing import Annotated
 import typer
 
 from tgmirror.cli import wizard
-from tgmirror.cli.commands.run import execute
+from tgmirror.cli.commands.run import confirm_fresh, execute
 from tgmirror.cli.errors import Declined, UsageProblem, run
 from tgmirror.cli.filter_options import (
     AlbumOption,
@@ -160,6 +160,16 @@ def restore(
             help="Run even if another process seems to hold this restore (only if it is dead).",
         ),
     ] = False,
+    fresh: Annotated[
+        bool,
+        typer.Option(
+            "--fresh",
+            help="Forget what this pair has restored and send everything again from the start "
+            "(the destination may get duplicates unless you emptied it) — e.g. after pointing "
+            "this pair at a different/redone backup directory. Asks first when there is "
+            "something to forget; --yes agrees.",
+        ),
+    ] = False,
     wait: Annotated[
         bool,
         typer.Option(
@@ -221,6 +231,7 @@ def restore(
             preview=preview_flag,
             yes=yes,
             force_takeover=force_takeover,
+            fresh=fresh,
         )
         async with authorized(rt) as conn:
             channels = await conn.gateway.list_channels()
@@ -262,6 +273,7 @@ class RestoreOptions:
     preview: bool | None = None
     yes: bool = False
     force_takeover: bool = False
+    fresh: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +306,7 @@ class RestoreFlow:
         interactive: bool | None = None,
         echo: Callable[..., None] = typer.echo,
     ) -> None:
+        self._rt = rt
         self._store = store
         self._gateway = gateway
         self._channels = channels
@@ -318,6 +331,7 @@ class RestoreFlow:
             self._pick_destination,
             self._confirm_d3,
             self._pick_filters,
+            self._confirm_fresh,
             self._confirm,
         ]
 
@@ -326,6 +340,8 @@ class RestoreFlow:
         request = RunRequest(
             mode="reupload",
             from_backup=str(self._dir),
+            force=self._o.force_takeover,
+            fresh=self._o.fresh,
             filters_json=None if self._filters is None else self._filters.to_json(),
             caption=self._o.caption or "keep",
             caption_text=self._o.caption_text or "",
@@ -434,6 +450,27 @@ class RestoreFlow:
             assert manifest is not None
             topics: Sequence[TopicInfo] = [TopicInfo(t.id, t.title) for t in manifest.topics]
             self._filters = await wizard.pick_filters(self._prompter, can_keep=False, topics=topics)
+
+    async def _confirm_fresh(self) -> None:
+        """``--fresh`` (N6, Phase 15b): mirrors ``clone``'s (via ``run.py::confirm_fresh``) — a
+        brand new destination has nothing to forget yet, so this only matters for a pair already
+        restored to before (same directory or a repointed one, same existing destination)."""
+        if not self._o.fresh:
+            return
+        plan = self._plan
+        assert plan is not None
+        if not isinstance(plan.dst, ChannelInfo):
+            return
+        copied = await self._store.count_copied(plan.src.id, plan.dst.id)
+        await confirm_fresh(
+            self._rt,
+            copied,
+            self._o.yes,
+            channel_label(plan.src),
+            channel_label(plan.dst),
+            prompter=self._prompter,
+            interactive=self._interactive,
+        )
 
     async def _confirm(self) -> None:
         """Wizard step 5 (the preview, when shown) and the one question before it starts."""

@@ -5,6 +5,7 @@ only ever asked for ``render()``) and without ``rt.keys``' own reader thread (p/
 ``typer.Exit``: exercised straight against ``FakeGateway`` and a real (temp-file) ``Store``.
 """
 
+import contextlib
 import io
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from tgmirror.engine.runs import RunRequest, begin_run
 from tgmirror.store.db import Store
 from tgmirror.store.runs import RunStatus
 from tgmirror.ui.menu.run_screen import RunScreen
+from tgmirror.ui.messages import t
 
 
 def plain(renderable: RenderableType) -> str:
@@ -93,6 +95,35 @@ async def test_a_finished_run_reports_its_result_once_not_every_tick(tmp_path: P
         await screen.tick()
 
     assert len(screen._lines) == lines_after_first_tick
+    await store.close()
+
+
+async def test_a_crash_shows_the_same_sentence_the_cli_would(tmp_path: Path) -> None:
+    """N4, Phase 15b: a crash that is not ``TgMirrorError`` used to show a bare ``str(exc)`` here
+    — the menu's own private fallback, different from the sentence the classic CLI shows for the
+    exact same crash (``cli/errors.py::describe_any``, which the runner's row-closing fix, in
+    ``engine/runner.py``, backs up)."""
+    gateway = FakeGateway()
+    src, dst = gateway.add_channel("Source"), gateway.add_channel("Copy")
+    gateway.add_message(src.id, "m1")
+
+    async def die(
+        src_id: int, dst_id: int, ids: list[int], *, topic: int | None = None
+    ) -> list[int | None]:
+        raise RuntimeError("boom")
+
+    gateway.copy_messages = die  # type: ignore[method-assign]
+    store = await _store(tmp_path)
+    started = await begin_run(store, gateway, src, dst, RunRequest())
+    screen = RunScreen(store, gateway, started, limits=Limits(), tmp_dir=tmp_path / "tmp")
+
+    await screen.on_enter()
+    assert screen.task is not None
+    with contextlib.suppress(RuntimeError):  # the task re-raises it; tick() reads it back, not us
+        await screen.task
+    await screen.tick()
+
+    assert t("err.crashed", detail="RuntimeError: boom") in screen._lines
     await store.close()
 
 

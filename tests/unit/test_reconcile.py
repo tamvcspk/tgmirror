@@ -52,3 +52,28 @@ def test_a_different_count_is_ambiguous() -> None:
 
 def test_a_different_media_kind_is_ambiguous() -> None:
     assert judge([msg(1, PHOTO)], [msg(90, VIDEO)])[0] is Outcome.AMBIGUOUS
+
+
+def test_a_placeholder_sent_as_text_confirms_against_its_own_real_kind() -> None:
+    """T2, Phase 15b: a pending game/invoice sent as a text placeholder (``--placeholder``) landed
+    in the destination as a plain text message, never its own media kind — without ``placeholders``
+    telling ``judge`` about that, the shapes never matched and it was resent, duplicating it."""
+    pending = [msg(1, MediaKind.GAME)]
+    tail = [msg(90)]  # what actually landed: plain text, not a game
+
+    assert judge(pending, tail)[0] is Outcome.AMBIGUOUS  # without the hint: still wrongly resent
+    assert judge(pending, tail, placeholders={1}) == (Outcome.CONFIRMED, [90])
+
+
+def test_a_placeholder_in_an_otherwise_ordinary_batch_is_still_confirmed() -> None:
+    pending = [msg(1, PHOTO), msg(2, MediaKind.INVOICE), msg(3)]
+    tail = [msg(90, PHOTO), msg(91), msg(92)]
+
+    assert judge(pending, tail, placeholders={2}) == (Outcome.CONFIRMED, [90, 91, 92])
+
+
+def test_a_placeholder_hint_for_the_wrong_id_does_not_paper_over_a_real_mismatch() -> None:
+    pending = [msg(1, PHOTO)]
+    tail = [msg(90, VIDEO)]
+
+    assert judge(pending, tail, placeholders={1})[0] is Outcome.AMBIGUOUS

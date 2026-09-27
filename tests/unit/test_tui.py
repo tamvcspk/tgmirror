@@ -74,13 +74,14 @@ def reporter(
     console: Console | None = None,
     clock: Clock | None = None,
     now: object = None,
+    silent: bool = False,
 ) -> TuiReporter:
     kwargs: dict[str, object] = {}
     if clock is not None:
         kwargs["clock"] = clock
     if now is not None:
         kwargs["now"] = now
-    return TuiReporter(Limits(), seed, console=console, **kwargs)
+    return TuiReporter(Limits(), seed, console=console, silent=silent, **kwargs)
 
 
 def test_the_seed_run_is_shown_immediately_without_a_progress_call() -> None:
@@ -164,6 +165,45 @@ def test_a_notice_prints_above_the_panel_like_the_line_reporter() -> None:
     r.notice("reconciled", count=3)
 
     assert "3 messages" in console.export_text()
+
+
+def test_silent_mode_never_prints_and_shows_the_notice_in_render_instead() -> None:
+    """C3, Phase 15b: the menu (``ui/menu/run_screen.py``) never enters ``TuiReporter`` as a
+    context manager and draws its own alt-screen ``Live`` — a notice printed through
+    ``self._live.console.print`` regardless used to draw over that screen from the top corner,
+    then get erased by the next redraw. Silent mode must never touch the console at all."""
+    console = Console(file=io.StringIO(), record=True, width=200)
+    r = reporter(run(1, 10), console=console, silent=True)
+
+    r.notice("reconciled", count=3)
+
+    assert console.export_text() == ""  # nothing printed
+    assert "3 messages" in plain(r.render())  # shown in the panel instead
+
+
+def test_silent_mode_keeps_only_the_last_few_lines() -> None:
+    console = Console(file=io.StringIO(), record=True, width=200)
+    r = reporter(run(1, 10), console=console, silent=True)
+
+    for i in range(10):
+        r.notice("reconciled", count=i)
+
+    text = plain(r.render())
+    assert console.export_text() == ""
+    assert "0 messages are" not in text  # the earliest ones fell off
+    assert "9 messages are" in text  # the most recent is still there
+
+
+def test_non_silent_mode_still_prints_like_before() -> None:
+    """The classic CLI's own case: printing above its private ``Live`` is the whole point, so
+    silent defaults to ``False`` and behaves exactly as it always did."""
+    console = Console(file=io.StringIO(), record=True, width=200)
+    r = reporter(run(1, 10), console=console)
+
+    r.notice("reconciled", count=3)
+
+    assert "3 messages" in console.export_text()
+    assert "3 messages" not in plain(r.render())  # not duplicated into the panel too
 
 
 def test_a_transfer_refreshes_the_panel_so_a_long_download_does_not_look_frozen() -> None:

@@ -38,7 +38,11 @@ LIMITS = Limits(min_delay=2.0, jitter=0.0, long_pause_every=10_000, max_auto_wai
 
 
 class Crash(BaseException):
-    """Stands for the process being killed: not a ``TgMirrorError``, so nothing handles it."""
+    """Stands for the process being killed: not a ``TgMirrorError``, so none of the *specific*
+    ``except`` clauses in ``Runner.run`` catch it — only the catch-all one added for N4 (Phase
+    15b, see ``test_crash_closes_the_run_failed_instead_of_leaving_it_running`` below), which
+    closes the row before re-raising it unchanged; every test below still asserts ``pytest.raises
+    (Crash)``."""
 
 
 class Recorder:
@@ -349,6 +353,36 @@ async def test_kill_then_resume_leaves_no_gap_and_no_duplicate(
     assert await resumed.done_ids(final.id, range(1, 9)) == set(range(1, 9))
     expected = "reconcile_resend" if crash_at == "before_copy" else "reconciled"
     assert rig.recorder.codes == [expected]
+
+
+async def test_crash_closes_the_run_failed_instead_of_leaving_it_running(rig: Rig) -> None:
+    """N4, Phase 15b: any error that is not ``TgMirrorError`` (a second Ctrl+C, a disk-full
+    ``OSError``, or here a raw ``RuntimeError`` mid-batch) used to leave the run ``running`` with a
+    fresh heartbeat, so a resume within the heartbeat window hit ``RunBusy`` for a process that had
+    already died. ``Runner.run`` now closes it ``failed`` before re-raising, so a resume needs no
+    ``--force-takeover`` even immediately after (``_close_dead_runs`` only ever looks at rows still
+    ``running``/``paused``)."""
+    rig.fill(4)
+    store = await rig.store()
+    run = await rig.begin(store, batch_size=4)
+
+    async def die(ids: list[int], n: int) -> None:
+        raise RuntimeError("boom")
+
+    rig.wrap_copy(die)
+    with pytest.raises(RuntimeError):
+        await rig.runner(store).run(run)
+    rig.unwrap_copy()
+
+    dead = await store.get_run(run.id)
+    assert dead is not None
+    assert dead.status is RunStatus.FAILED
+    assert dead.fail_reason is not None and dead.fail_reason.startswith("crashed: RuntimeError")
+
+    resumed = await rig.begin(store)  # no --force-takeover: the row is already closed, not running
+    final = await rig.runner(store).run(resumed)
+    assert final.status is RunStatus.DONE
+    assert rig.dst_texts == rig.src_texts
 
 
 async def test_a_resume_maps_reconciled_copies_to_the_right_destination_ids(rig: Rig) -> None:

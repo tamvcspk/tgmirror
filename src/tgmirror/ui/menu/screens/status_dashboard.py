@@ -1,13 +1,20 @@
-""" "Trạng thái": the same data ``tgmirror status`` shows, refreshed on its own every tick since it
-only reads the store (no Telegram call), like the CLI command."""
+""" "Trạng thái": the same data ``tgmirror status`` shows (T1, Phase 15b: a run *or a backup*, see
+``cli/commands/status.py``), refreshed on its own every tick since it only reads the store (no
+Telegram call), like the CLI command."""
 
 from rich.console import Group, RenderableType
 from rich.text import Text
 
 from tgmirror.cli.keys import MenuKey
-from tgmirror.engine.status import StatusReport, build_report
-from tgmirror.store.db import utc_now
-from tgmirror.store.runs import RunStatus
+from tgmirror.engine.status import (
+    BackupStatusReport,
+    StatusReport,
+    build_backup_report,
+    build_report,
+)
+from tgmirror.store.backups import Backup
+from tgmirror.store.db import Store, utc_now
+from tgmirror.store.runs import Run, RunStatus
 from tgmirror.ui.menu.context import AppContext
 from tgmirror.ui.menu.screen import Screen, ScreenResult
 from tgmirror.ui.messages import t
@@ -31,21 +38,39 @@ class StatusDashboardScreen(Screen):
 
     async def _refresh(self) -> None:
         store = self._app.store
-        live = await store.active_run()
-        target = live or await store.latest_run()
+        target = await _pick(store)
         if target is None:
             self._lines = [t("err.run_none")]
             return
-        report = await build_report(
-            store, target, now=utc_now(), daily_cap=self._app.rt.config().limits.daily_cap
-        )
-        self._lines = _lines(report)
+        daily_cap = self._app.rt.config().limits.daily_cap
+        if isinstance(target, Backup):
+            backup_report = await build_backup_report(
+                store, target, now=utc_now(), daily_cap=daily_cap
+            )
+            self._lines = _backup_lines(backup_report)
+        else:
+            report = await build_report(store, target, now=utc_now(), daily_cap=daily_cap)
+            self._lines = _lines(report)
 
     def render(self) -> RenderableType:
         return Group(*(Text(line) for line in self._lines))
 
     async def handle_key(self, key: MenuKey | str) -> ScreenResult:
         return "pop"
+
+
+async def _pick(store: Store) -> Run | Backup | None:
+    if (live_run := await store.active_run()) is not None:
+        return live_run
+    if (live_backup := await store.active_backup()) is not None:
+        return live_backup
+    latest_run = await store.latest_run()
+    latest_backup = await store.latest_backup()
+    if latest_run is None:
+        return latest_backup
+    if latest_backup is None:
+        return latest_run
+    return latest_run if latest_run.started_at >= latest_backup.started_at else latest_backup
 
 
 def _lines(report: StatusReport) -> list[str]:
@@ -130,4 +155,48 @@ def _lines(report: StatusReport) -> list[str]:
         lines.append(t("status.line_floods", count=report.floods_24h, last=last))
     if not report.live and report.failed_now:
         lines.append(t("status.retry_hint", count=report.failed_now, id=run_.id))
+    return lines
+
+
+def _backup_lines(report: BackupStatusReport) -> list[str]:
+    """As ``_lines``, for a backup (T1, Phase 15b) — mirrors ``cli/commands/status.py::
+    _backup_text``: no total/fraction/ETA (``BackupStatusReport``'s docstring says why)."""
+    b = report.backup
+    lines: list[str] = []
+    if not report.live:
+        lines.append(t("status.none_live"))
+    lines.append(t("backup.start", id=b.id, src=b.src_title, dir=b.dir))
+    note = f" ({b.fail_reason})" if b.fail_reason else ""
+    lines.append(t("history.line_status", status=t(f"status.{b.status}"), note=note))
+    if report.abandoned:
+        lines.append(t("status.abandoned", at=b.updated_at.astimezone().strftime("%Y-%m-%d %H:%M")))
+    if b.status is RunStatus.WAITING_FLOOD and b.resume_at is not None:
+        at = b.resume_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        lines.append(t("status.line_resume", at=at, note=""))
+    if report.speed is None:
+        lines.append(t("status.line_speed_unknown"))
+    else:
+        lines.append(t("status.line_speed", speed=f"{report.speed:.1f}", eta=""))
+    lines.append(t("history.line_counts_backup", done=b.done, skipped=b.skipped_filter))
+    if report.delay is not None:
+        lines.append(
+            t(
+                "status.line_limiter",
+                delay=f"{report.delay:.1f}",
+                sent=report.sent_today,
+                cap=report.daily_cap,
+            )
+        )
+    if report.floods_24h == 0:
+        lines.append(t("status.line_floods_none"))
+    else:
+        last = ""
+        if report.last_flood is not None:
+            last = t(
+                "status.last_flood",
+                ago=duration(report.now - report.last_flood.ts),
+                kind=report.last_flood.kind,
+                seconds=report.last_flood.seconds if report.last_flood.seconds is not None else "-",
+            )
+        lines.append(t("status.line_floods", count=report.floods_24h, last=last))
     return lines

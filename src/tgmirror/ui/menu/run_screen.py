@@ -22,11 +22,10 @@ from pathlib import Path
 from rich.console import Group, RenderableType
 from rich.text import Text
 
-from tgmirror.cli.errors import describe
+from tgmirror.cli.errors import describe_any
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.keys import MenuKey, apply_key
 from tgmirror.core.config import Limits
-from tgmirror.core.errors import TgMirrorError
 from tgmirror.core.gateway import MessageReader, TelegramGateway
 from tgmirror.engine.runner import RunControl, Runner
 from tgmirror.store.db import Store
@@ -64,7 +63,7 @@ class RunScreen(Screen):
         self._tmp_dir = tmp_dir
         self._wait = wait
         self._reader_override = reader_override
-        self._reporter = TuiReporter(limits, current)
+        self._reporter = TuiReporter(limits, current, silent=True)
         self._control = RunControl()
         self._lines: list[str] = [*(intro or []), *_start_lines(started, failed_count)]
         self._task: asyncio.Task[Run] | None = None
@@ -99,10 +98,11 @@ class RunScreen(Screen):
                 final = await runner.run(self._current)
                 debug.log("run.drive_done", run=final.id, status=str(final.status))
             except BaseException as exc:
-                # temporary, for diagnosing the crash reported 2026-09-24 (docs/06-lo-trinh.md,
-                # "Kế hoạch giao diện full-screen (menu)"): message/traceback, never message
-                # *content* of a Telegram call (this is a Runner/asyncio-level exception, not one
-                # carrying user data) — remove once the root cause is found (CLAUDE.md rule 6).
+                # Root cause found and fixed 2026-09-27 (N5, Phase 15b: a race in
+                # ``engine/reupload.py::Pipeline._next``) — kept on by the user's own choice
+                # (2026-09-24) as a permanent diagnostic, not removed now that it found its bug.
+                # Message/traceback only, never message *content* of a Telegram call (this is a
+                # Runner/asyncio-level exception, not one carrying user data, CLAUDE.md rule 6).
                 debug.log(
                     "run.drive_error",
                     error=type(exc).__name__,
@@ -154,7 +154,7 @@ class RunScreen(Screen):
             self._reported = True  # report its outcome exactly once, not on every one of those
             exc = self._task.exception()
             if exc is not None:
-                self._lines.append(describe(exc) if isinstance(exc, TgMirrorError) else str(exc))
+                self._lines.append(describe_any(exc))
             else:
                 self._lines.extend(
                     _result_lines(self._task.result(), self._current.options.retry_of)

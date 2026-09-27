@@ -1,11 +1,12 @@
-""" "Lịch sử": the runs ``tgmirror history`` lists, and one of them in detail — native
-``SelectList`` + detail render (not the CLI's ``Table``/``typer.echo``, so it fits the same
-frame)."""
+""" "Lịch sử": the runs *and backups* (T1, Phase 15b) ``tgmirror history`` lists, and one of them
+in detail — native ``SelectList`` + detail render (not the CLI's ``Table``/``typer.echo``, so it
+fits the same frame)."""
 
 from rich.console import Group, RenderableType
 from rich.text import Text
 
 from tgmirror.cli.keys import MenuKey
+from tgmirror.store.backups import Backup
 from tgmirror.store.runs import FailedMessage, FloodEvent, Run
 from tgmirror.ui.menu.context import AppContext
 from tgmirror.ui.menu.screen import Screen, ScreenResult
@@ -16,25 +17,35 @@ LIMIT = 20
 DETAIL_FAILURES = 20
 
 
+def _line(item: Run | Backup) -> str:
+    is_backup = isinstance(item, Backup)
+    kind = t("history.kind_backup") if is_backup else t("history.kind_run")
+    dst = item.dir if is_backup else item.dst_title
+    counts = (
+        t("menu.history_counts_backup", done=item.done)
+        if is_backup
+        else t("menu.history_counts", done=item.done, failed=item.failed)
+    )
+    when = item.started_at.astimezone().strftime("%Y-%m-%d %H:%M")
+    return (
+        f"{item.id:>4}  {kind:<6}  {when}  {item.src_title} → {dst}  "
+        f"{t(f'status.{item.status}')}  {counts}"
+    )
+
+
 class HistoryScreen(Screen):
     def __init__(self, app: AppContext) -> None:
         self._app = app
-        self._list: SelectList[Run] = SelectList(items=[])
+        self._list: SelectList[Run | Backup] = SelectList(items=[])
         self.footer_hint = t("menu.footer_pick")
 
     async def on_enter(self) -> None:
         runs = await self._app.store.list_runs(LIMIT)
-        self._list = SelectList(
-            items=[
-                (
-                    f"{r.id:>4}  {r.started_at.astimezone().strftime('%Y-%m-%d %H:%M')}  "
-                    f"{r.src_title} → {r.dst_title}  {t(f'status.{r.status}')}  "
-                    f"{t('menu.history_counts', done=r.done, failed=r.failed)}",
-                    r,
-                )
-                for r in runs
-            ]
-        )
+        backups = await self._app.store.list_backups(LIMIT)
+        items: list[Run | Backup] = sorted(
+            [*runs, *backups], key=lambda i: i.started_at, reverse=True
+        )[:LIMIT]
+        self._list = SelectList(items=[(_line(i), i) for i in items])
 
     def render(self) -> RenderableType:
         if not self._list.items:
@@ -47,7 +58,41 @@ class HistoryScreen(Screen):
         chosen = self._list.handle_key(key)
         if chosen is None:
             return "stay"
+        if isinstance(chosen, Backup):
+            return ("push", BackupHistoryDetailScreen(self._app, chosen))
         return ("push", HistoryDetailScreen(self._app, chosen))
+
+
+class BackupHistoryDetailScreen(Screen):
+    """A backup's own record is much shorter than a run's (no failures/floods to look up, no
+    source range or destination) — its own directory carries the rest of the story."""
+
+    def __init__(self, app: AppContext, item: Backup) -> None:
+        self._app = app
+        self._item = item
+        self.footer_hint = t("menu.footer_back")
+
+    def render(self) -> RenderableType:
+        item = self._item
+        lines = [t("backup.start", id=item.id, src=item.src_title, dir=item.dir)]
+        note = f" ({item.fail_reason})" if item.fail_reason else ""
+        lines.append(t("history.line_status", status=t(f"status.{item.status}"), note=note))
+        ended = (
+            item.ended_at.astimezone().strftime("%Y-%m-%d %H:%M")
+            if item.ended_at
+            else t("history.still_running")
+        )
+        started = item.started_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        lines.append(t("history.line_time", started=started, ended=ended))
+        lines.append(t("history.line_counts_backup", done=item.done, skipped=item.skipped_filter))
+        if item.gone:
+            lines.append(t("history.line_gone", count=item.gone))
+        filter_text = t("history.no_filter") if item.filters_json == "{}" else item.filters_json
+        lines.append(t("history.line_filter", filter=filter_text))
+        return Group(*(Text(line) for line in lines))
+
+    async def handle_key(self, key: MenuKey | str) -> ScreenResult:
+        return "pop"
 
 
 class HistoryDetailScreen(Screen):

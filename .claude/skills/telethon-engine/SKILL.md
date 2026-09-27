@@ -24,7 +24,7 @@ client = TelegramClient(
 - `make_client` in `core/telethon_gateway.py` is the only place that builds a `TelegramClient` (a test enforces this and the `flood_sleep_threshold=0`); it is also the only module allowed to import Telethon (another test).
 - Install `cryptg` (faster AES); `tgmirror doctor` warns if missing.
 - Session files are secrets. Never log `api_hash`, phone numbers, codes or session strings.
-- One process per session file.
+- **One process per session file — enforced, not just documented** (N7, Phase 15b, `CLAUDE.md` hard rule 10): the session file's own SQLite lock only shows up on a *write*, so relying on that alone lets two processes both `connect()` and only fail later, mid-session, on whatever Telethon call happens to write first — a raw `sqlite3.OperationalError` nothing used to map cleanly. `telethon_session()` now takes an OS-level exclusive lock (`core/session_lock.py::session_lock`, a file beside the `.session` file, `fcntl.flock`/`msvcrt.locking`) *before* connecting at all, held until disconnect; a second process fails at once with `SessionBusy`. `map_exception` still maps a mid-session `sqlite3.OperationalError("database is locked")` to `SessionBusy` too, as a second line of defence for whatever this lock does not cover (some other, non-tgmirror process). The lock is released by the OS on process exit, including a hard kill — nothing to clean up on the next start, unlike the store's heartbeat-based `RunBusy`/`BackupBusy`. Read-only commands (`pause`/`stop`/`status`/`history`) never call `telethon_session` at all, so they never take this lock.
 
 ## Listing channels (wizard step 1/2)
 
@@ -43,7 +43,7 @@ async for d in client.iter_dialogs():
 
 ## Login
 
-`TelethonAuth` implements `core.auth.TelegramAuth` (`send_code_request` → `sign_in(phone, code)` → `sign_in(password=...)` on `SessionPasswordNeededError`). The flow lives in `core.auth.login` and is tested with `FakeAuth`; `AccountInfo` never carries the phone number. `telethon_session()` connects and always disconnects; it maps a locked session file to `SessionBusy` (one process per session).
+`TelethonAuth` implements `core.auth.TelegramAuth` (`send_code_request` → `sign_in(phone, code)` → `sign_in(password=...)` on `SessionPasswordNeededError`). The flow lives in `core.auth.login` and is tested with `FakeAuth`; `AccountInfo` never carries the phone number. `telethon_session()` takes the one-process-per-session lock, connects and always disconnects (releasing the lock even on error); see "Client setup" above for the lock itself.
 
 ## Creating a destination channel
 

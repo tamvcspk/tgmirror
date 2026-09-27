@@ -20,7 +20,13 @@ from tgmirror.core.gateway import ChannelInfo, MessageReader, TelegramGateway
 from tgmirror.engine.backup_reader import BackupReader
 from tgmirror.engine.backupdir import read_manifest
 from tgmirror.engine.runner import RunControl, Runner
-from tgmirror.engine.runs import RunRequest, begin_run, check_runnable, resolve_run
+from tgmirror.engine.runs import (
+    BackupDirMissing,
+    RunRequest,
+    begin_run,
+    check_runnable,
+    resolve_run,
+)
 from tgmirror.store.db import Store, utc_now
 from tgmirror.store.runs import Control, FilterChange, Run, RunStatus, StartedRun
 from tgmirror.ui.messages import t
@@ -70,6 +76,16 @@ def run_clone(
             "Does not apply to the daily cap.",
         ),
     ] = False,
+    from_backup: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-backup",
+            help="Point a restore pair (`tgmirror restore`) at a different backup directory — "
+            "e.g. after moving it, or on another machine that only has the run/backup logged, "
+            "not the directory itself. Must be a backup of the same source; combine with --fresh "
+            "to start over instead of continuing the delta.",
+        ),
+    ] = None,
 ) -> None:
     """Clone the same source and destination again: only what is newer, or where a stop left off.
 
@@ -93,7 +109,13 @@ def run_clone(
     async def command() -> None:
         async with opened_store(rt) as store:
             result = await resume_flow(
-                rt, store, number=number, force_takeover=force_takeover, fresh=fresh, yes=yes
+                rt,
+                store,
+                number=number,
+                force_takeover=force_takeover,
+                fresh=fresh,
+                yes=yes,
+                from_backup=str(from_backup) if from_backup is not None else None,
             )
             if isinstance(result, ResumeElsewhere):
                 typer.echo(t("run.resumed_elsewhere", id=result.run_id))
@@ -144,9 +166,15 @@ async def resume_flow(
     force_takeover: bool = False,
     fresh: bool = False,
     yes: bool = False,
+    from_backup: str | None = None,
 ) -> ReadyToRun | ResumeElsewhere:
     """Everything ``tgmirror run``/the menu's "Chạy tiếp" does before ``execute()``: which pair,
     whether it is already live elsewhere, and the ``RunRequest`` to start.
+
+    ``from_backup`` (``--from-backup``, N6, Phase 15b): repoints a restore pair at a different
+    backup directory instead of the one it last used — ``None`` keeps the pair's own
+    (``target.options.from_backup``, which is ``None`` too for an ordinary clone). ``begin_run``
+    validates the new directory is a backup of the same source.
 
     Raises nothing of its own but what it calls does (``RunWaiting`` from ``check_runnable``,
     ``Declined`` from a declined ``confirm_fresh``) — same as before this was factored out of
@@ -180,7 +208,7 @@ async def resume_flow(
         placeholder=target.options.placeholder,
         protected_ack=target.options.protected_ack,
         topic_as_hashtag=target.options.topic_as_hashtag,
-        from_backup=target.options.from_backup,
+        from_backup=from_backup if from_backup is not None else target.options.from_backup,
     )
     src, dst = pair_of(target)
     if fresh:
@@ -192,12 +220,18 @@ async def resume_flow(
 def reader_override_for(from_backup: str | None) -> MessageReader | None:
     """Phase 11b: a run/retry continuing a restore reads its backup directory again, not the
     gateway (``begin_run`` already skips the live source checks the same way, keyed off the same
-    field). ``None`` for an ordinary clone: ``Runner`` then reads through the gateway as usual."""
+    field). ``None`` for an ordinary clone: ``Runner`` then reads through the gateway as usual.
+
+    ``begin_run`` (called just before this, in every caller) already raised ``BackupDirMissing``
+    had the directory been unreadable, so this only re-raises it for the same reason in the
+    (vanishingly unlikely) case it disappeared in between — never an ``assert`` (N6, Phase 15b).
+    """
     if from_backup is None:
         return None
     directory = Path(from_backup)
     manifest = read_manifest(directory)
-    assert manifest is not None, f"{directory} lost its backup.json while the run was live"
+    if manifest is None:
+        raise BackupDirMissing(directory)
     return BackupReader(directory, manifest)
 
 

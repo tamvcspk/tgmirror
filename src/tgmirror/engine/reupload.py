@@ -334,6 +334,15 @@ class Pipeline:
         The producer hands over its own errors, so it normally ends by putting ``_End`` or a
         ``_Failure``. If it ends without (killed by something that is not an ``Exception``, or
         cancelled) nobody would ever fill the queue: say so instead of waiting for ever.
+
+        N5, Phase 15b: ``queue.put`` and this ``wait``'s ``poll_interval`` timeout can land in the
+        same event-loop tick right as the producer finishes — the item is already in the queue,
+        but ``getter`` has not yet resumed to hand it back when the timeout fires. Cancelling
+        ``getter`` at that point (below) still raises ``CancelledError`` even though its underlying
+        wait had already resolved (a CPython ``asyncio.Queue``/``Task.cancel`` quirk: a future that
+        resolved but whose task has not yet resumed can still be cancelled out from under it), so
+        the item is never lost from the queue, only from ``getter``'s result — checking the queue
+        directly before concluding the producer died avoids mistaking this for a real crash.
         """
         while True:
             getter = asyncio.ensure_future(queue.get())
@@ -346,6 +355,8 @@ class Pipeline:
                     await getter
             if getter.done() and not getter.cancelled():
                 return getter.result()
+            if not queue.empty():  # the race above: the item landed, `getter` just missed it
+                return queue.get_nowait()
             if producer.done():
                 if producer.cancelled():
                     raise RuntimeError("the download task was cancelled")

@@ -4,8 +4,17 @@ The zip holds ``tgmirror.db`` (a ``VACUUM INTO`` snapshot, consistent even with 
 ``config.toml`` with its ``api_id``/``api_hash`` lines stripped, plus a ``manifest.json`` (format
 version, tgmirror version, the database's ``PRAGMA user_version``, a timestamp, and each file's
 SHA-256). Left out on purpose: ``sessions/``, any credential (keyring or config.toml) and ``tmp/``.
-No table in ``store/schema.sql`` holds an absolute path of the machine it was written on, so a
-snapshot from one OS opens correctly on another.
+
+**Correction (N6, Phase 15b)**: this used to claim no table holds an absolute path — wrong since
+Phase 11: ``backups.dir`` and a restore pair's ``mirrors.options_json`` (``RunOptions.from_backup``)
+both hold the backup directory's own path, which does *not* travel with the export. Importing on
+another machine (or the same one, if the directory moved) leaves those pairs pointing at a path
+that is not there any more — `tgmirror run`/`retry`/the menu's "Chạy tiếp" then refuse with
+``BackupDirMissing`` (``engine/runs.py``) instead of silently re-checking a live source that may
+not even exist any more; ``--from-backup DIR`` (or the menu's recovery dialog) repoints the pair at
+wherever the directory ended up. Every other path in the schema is relative or lives outside it
+entirely (media/session files are named by id, not by their original absolute path), so this is the
+one place "sang máy khác" needs a manual step.
 """
 
 import hashlib
@@ -52,9 +61,12 @@ def _sha256_file(path: Path) -> str:
 
 
 async def export_appdata(store: Store, paths: Paths, dest: Path) -> Manifest:
-    """Write a zip at ``dest``. Refuses (``ExportBusy``) while a run holds the data: a snapshot
-    taken mid-run and then run on another machine would send everything a second time."""
+    """Write a zip at ``dest``. Refuses (``ExportBusy``) while a run *or a backup* (T1, Phase 15b:
+    a live backup used to slip through this check entirely) holds the data: a snapshot taken mid-run
+    or mid-backup and then run on another machine would send/back up everything a second time."""
     if await store.active_run() is not None:
+        raise ExportBusy()
+    if await store.active_backup() is not None:
         raise ExportBusy()
 
     with tempfile.TemporaryDirectory(prefix="tgmirror-export-") as tmp:

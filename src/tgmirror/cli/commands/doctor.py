@@ -7,6 +7,8 @@ unreachable destination) must not hide the others. ``doctor`` exits 0 unless ``c
 itself cannot be read (an ordinary ``ConfigError``, same as any other command)."""
 
 import importlib.util
+import os
+import stat
 from contextlib import AsyncExitStack
 
 import typer
@@ -18,6 +20,7 @@ from tgmirror.core.auth import AccountInfo
 from tgmirror.core.config import config_has_credentials, credential_source
 from tgmirror.core.errors import TgMirrorError
 from tgmirror.core.gateway import TelegramGateway
+from tgmirror.core.paths import Paths
 from tgmirror.core.secrets import keyring_usable
 from tgmirror.store.db import Store
 from tgmirror.ui.messages import t
@@ -33,6 +36,12 @@ def doctor(ctx: typer.Context) -> None:
 
     async def command() -> None:
         typer.echo(t("doctor.title"))
+        # Checked before anything below gets a chance to call ``Paths.ensure()`` (``rt.connect``,
+        # ``opened_store``), which would otherwise silently re-tighten a widened directory before
+        # this ever saw it — this must report what it *found*, not what running doctor itself just
+        # fixed (T5, Phase 15b).
+        for line in _permission_lines(rt.paths):
+            typer.echo(line)
         gateway: TelegramGateway | None = None
         async with AsyncExitStack() as stack:
             config = rt.config()
@@ -92,6 +101,19 @@ async def _destination_lines(store: Store, gateway: TelegramGateway | None) -> l
         key = "doctor.destination_ok" if dst.is_admin and dst.can_post else "doctor.destination_bad"
         lines.append(t(key, title=dst.title))
     return lines
+
+
+def _permission_lines(paths: Paths) -> list[str]:
+    """T5, Phase 15b: ``sessions/`` should never be readable by anyone but the owner. Call this
+    before anything that might call ``Paths.ensure()`` (see the caller). POSIX only: chmod bits do
+    not mean the same thing on Windows. Nothing to say if the directory does not exist yet (no
+    session has ever been created)."""
+    if os.name == "nt" or not paths.sessions_dir.exists():
+        return []
+    mode = stat.S_IMODE(paths.sessions_dir.stat().st_mode)
+    if mode & ~0o700:
+        return [t("doctor.sessions_perm_warn", mode=oct(mode))]
+    return [t("doctor.sessions_perm_ok")]
 
 
 def _safety_lines() -> list[str]:

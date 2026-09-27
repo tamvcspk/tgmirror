@@ -3,6 +3,16 @@
 # to PyPI over Trusted Publishing (OIDC, Phase 14 — no token stored in the repo). PyInstaller
 # binaries, winget, the APT/RPM repo and AUR are deliberately not here yet — each needs its own
 # external account/secret setup with the user first.
+#
+# T4, Phase 15b: split from one job into five, each with only the permissions it needs — the job
+# that holds the Docker Hub secret no longer also has `contents: write` (it never needed it), and
+# `:latest` is pointed at a version only after the GitHub Release and the PyPI publish have both
+# already succeeded (`docker-latest`, re-tagging the already-pushed version image via `docker
+# buildx imagetools create` — no rebuild). A version-specific Docker tag still goes out earlier,
+# alongside the wheel/sdist: it is not a moving target the way `:latest` is, so it carries none of
+# that ordering risk. If a later job fails, the earlier ones' results (the version-tagged image,
+# the PyPI release, the GitHub Release) already stand and do not need to be redone — only re-run
+# the job that failed (and anything after it that still depends on it).
 
 name: Release
 
@@ -11,14 +21,15 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 jobs:
-  release:
+  build:
+    name: Build, test and package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
 
@@ -26,11 +37,15 @@ jobs:
         uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
+          # pyproject.toml's floor and the Docker image's base (T4, Phase 15b): this gate runs on
+          # the actual minimum supported version, not whatever the runner's default happens to be.
+          python-version: "3.11"
 
       - name: Install dependencies
         run: uv sync --frozen
 
       - name: Check the tag matches pyproject.toml's version
+        id: version
         run: |
           set -euo pipefail
           PY_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
@@ -40,7 +55,18 @@ jobs:
             exit 1
           fi
           echo "version=$PY_VERSION" >> "$GITHUB_OUTPUT"
-        id: version
+
+      - name: Determine prerelease status
+        id: meta
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          IS_PRERELEASE=false
+          # a pre-release version (e.g. 0.2.0rc1) never becomes `:latest` or a non-prerelease Release
+          if [[ "$VERSION" =~ (a|b|rc|dev)[0-9] ]]; then
+            IS_PRERELEASE=true
+          fi
+          echo "prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
 
       - name: ruff check
         run: uv run ruff check .
@@ -54,7 +80,7 @@ jobs:
       - name: Build wheel and sdist
         run: uv build
 
-      - name: Upload the wheel/sdist for the PyPI publish job
+      - name: Upload the wheel/sdist for the PyPI/GitHub Release jobs
         uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -74,6 +100,21 @@ jobs:
         working-directory: dist
         run: sha256sum * > SHA256SUMS
 
+      - name: Upload the checksums for the GitHub Release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: dist/SHA256SUMS
+
+  docker:
+    name: Build and push the Docker image (version tag only, never :latest here)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -89,57 +130,56 @@ jobs:
           docker run --rm tgmirror:smoke --help
           docker run --rm tgmirror:smoke doctor
 
-      - name: Determine version metadata
-        id: meta
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          TAGS="docker.io/tamvo1808/tgmirror:$VERSION"
-          IS_PRERELEASE=false
-          # a pre-release version (e.g. 0.2.0rc1) never becomes `:latest` or a non-prerelease Release
-          if [[ "$VERSION" =~ (a|b|rc|dev)[0-9] ]]; then
-            IS_PRERELEASE=true
-          else
-            TAGS="${TAGS}"$'\n'"docker.io/tamvo1808/tgmirror:latest"
-          fi
-          echo "prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
-          {
-            echo "tags<<EOF"
-            echo "$TAGS"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Log in to Docker Hub
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Push the image to Docker Hub
+      - name: Push the version-tagged image
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: docker.io/tamvo1808/tgmirror:${{ needs.build.outputs.version }}
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the wheel/sdist built by the build job
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Download the checksums built by the build job
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: dist
 
       - name: GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
-          prerelease: ${{ steps.meta.outputs.prerelease }}
+          prerelease: ${{ needs.build.outputs.prerelease }}
 
   publish-pypi:
     name: Publish to PyPI (Trusted Publishing)
-    needs: release
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/tgmirror/${{ needs.release.outputs.version }}/
+      url: https://pypi.org/project/tgmirror/${{ needs.build.outputs.version }}/
     permissions:
       id-token: write # OIDC token for Trusted Publishing; no API token/secret needed
     steps:
-      - name: Download the wheel/sdist built by the release job
+      - name: Download the wheel/sdist built by the build job
         uses: actions/download-artifact@v4
         with:
           name: dist
@@ -149,3 +189,29 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true # a re-run after a later step failed does not fail on files already up
+
+  docker-latest:
+    name: Point :latest at this version
+    # Only after the version-tagged image, the GitHub Release and the PyPI publish have all
+    # already succeeded (T4, Phase 15b) — `:latest` is a moving target other machines may already
+    # be pulling automatically, so it should never point at a release that is only half out.
+    needs: [build, docker, github-release, publish-pypi]
+    if: needs.build.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Re-tag the already-pushed version image as :latest (no rebuild)
+        run: |
+          docker buildx imagetools create \
+            --tag docker.io/tamvo1808/tgmirror:latest \
+            docker.io/tamvo1808/tgmirror:${{ needs.build.outputs.version }}

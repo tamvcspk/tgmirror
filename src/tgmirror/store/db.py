@@ -372,6 +372,10 @@ class Store:
         async with self._lock:
             return await floodlog.events_of_run(self._conn, run_id)
 
+    async def backup_flood_events(self, backup_id: int) -> list[FloodEvent]:
+        async with self._lock:
+            return await floodlog.events_of_backup(self._conn, backup_id)
+
     async def flood_count_since(self, since: datetime) -> int:
         async with self._lock:
             return await floodlog.count_since(self._conn, since)

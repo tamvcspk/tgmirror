@@ -116,6 +116,10 @@ async def begin_backup(
             raise FiltersChanged(directory)
         filters = existing.filters_json
         protected_ack = protected_ack or existing.protected_ack
+        # a resume: cut off a final line a previous kill left mid-write, before anything reads
+        # `last_id` from this directory (N3, Phase 15b) — a corrupt line elsewhere is left for
+        # `last_id`/`iter_records` to raise on, further down, instead of silently repeating forever.
+        await asyncio.to_thread(backupdir.repair_trailing_line, directory)
     dir_key = str(directory)
     if (previous := await store.latest_backup(dir_key)) is not None:
         check_runnable(previous, utc_now())  # refuse what Telegram already told us it would reject
@@ -262,6 +266,17 @@ class BackupWriter:
         except TgMirrorError as exc:
             reason = "transient" if isinstance(exc, Transient) else f"{type(exc).__name__}: {exc}"
             await self._store.finish_backup(backup.id, RunStatus.FAILED, fail_reason=reason[:200])
+            raise
+        except BaseException as exc:
+            # N4, Phase 15b: mirrors ``Runner.run`` (``engine/runner.py``) — a second Ctrl+C, a
+            # cancelled task, or any error that is not ours must still close the row instead of
+            # leaving it ``running`` forever with a fresh heartbeat.
+            interrupted = isinstance(exc, KeyboardInterrupt | asyncio.CancelledError)
+            reason = "interrupted" if interrupted else f"crashed: {type(exc).__name__}: {exc}"
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(
+                    self._store.finish_backup(backup.id, RunStatus.FAILED, fail_reason=reason[:200])
+                )
             raise
         finally:
             heartbeat.cancel()

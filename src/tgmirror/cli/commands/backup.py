@@ -18,7 +18,7 @@ from typing import Annotated
 import typer
 
 from tgmirror.cli import wizard
-from tgmirror.cli.errors import Declined, UsageProblem, run
+from tgmirror.cli.errors import Declined, UsageProblem, describe, run
 from tgmirror.cli.filter_options import (
     AlbumOption,
     ContainsOption,
@@ -261,7 +261,6 @@ class BackupFlow:
         return [
             self._pick_source,
             self._pick_dir,
-            self._check_existing,
             self._confirm_d3,
             self._pick_filters,
             self._confirm,
@@ -281,6 +280,27 @@ class BackupFlow:
             raise UsageProblem("err.missing_flag", flag="SRC")
 
     async def _pick_dir(self) -> None:
+        """Picks a directory and, in the same step, checks it does not already hold a backup of a
+        different source (T3, Phase 15b: this used to be a separate step, ``_check_existing``,
+        that asked nothing on its own — a wrong directory ended the whole wizard instead of just
+        asking for another one, the way every other re-askable answer in this flow already does).
+
+        A directory still cooling down from a flood (``RunWaiting``) is not retried the same way:
+        picking a *different* directory would not be answering the question the error actually
+        raises (this one is not usable right now), so that still ends the flow, as before.
+        """
+        attempts = wizard.MAX_TITLE_ATTEMPTS if self._o.dir is None and self._interactive else 1
+        for attempt in range(1, attempts + 1):
+            await self._pick_dir_once()
+            try:
+                await self._check_existing()
+                return
+            except WrongSource as exc:
+                if attempt == attempts:
+                    raise
+                self._echo(describe(exc))
+
+    async def _pick_dir_once(self) -> None:
         if self._o.dir is not None:
             given = self._o.dir
             self._dir = await asyncio.to_thread(given.resolve)
@@ -290,8 +310,6 @@ class BackupFlow:
             raise UsageProblem("err.missing_flag", flag="DIR")
 
     async def _check_existing(self) -> None:
-        """Fail before asking anything else, the same way ``CloneFlow._read_history`` does: a
-        directory that cannot be backed up into right now, or already holds a different source."""
         assert self._dir is not None and self._source is not None
         self._existing = read_manifest(self._dir)
         if self._existing is not None and self._existing.src_id != self._source.id:

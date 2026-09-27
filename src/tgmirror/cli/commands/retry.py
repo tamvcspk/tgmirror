@@ -8,6 +8,7 @@ at the filter. It runs in the foreground of this terminal, like ``clone`` and ``
 so the full-screen menu can drive a retry too.
 """
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -45,6 +46,14 @@ def retry(
             "(see `tgmirror run --help`).",
         ),
     ] = False,
+    from_backup: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-backup",
+            help="Point a restore pair at a different backup directory (see `tgmirror run "
+            "--help`) before retrying its failed messages.",
+        ),
+    ] = None,
 ) -> None:
     """Copy again the messages that a run failed to copy (`tgmirror history N` lists them).
 
@@ -58,7 +67,12 @@ def retry(
 
     async def command() -> None:
         async with opened_store(rt) as store:
-            result = await retry_flow(store, number, force_takeover=force_takeover)
+            result = await retry_flow(
+                store,
+                number,
+                force_takeover=force_takeover,
+                from_backup=str(from_backup) if from_backup is not None else None,
+            )
             if result is None:
                 typer.echo(t("retry.nothing", id=(await resolve_run(store, number)).id))
                 return
@@ -73,7 +87,11 @@ def retry(
 
 
 async def retry_flow(
-    store: Store, number: str | None, *, force_takeover: bool = False
+    store: Store,
+    number: str | None,
+    *,
+    force_takeover: bool = False,
+    from_backup: str | None = None,
 ) -> ReadyToRun | None:
     """Everything ``tgmirror retry``/the menu's "Thử lại tin lỗi" does before ``execute()``.
 
@@ -81,13 +99,23 @@ async def retry_flow(
     run for its message; the menu already has it from picking the target).
     """
     target = await resolve_run(store, number)
-    return await retry_flow_for(store, target, force_takeover=force_takeover)
+    return await retry_flow_for(
+        store, target, force_takeover=force_takeover, from_backup=from_backup
+    )
 
 
 async def retry_flow_for(
-    store: Store, target: Run, *, force_takeover: bool = False
+    store: Store,
+    target: Run,
+    *,
+    force_takeover: bool = False,
+    from_backup: str | None = None,
 ) -> ReadyToRun | None:
-    """Like ``retry_flow``, but for an already-resolved ``target`` (the menu picks it itself)."""
+    """Like ``retry_flow``, but for an already-resolved ``target`` (the menu picks it itself).
+
+    ``from_backup`` (N6, Phase 15b): see ``run.py::resume_flow``'s docstring — repoints a restore
+    pair at a different directory instead of the one it last used.
+    """
     if await store.count_failed(target.id) == 0:  # nothing to do: no need to connect
         return None
     if (last := await store.latest_run(target.src_id, target.dst_id)) is not None:
@@ -105,7 +133,7 @@ async def retry_flow_for(
         placeholder=target.options.placeholder,
         protected_ack=target.options.protected_ack,
         topic_as_hashtag=target.options.topic_as_hashtag,
-        from_backup=target.options.from_backup,
+        from_backup=from_backup if from_backup is not None else target.options.from_backup,
     )
     src, dst = pair_of(target)
     return ReadyToRun(src, dst, request)

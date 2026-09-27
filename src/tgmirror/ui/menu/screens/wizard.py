@@ -56,7 +56,7 @@ class WizardScreen(Screen):
             return "stay"
         if self._task.done():
             return self._outcome()
-        if self.prompter.handle_key(key):
+        if await self.prompter.handle_key(key):
             return await self._settle()
         return "stay"  # busy between two questions: the key means nothing yet
 

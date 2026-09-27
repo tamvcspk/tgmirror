@@ -20,12 +20,24 @@ from tgmirror.cli.runtime import Connection, Runtime
 from tgmirror.store.db import Store
 from tgmirror.ui.menu.app import MenuApp
 from tgmirror.ui.menu.screens.account import AccountScreen
+from tgmirror.ui.menu.screens.main_menu import MainMenuScreen
 
 
 def plain(renderable: RenderableType) -> str:
     console = Console(file=io.StringIO(), record=True, no_color=True, width=200)
     console.print(renderable)
     return console.export_text()
+
+
+async def down_presses_to(app_: MenuApp, action: str) -> list[MenuKey]:
+    """How many ``MenuKey.DOWN`` the main menu needs from its top item to land on ``action`` —
+    looked up by value on a throwaway probe screen (same ``on_enter`` logic, no side effect on
+    ``app_``) so the count survives the item list growing. N1, Phase 15b: three tests used to
+    hardcode this count and hung once "Backup"/"Restore" shifted every later item down."""
+    probe = MainMenuScreen(app_)
+    await probe.on_enter()
+    values = [value for _, value in probe._list.items]
+    return [MenuKey.DOWN] * values.index(action)
 
 
 runner = CliRunner()
@@ -67,10 +79,8 @@ async def test_menu_app_quits_from_the_main_menu_with_code_0(
     console = Console(file=io.StringIO(), no_color=True, width=200)
     app_ = MenuApp(rt, store, Connection(auth, gateway), ACCOUNT, console=console)
     queue: asyncio.Queue[MenuKey | str] = asyncio.Queue()
-    # main menu with no run history: Sao chép mới, Trạng thái, Lịch sử, Kênh đã join, Tài khoản,
-    # Cấu hình, Thoát — six Down presses land on "Thoát".
-    for _ in range(6):
-        queue.put_nowait(MenuKey.DOWN)
+    for key in await down_presses_to(app_, "quit"):
+        queue.put_nowait(key)
     queue.put_nowait(MenuKey.ENTER)
 
     code = await app_.run(queue=queue)
@@ -92,8 +102,8 @@ async def test_menu_app_shows_whoami_on_the_account_screen(
     console = Console(file=io.StringIO(), no_color=True, width=200)
     app_ = MenuApp(rt, store, Connection(auth, gateway), ACCOUNT, console=console)
     queue: asyncio.Queue[MenuKey | str] = asyncio.Queue()
-    for _ in range(4):  # Sao chép mới -> Trạng thái -> Lịch sử -> Kênh đã join -> Tài khoản
-        queue.put_nowait(MenuKey.DOWN)
+    for key in await down_presses_to(app_, "account"):
+        queue.put_nowait(key)
     queue.put_nowait(MenuKey.ENTER)  # into Tài khoản
 
     async def quit_once_on_the_account_screen() -> None:
@@ -114,7 +124,7 @@ async def test_new_clone_opens_the_wizard_and_esc_returns_to_the_menu(
     make_runtime: MakeRuntime, tmp_path: Path
 ) -> None:
     """Chặng 2: "Sao chép mới" is a real wizard now; Esc at its first question pops back to the
-    main menu, which still works (six Down presses reach "Thoát")."""
+    main menu, which still works (Down presses reach "Thoát", however many now precede it)."""
     gateway, auth = FakeGateway(), FakeAuth(logged_in=ACCOUNT)
     gateway.add_channel("Source")
     rt = make_runtime(gateway=gateway, auth=auth, interactive=True)
@@ -122,7 +132,7 @@ async def test_new_clone_opens_the_wizard_and_esc_returns_to_the_menu(
     console = Console(file=io.StringIO(), no_color=True, width=200)
     app_ = MenuApp(rt, store, Connection(auth, gateway), ACCOUNT, console=console)
     queue: asyncio.Queue[MenuKey | str] = asyncio.Queue()
-    for key in [MenuKey.ENTER, MenuKey.ESC, *[MenuKey.DOWN] * 6, MenuKey.ENTER]:
+    for key in [MenuKey.ENTER, MenuKey.ESC, *await down_presses_to(app_, "quit"), MenuKey.ENTER]:
         queue.put_nowait(key)
 
     code = await app_.run(queue=queue)

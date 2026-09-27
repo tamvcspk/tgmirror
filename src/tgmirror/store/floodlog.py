@@ -44,3 +44,14 @@ async def events_of_run(db: aiosqlite.Connection, run_id: int) -> list[FloodEven
     return [
         FloodEvent(datetime.fromisoformat(r[0]), r[1], r[2], r[3]) for r in await cur.fetchall()
     ]
+
+
+async def events_of_backup(db: aiosqlite.Connection, backup_id: int) -> list[FloodEvent]:
+    """As ``events_of_run``, for a backup (T1, Phase 15b: ``tgmirror status`` showing one)."""
+    cur = await db.execute(
+        "SELECT ts, kind, seconds, method FROM flood_log WHERE backup_id = ? ORDER BY id",
+        (backup_id,),
+    )
+    return [
+        FloodEvent(datetime.fromisoformat(r[0]), r[1], r[2], r[3]) for r in await cur.fetchall()
+    ]

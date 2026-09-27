@@ -37,6 +37,7 @@ from tgmirror.ui.progress import LineReporter, duration
 
 BAR_WIDTH = 20
 REFRESH = 4  # redraws a second; Live only repaints what changed
+RECENT_LINES = 5  # silent mode: how many notice/transfer lines render() keeps (C3, Phase 15b)
 
 
 def _bar(fraction: float | None) -> Text:
@@ -82,15 +83,27 @@ class TuiReporter:
         console: Console | None = None,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = utc_now,
+        silent: bool = False,
     ) -> None:
         """``run`` is the run as it stands the moment the run starts (``cli/commands/run.py``
         always has it before building a reporter). Seeding it here, instead of waiting for the
         first ``progress()``, matters: a run of one big file can go a long time — sometimes the
         whole run, if it keeps meeting FloodWait — before any batch commits, and until then this
         was the one thing that made the panel stay blank instead of showing the run has started.
+
+        ``silent`` (C3, Phase 15b): the full-screen menu (``ui/menu/run_screen.py``) never enters
+        this as a context manager, only ever calls ``render()`` — but notices/transfer lines used
+        to print through ``self._live.console.print`` regardless, drawing over the menu's own
+        alt-screen ``Live`` from the top corner, then getting erased by the next redraw (flicker,
+        and a large file's transfer progress effectively invisible). Silent keeps the last few
+        such lines in ``render()`` itself instead of printing anything; the classic CLI (its own
+        private ``Live``, printing above it is the whole point) is unaffected — it never sets this.
         """
         self._live = Live(console=console, refresh_per_second=REFRESH, transient=False)
-        self._lines = LineReporter(self._live.console.print)  # notices, per-file transfer lines
+        self._silent = silent
+        self._recent: list[str] = []  # silent mode only: the last few notice/transfer lines
+        emit = self._buffer if silent else self._live.console.print
+        self._lines = LineReporter(emit)  # notices, per-file transfer lines
         self._src, self._dst = run.src_title, run.dst_title
         self._delay = limits.min_delay
         self._clock = clock
@@ -99,6 +112,10 @@ class TuiReporter:
         self._last_flood: float | None = None
         self._paused = False
         self._run: Run = run
+
+    def _buffer(self, line: str) -> None:
+        self._recent.append(line)
+        del self._recent[:-RECENT_LINES]
 
     def __enter__(self) -> "TuiReporter":
         self._live.__enter__()
@@ -149,12 +166,15 @@ class TuiReporter:
         if self._floods:
             ago = duration(timedelta(seconds=max(self._clock() - (self._last_flood or 0.0), 0.0)))
             counts += t("tui.floods", count=self._floods, ago=ago)
-        return Group(
+        body = [
             Text(header),
             Text.assemble(_bar(est.fraction), "  ", progress),
             Text(counts),
-            Text(t("tui.keys"), style="dim"),
-        )
+        ]
+        if self._silent:
+            body += [Text(line, style="dim") for line in self._recent]
+        body.append(Text(t("tui.keys"), style="dim"))
+        return Group(*body)
 
     def _refresh(self) -> None:
         self._live.update(self.render())

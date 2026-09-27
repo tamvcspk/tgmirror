@@ -9,6 +9,7 @@ clone of the same original source into the same destination.
 """
 
 import random
+import shutil
 import sqlite3
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -24,7 +25,13 @@ from tgmirror.core.gateway import ChannelInfo, ChatKind, ExportedMedia, Exported
 from tgmirror.engine import backupdir
 from tgmirror.engine.backup_reader import BackupReader
 from tgmirror.engine.runner import RunControl, Runner, RunnerTiming
-from tgmirror.engine.runs import NeedsAcknowledgement, RunRequest, begin_run
+from tgmirror.engine.runs import (
+    BackupDirMissing,
+    NeedsAcknowledgement,
+    RunRequest,
+    WrongBackupSource,
+    begin_run,
+)
 from tgmirror.store.db import Store
 from tgmirror.store.runs import Run, RunStatus
 
@@ -265,6 +272,87 @@ async def test_retry_sends_only_the_failed_message_again(rig: Rig) -> None:
     assert final.done == 1
     assert [r[1] for r in rows(rig)] == ["done", "done"]
     assert rig.dst_texts == ["a", "b"]
+
+
+# ---- N6, Phase 15b: a restore pair whose directory went missing or moved ----------------------
+
+
+async def test_begin_run_refuses_and_creates_nothing_when_the_backup_dir_is_missing(
+    rig: Rig,
+) -> None:
+    """Never falls back to a live re-check just because the directory went missing — the original
+    source may be long gone by now, so there is nothing safe to fall back to."""
+    src = rig.seed([_msg(1, "a")])
+    store = await rig.store()
+    missing = rig.dir / "does-not-exist"
+    request = RunRequest(mode="reupload", from_backup=str(missing), reset_polls=True)
+
+    with pytest.raises(BackupDirMissing):
+        await begin_run(store, rig.gw, src, rig.dst, request)
+
+    assert await store.latest_run(src.id, rig.dst.id) is None  # no run row was created
+
+
+async def test_begin_run_refuses_a_backup_directory_of_a_different_source(
+    rig: Rig, tmp_path: Path
+) -> None:
+    """``--from-backup``/a repointed restore must back up the *same* source as the pair, or the
+    pair would silently start mixing two channels' history together."""
+    src = rig.seed([_msg(1, "a")])
+    store = await rig.store()
+    run = await rig.begin(store, src)
+    await rig.runner(store).run(run)
+
+    other_dir = tmp_path / "other"
+    other_manifest = backupdir.BackupManifest(
+        format_version=1,
+        tgmirror_version="0.1.0",
+        src_id=SRC_ID - 1,
+        src_title="Other",
+        src_kind=ChatKind.BROADCAST,
+        src_about="",
+        src_noforwards=False,
+        protected_ack=False,
+        filters_json="{}",
+    )
+    backupdir.write_manifest(other_dir, other_manifest)
+    request = RunRequest(mode="reupload", from_backup=str(other_dir), reset_polls=True)
+
+    with pytest.raises(WrongBackupSource):
+        await begin_run(store, rig.gw, src, rig.dst, request)
+
+
+async def test_begin_run_repoints_a_restore_pair_at_a_new_directory_of_the_same_source(
+    rig: Rig, tmp_path: Path
+) -> None:
+    """The happy path of ``--from-backup``: a directory backing up the *same* source (moved, or a
+    redone backup) continues the pair's delta from wherever it left off."""
+    src = rig.seed([_msg(1, "a"), _msg(2, "b")])
+    store = await rig.store()
+    run = await rig.begin(store, src)
+    first = await rig.runner(store).run(run)
+    assert first.done == 2
+
+    moved = tmp_path / "moved"
+    shutil.copytree(rig.dir, moved)
+    backupdir.append_records(moved, [_msg(3, "c")])
+    request = RunRequest(mode="reupload", from_backup=str(moved), reset_polls=True)
+    started = await begin_run(store, rig.gw, src, rig.dst, request)
+    reader = BackupReader(moved, backupdir.read_manifest(moved))
+    runner = Runner(
+        store,
+        rig.gw,
+        LIMITS,
+        reporter=rig.recorder,
+        sleep=rig.sleep,
+        rng=random.Random(0),
+        reader_override=reader,
+    )
+    final = await runner.run(started.run)
+
+    assert final.status is RunStatus.DONE
+    assert final.done == 1  # only "c": 1 and 2 are already done, same mirror
+    assert rig.dst_texts == ["a", "b", "c"]
 
 
 async def test_a_live_clone_and_a_restore_of_the_same_source_share_one_mirror(rig: Rig) -> None:

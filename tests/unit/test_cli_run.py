@@ -23,6 +23,7 @@ from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.core.errors import FloodWait
 from tgmirror.core.gateway import ChatKind
 from tgmirror.engine.runner import RunControl, Runner
+from tgmirror.store.backups import Backup, BackupSpec
 from tgmirror.store.runs import Control, Run, RunSpec, RunStatus
 
 runner = CliRunner()
@@ -49,6 +50,19 @@ def start_elsewhere(rt: Runtime, gateway: FakeGateway) -> Run:
     async def do() -> Run:
         async with opened_store(rt) as store:
             return (await store.start_run(RunSpec(src, dst))).run
+
+    return asyncio.run(do())
+
+
+def start_backup_elsewhere(
+    rt: Runtime, gateway: FakeGateway, directory: str = "/backups/x"
+) -> Backup:
+    """As ``start_elsewhere``, for a backup (T1, Phase 15b: it must show up wherever a run does)."""
+    src = next(c for c in gateway.channels.values() if c.title == "Source")
+
+    async def do() -> Backup:
+        async with opened_store(rt) as store:
+            return await store.start_backup(BackupSpec(src, directory))
 
     return asyncio.run(do())
 
@@ -845,8 +859,30 @@ def test_history_lists_the_runs_newest_first(
 
     assert result.exit_code == 0, result.output
     lines = [line for line in result.output.splitlines() if "Source → Copy" in line]
-    assert len(lines) == 2 and lines[0].split()[0] == "2" and lines[1].split()[0] == "1"
+    # "R" (not "B"): a run, distinct from a backup's own id sequence (T1, Phase 15b)
+    assert len(lines) == 2 and lines[0].split()[0] == "R2" and lines[1].split()[0] == "R1"
     assert "done" in lines[0] and "Recent runs" in result.output
+
+
+def test_history_lists_backups_too_marked_by_kind(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """T1, Phase 15b: a backup used to be invisible in ``tgmirror history`` entirely."""
+    source_with_messages(gateway, 2)
+    rt = make_runtime(gateway=gateway)
+    runner.invoke(app, CLONE, obj=rt)
+    start_backup_elsewhere(rt, gateway)
+
+    result = runner.invoke(app, ["history"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "R1" in result.output and "B1" in result.output
+    assert "/backups/x" in result.output  # the table may fold a long "src → dir" across lines
+
+    as_json = json.loads(runner.invoke(app, ["history", "--json"], obj=rt).output)
+    assert {item["kind"] for item in as_json} == {"run", "backup"}
+    backup_record = next(item for item in as_json if item["kind"] == "backup")
+    assert backup_record["directory"] == "/backups/x" and "destination" not in backup_record
 
 
 def test_history_of_an_empty_log(make_runtime: MakeRuntime) -> None:

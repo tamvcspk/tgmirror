@@ -57,6 +57,32 @@ class NeedsAcknowledgement(RunError):
         self.title = title
 
 
+class BackupDirMissing(RunError):
+    """A run/retry/resume of a restore pair (Phase 11b) whose backup directory no longer has a
+    readable ``backup.json`` — deleted, moved, or carried to another machine without it (N6, Phase
+    15b). Raised before anything is written: hard rule 1 means a restore's source is never
+    silently re-checked against a live channel instead (the original may not even exist any more),
+    so a missing directory must refuse, not fall back."""
+
+    def __init__(self, directory: Path) -> None:
+        super().__init__(f"{directory} is not a readable backup directory (backup.json missing)")
+        self.directory = directory
+
+
+class WrongBackupSource(RunError):
+    """``--from-backup``/a restore repointed at a directory that backs up a different source than
+    the pair it is being attached to (N6, Phase 15b) — accepting it would silently start mixing
+    two different channels' history into one pair."""
+
+    def __init__(self, directory: Path, expected_src_id: int, found_src_id: int) -> None:
+        super().__init__(
+            f"{directory} backs up source {found_src_id}, not {expected_src_id} (this pair's)"
+        )
+        self.directory = directory
+        self.expected_src_id = expected_src_id
+        self.found_src_id = found_src_id
+
+
 class RunWaiting(RunError):
     """The clone must not run before ``until`` (Telegram asked to wait, or a PEER_FLOOD rest)."""
 
@@ -131,6 +157,14 @@ async def begin_run(
     request = request or RunRequest()
     check_options(request)
     manifest = backupdir.read_manifest(Path(request.from_backup)) if request.from_backup else None
+    if request.from_backup is not None:
+        # N6, Phase 15b: never fall back to a live re-check just because the directory this pair
+        # reads from went missing (moved, deleted, or this is a different machine) — the original
+        # source may be long gone by now, so there is nothing safe to fall back to.
+        if manifest is None:
+            raise BackupDirMissing(Path(request.from_backup))
+        if manifest.src_id != src.id:
+            raise WrongBackupSource(Path(request.from_backup), src.id, manifest.src_id)
     protected = False
     if may_reupload(request.mode, request.caption, request.topic_as_hashtag):
         protected = (

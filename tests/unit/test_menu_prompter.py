@@ -3,6 +3,7 @@ question — inside a step, across steps, and out of the flow at the very first 
 
 import asyncio
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from rich.console import Console
 
 from tgmirror.cli.keys import MenuKey
 from tgmirror.core.errors import UsageError
+from tgmirror.ui.menu import prompter as prompter_module
 from tgmirror.ui.menu.prompter import GoBack, MenuPrompter, complete_path
 from tgmirror.ui.prompts import Choice
 
@@ -26,7 +28,7 @@ async def drive(prompter: MenuPrompter, flow: Any, keys: list[Key | list[Key]]) 
             assert not task.done(), f"the flow ended early: {task}"
             await asyncio.sleep(0)
         for key in item if isinstance(item, list) else [item]:
-            prompter.handle_key(key)
+            await prompter.handle_key(key)
         await asyncio.sleep(0)
     return await asyncio.wait_for(task, 1)
 
@@ -71,13 +73,13 @@ async def test_a_secret_is_never_drawn_nor_listed() -> None:
     while not prompter.asking:  # noqa: ASYNC110 - no event to await
         await asyncio.sleep(0)
     for key in "98765":
-        prompter.handle_key(key)
+        await prompter.handle_key(key)
     assert prompter.question is not None
     console = Console(width=80, record=True, no_color=True)
     with console.capture():
         console.print(prompter.question.render(None))
     assert "98765" not in console.export_text()
-    prompter.handle_key(MenuKey.ENTER)
+    await prompter.handle_key(MenuKey.ENTER)
     assert await task == "98765"
     assert [a.shown for a in prompter.answered] == ["••••"]
 
@@ -241,6 +243,40 @@ def test_complete_path_no_match_leaves_text_unchanged() -> None:
     assert matches == []
 
 
+async def test_tab_completion_runs_off_the_event_loop_not_blocking_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T3, Phase 15b: ``complete_path`` scans the filesystem, which can block on a slow path (a
+    network share) — before this, Tab called it as a plain (synchronous) function, freezing the
+    whole frame for as long as the scan took. Proven here with a slow stand-in and a concurrent
+    task that must get to run *during* the scan (not only after it) for this to pass."""
+
+    def slow_complete_path(text: str, *, only_directories: bool = False) -> tuple[str, list[str]]:
+        time.sleep(0.2)
+        return text, []
+
+    monkeypatch.setattr(prompter_module, "complete_path", slow_complete_path)
+    prompter = MenuPrompter()
+    task = asyncio.ensure_future(prompter.path("dir?", only_directories=True))
+    while not prompter.asking:  # noqa: ASYNC110 - no event to await
+        await asyncio.sleep(0)
+
+    progressed = False
+
+    async def tick_while_waiting() -> None:
+        nonlocal progressed
+        await asyncio.sleep(0.05)  # well before the 0.2s scan finishes
+        progressed = True
+
+    ticker = asyncio.ensure_future(tick_while_waiting())
+    await prompter.handle_key(MenuKey.TAB)  # blocks ~0.2s, but off this loop
+
+    assert progressed  # the ticker ran *during* the scan: it was not blocking this event loop
+    await prompter.handle_key(MenuKey.ENTER)
+    await task
+    ticker.cancel()
+
+
 async def test_path_question_tab_completes_a_single_match_end_to_end(tmp_path: Path) -> None:
     (tmp_path / "backups").mkdir()
     prompter = MenuPrompter()
@@ -265,17 +301,17 @@ async def test_path_question_tab_with_several_matches_shows_them_until_narrowed(
     while not prompter.asking:  # noqa: ASYNC110 - no event to await
         await asyncio.sleep(0)
     for key in str(tmp_path / "back"):
-        prompter.handle_key(key)
-    prompter.handle_key(MenuKey.TAB)
+        await prompter.handle_key(key)
+    await prompter.handle_key(MenuKey.TAB)
 
     assert prompter.question is not None
     assert prompter.question.text == str(tmp_path / "backup_")  # completed to the common prefix
     assert prompter.question.matches == ["backup_a" + os.sep, "backup_b" + os.sep]
 
     for key in "a":  # narrows to one match; typing clears the shown candidates
-        prompter.handle_key(key)
+        await prompter.handle_key(key)
     assert prompter.question.matches == []
-    prompter.handle_key(MenuKey.TAB)
-    prompter.handle_key(MenuKey.ENTER)
+    await prompter.handle_key(MenuKey.TAB)
+    await prompter.handle_key(MenuKey.ENTER)
 
     assert await asyncio.wait_for(task, 1) == str(tmp_path / "backup_a") + os.sep

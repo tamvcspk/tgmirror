@@ -208,6 +208,13 @@ class ExportedMedia:
     mime: str | None = None
     size: int | None = None
     duration: float | None = None
+    # the name/tags Telegram itself carried, as opposed to ``filename`` above (this backup's own
+    # storage name, by message id, never the source's) — optional (C2, Phase 15b): a backup made
+    # before this field existed simply has none, and restore then falls back to what it always
+    # did (Telegram/hachoir detecting them from the file itself).
+    original_filename: str | None = None
+    audio_title: str | None = None
+    audio_performer: str | None = None
     # poll/quiz
     poll_question: str | None = None
     poll_options: tuple[str, ...] = ()

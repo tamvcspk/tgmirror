@@ -30,7 +30,7 @@ import shutil
 import tempfile
 import threading
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -50,6 +50,7 @@ from tgmirror.core.errors import (
 from tgmirror.core.gateway import (
     CaptionMode,
     ChatKind,
+    MediaKind,
     MessageReader,
     SrcMessage,
     TelegramGateway,
@@ -255,6 +256,21 @@ class Runner:
             # run reconciles it. Any other error left nothing pending (see ``_send``).
             reason = "transient" if isinstance(exc, Transient) else f"{type(exc).__name__}: {exc}"
             await self._store.finish(run.id, RunStatus.FAILED, fail_reason=reason[:200])
+            raise
+        except BaseException as exc:
+            # N4, Phase 15b: a second Ctrl+C (raw ``KeyboardInterrupt``, ``cli/interrupt.py``), a
+            # cancelled task, or any error that is not ours (``OSError`` on a full disk, a stray
+            # ``RuntimeError``/``ValueError``) used to leave the run ``running`` with a fresh
+            # heartbeat forever — every later attempt saw a "live" ``RunBusy``/``BackupBusy`` for a
+            # process that had already died. Whatever it was, the batch in flight is unsettled
+            # either way (like any other error here), so the row is closed the same way; shielded
+            # so a cancellation that is still in flight cannot also cut off closing the row.
+            interrupted = isinstance(exc, KeyboardInterrupt | asyncio.CancelledError)
+            reason = "interrupted" if interrupted else f"crashed: {type(exc).__name__}: {exc}"
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(
+                    self._store.finish(run.id, RunStatus.FAILED, fail_reason=reason[:200])
+                )
             raise
         finally:
             heartbeat.cancel()
@@ -643,7 +659,7 @@ class Runner:
         if len(source) != len(ids):  # a pending message vanished from the source: cannot compare
             outcome, dst_ids = (Outcome.AMBIGUOUS if tail else Outcome.RESEND), []
         else:
-            outcome, dst_ids = judge(source, tail)
+            outcome, dst_ids = judge(source, tail, placeholders=_placeholder_ids(source, run))
 
         if outcome is Outcome.CONFIRMED:
             await self._store.confirm_pending(run.id, dict(zip(ids, dst_ids, strict=True)))
@@ -761,3 +777,20 @@ def _extra_stats(batch: Batch) -> dict[str, int] | None:
 
 def _bytes_on_disk(files: tuple[Path, ...]) -> int:
     return sum(f.stat().st_size for f in files if f.exists())
+
+
+def _placeholder_ids(messages: Sequence[SrcMessage], run: Run) -> set[int]:
+    """Which of ``messages`` this run would send as a text placeholder instead of their real
+    media (T2, Phase 15b) — for ``reconcile.judge`` to compare shapes correctly. Only a
+    poll/quiz/game/invoice can ever be one (``plan_unit``'s own contract, mirrored here); calling
+    ``plan_unit`` again for each is safe because a message that reached ``pending`` in the first
+    place already had ``plan_unit`` succeed for it once, with these same (immutable per run)
+    options — it can only repeat that same answer, never raise ``UnsupportedMedia`` here."""
+    options = Options.of(run.options)
+    ids: set[int] = set()
+    for m in messages:
+        if m.media not in (MediaKind.POLL, MediaKind.GAME, MediaKind.INVOICE):
+            continue
+        if plan_unit(Unit((m,)), options).kind is ActionKind.PLACEHOLDER:
+            ids.add(m.id)
+    return ids

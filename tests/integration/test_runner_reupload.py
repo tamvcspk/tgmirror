@@ -636,6 +636,38 @@ async def test_a_placeholder_stands_in_for_what_was_left_out(rig: Rig) -> None:
     assert [c.method for c in rig.gw.calls if c.method == "send_text"] == ["send_text"] * 2
 
 
+async def test_killed_after_a_placeholder_the_next_run_reconciles_it_not_resends_it(
+    rig: Rig,
+) -> None:
+    """T2, Phase 15b: a placeholder's pending row remembers the game/invoice's real media kind,
+    not "text" — without telling ``judge`` that this particular pending row was sent as a
+    placeholder, its shape never matched the plain text message actually sitting in the
+    destination, so ``reconcile`` always called it ambiguous and sent a second, duplicate
+    placeholder (``engine/reconcile.py::_shape``)."""
+    rig.gw.add_message(rig.src.id, "", media=MediaKind.GAME, title="Chess")
+    store = await rig.store()
+    original = rig.gw.send_text
+    calls = 0
+
+    async def dies_after_sending(dst: int, text: str, *, topic: int | None = None) -> int:
+        nonlocal calls
+        calls += 1
+        msg_id = await original(dst, text, topic=topic)
+        if calls == 1:
+            raise Crash  # Telegram made the message, tgmirror never heard
+        return msg_id
+
+    rig.gw.send_text = dies_after_sending  # type: ignore[method-assign]
+    with pytest.raises(Crash):
+        await runner(rig, store).run(await begin(rig, store, placeholder=True))
+    rig.gw.send_text = original  # type: ignore[method-assign]
+
+    resumed = await runner(rig, store).run(await begin(rig, store, placeholder=True, force=True))
+
+    assert rig.dst_texts == ["[Game: Chess — không thể sao chép]"]  # not duplicated
+    assert resumed.status is RunStatus.DONE and "reconciled" in rig.recorder.codes
+
+
 async def test_a_dropped_poll_gets_no_placeholder(rig: Rig) -> None:
     """Leaving a poll out is the user's choice (no --reset-polls), not a limit of Telegram."""
     rig.gw.add_message(rig.src.id, "", media=MediaKind.POLL, title="Best colour?")

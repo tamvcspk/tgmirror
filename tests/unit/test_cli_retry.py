@@ -22,6 +22,7 @@ from tests.unit.test_cli_run import (
     keys_pressed,
     saved_runs,
     source_with_messages,
+    start_backup_elsewhere,
     start_elsewhere,
     texts,
 )
@@ -240,6 +241,27 @@ def test_status_of_the_latest_run_when_nothing_is_running(
     assert "5/5000 messages sent today" in out
     assert "not limited once in the last 24 hours" in out
     assert "tgmirror retry" not in out
+
+
+def test_status_shows_a_live_backup_when_no_run_ever_existed(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """T1, Phase 15b: ``tgmirror status`` only ever looked at ``runs`` — a lone backup (no run at
+    all yet) used to raise ``RunNotFound`` ("Nothing has been cloned yet"), which was simply
+    wrong: something *is* in the log, ``status`` just never looked."""
+    source_with_messages(gateway, 3)
+    rt = make_runtime(gateway=gateway)
+    start_backup_elsewhere(rt, gateway, "/backups/x")
+
+    result = runner.invoke(app, ["status"], obj=no_telegram(rt))
+
+    assert result.exit_code == 0, result.output
+    assert "Nothing has been cloned yet" not in result.output
+    assert "Backup 1: Source → /backups/x" in result.output
+    assert "Status:      running" in result.output
+
+    as_json = json.loads(runner.invoke(app, ["status", "--json"], obj=no_telegram(rt)).output)
+    assert as_json["kind"] == "backup" and as_json["directory"] == "/backups/x"
 
 
 def test_status_offers_retry_for_what_failed(

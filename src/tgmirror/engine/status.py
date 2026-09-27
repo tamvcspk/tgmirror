@@ -24,6 +24,7 @@ Every figure is an estimate, and says so:
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from tgmirror.store.backups import Backup
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store
 from tgmirror.store.runs import FloodEvent, Run, RunStatus
 
@@ -137,3 +138,48 @@ def cap_days(left: int, daily_cap: int, sent_today: int) -> int:
     """Whole days of rest the daily cap costs for ``left`` messages, given what went out today."""
     allowed_today = max(daily_cap - sent_today, 0)
     return max(-(-(left - allowed_today) // daily_cap), 0)  # ceil, never negative
+
+
+@dataclass(frozen=True, slots=True)
+class BackupStatusReport:
+    """As ``StatusReport``, for a backup (T1, Phase 15b) — much simpler: a backup has no known
+    total to measure progress against (Phase 11a has no analyze step, same reason
+    ``ui/menu/backup_screen.py::BackupTuiReporter`` shows no ETA either), so this is only a
+    speed, never a fraction/ETA."""
+
+    backup: Backup
+    now: datetime
+    live: bool
+    abandoned: bool
+    speed: float | None  # messages handled per second since it started; ``None``: too early
+    delay: float | None
+    sent_today: int
+    daily_cap: int
+    floods_24h: int
+    last_flood: FloodEvent | None
+
+
+async def build_backup_report(
+    store: Store, backup: Backup, *, now: datetime, daily_cap: int
+) -> BackupStatusReport:
+    """Gather what ``status`` needs about ``backup`` from the store."""
+    holds = backup.status in (RunStatus.RUNNING, RunStatus.PAUSED)
+    live = holds and now - backup.updated_at < HEARTBEAT_TIMEOUT
+    end = now if live else (backup.ended_at or backup.updated_at)
+    elapsed = max((end - backup.started_at).total_seconds(), 0.0)
+    speed = backup.handled / elapsed if elapsed >= MIN_SAMPLE and backup.handled else None
+    limiter = await store.load_limiter_state(backup.account)
+    today = now.astimezone().date()
+    floods = await store.backup_flood_events(backup.id)
+    return BackupStatusReport(
+        backup=backup,
+        now=now,
+        live=live,
+        abandoned=holds and not live,
+        speed=speed,
+        delay=limiter.delay if limiter else None,
+        sent_today=limiter.sent_today if limiter and limiter.day == today else 0,
+        daily_cap=daily_cap,
+        floods_24h=await store.flood_count_since(now - FLOOD_WINDOW),
+        last_flood=floods[-1] if floods else None,
+    )

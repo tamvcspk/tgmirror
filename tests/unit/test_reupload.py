@@ -19,6 +19,7 @@ from tgmirror.engine.reupload import (
     Ready,
     UnsupportedMedia,
     Window,
+    _End,
     left_out,
     placeholder_text,
     plan_unit,
@@ -510,3 +511,47 @@ async def test_a_download_task_that_dies_is_reported_instead_of_waited_for_for_e
         async with asyncio.timeout(5):  # a bug here shows as a timeout, not as a hung test run
             async for _ in pipeline.stream(numbers(1), never_idle):
                 pass
+
+
+async def test_next_recovers_an_item_the_poll_timeout_raced_the_producer_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N5, Phase 15b: right at ``poll_interval``'s edge, the producer's ``put`` and ``_next``'s own
+    ``getter.cancel()`` (on a timeout) can land in the same event-loop tick — the item is already
+    queued, but cancelling the not-yet-resumed ``getter`` still raises ``CancelledError`` and
+    discards it (a CPython ``asyncio.Queue``/``Task.cancel`` quirk, see ``_next``'s docstring), so
+    ``_next`` used to conclude the producer had died and raise a generic ``RuntimeError`` instead
+    of noticing the item was still sitting in the queue.
+
+    Reproduced deterministically instead of hoping real timing hits it: ``asyncio.wait`` is
+    stubbed to let ``getter`` register as a waiter, release the producer's gated ``put``, then
+    report a timeout before ``getter`` has resumed to actually consume it — the exact interleaving
+    a real ``poll_interval`` timeout can land in by chance.
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    release = asyncio.Event()
+
+    async def produce() -> None:
+        await release.wait()
+        await queue.put(_End())
+
+    producer = asyncio.create_task(produce())
+
+    async def timed_out_right_after_the_put_lands(
+        fs: object,
+        *,
+        timeout: float,  # noqa: ASYNC109 - matches asyncio.wait's own signature
+        return_when: str,
+    ) -> tuple[set, object]:
+        await asyncio.sleep(0)  # let `getter` (already created by `_next`) register as a waiter
+        release.set()
+        await asyncio.sleep(0)  # the producer's `put` lands; `getter` has not resumed yet
+        return set(), fs  # a "timeout": nothing reported done
+
+    monkeypatch.setattr(asyncio, "wait", timed_out_right_after_the_put_lands)
+    pipeline = Pipeline(Window(1, 1), lambda b: _plain(b), poll_interval=1000)
+
+    result = await pipeline._next(queue, producer, idle=never_idle)
+
+    assert isinstance(result, _End)
+    await producer

@@ -8,6 +8,7 @@ menu's "Continue"/"Retry failures" silently read the live gateway instead of the
 """
 
 import io
+import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,15 +21,23 @@ from tgmirror.cli.runtime import Connection, Runtime
 from tgmirror.core.config import Limits
 from tgmirror.core.gateway import ChannelInfo, ChatKind, ExportedMessage
 from tgmirror.engine import backupdir
+from tgmirror.engine.backup import begin_backup
 from tgmirror.engine.backup_reader import BackupReader
 from tgmirror.engine.runner import Runner
 from tgmirror.engine.runs import RunRequest, begin_run
+from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store
+from tgmirror.store.runs import Run
 from tgmirror.ui.menu.app import MenuApp
 from tgmirror.ui.menu.backup_screen import BackupScreen
 from tgmirror.ui.menu.run_screen import RunScreen
 from tgmirror.ui.menu.screen import ScreenResult
 from tgmirror.ui.menu.screens.backup import backup_screen
+from tgmirror.ui.menu.screens.history import (
+    BackupHistoryDetailScreen,
+    HistoryDetailScreen,
+    HistoryScreen,
+)
 from tgmirror.ui.menu.screens.restore import restore_screen
 from tgmirror.ui.menu.screens.resume import ResumeScreen
 from tgmirror.ui.menu.screens.wizard import WizardScreen
@@ -174,4 +183,126 @@ async def test_resume_of_a_restored_pair_reads_the_backup_directory_not_the_gate
     run_screen = result[1]
     assert isinstance(run_screen, RunScreen)
     assert isinstance(run_screen._reader_override, BackupReader)
+    await store.close()
+
+
+async def test_resume_offers_recovery_instead_of_crashing_when_the_backup_dir_is_gone(
+    make_runtime: MakeRuntime, tmp_path: Path
+) -> None:
+    """N6, Phase 15b: before this fix, ``begin_run`` silently fell back to a live re-check of the
+    source once the restore directory went missing, then ``ResumeScreen`` crashed the whole app on
+    ``reader_override_for``'s ``assert`` once the run row had already been created. Now
+    ``ResumeScreen`` offers a recovery dialog (``BackupDirMissing``) instead of dying, and picking
+    "Huỷ" pops back cleanly — the whole app never crashes."""
+    gateway = FakeGateway()
+    dst = gateway.add_channel("Restored")
+    out = tmp_path / "out"
+    manifest = seed_backup(out)
+    src = ChannelInfo(manifest.src_id, manifest.src_title, manifest.src_kind)
+    store = await Store.open(tmp_path / "t.db")
+    request = RunRequest(mode="reupload", from_backup=str(out), reset_polls=True)
+    started = await begin_run(store, gateway, src, dst, request)
+    reader = BackupReader(out, manifest)
+    runner = Runner(store, gateway, Limits(), reader_override=reader, tmp_dir=tmp_path / "tmp")
+    await runner.run(started.run)
+    shutil.rmtree(out)  # the directory this pair points at is now gone
+
+    app_ = MenuApp(
+        make_runtime(gateway=gateway, interactive=True),
+        store,
+        Connection(FakeAuth(logged_in=ACCOUNT), gateway),
+        ACCOUNT,
+    )
+    screen = ResumeScreen(app_, mode="resume")
+    result = await screen.on_enter()  # a single pair: goes straight in, like the classic CLI
+
+    assert result is not None and result[0] == "push"
+    recovery = result[1]
+    assert isinstance(recovery, WizardScreen)
+    assert await recovery.on_enter() == "stay"
+    assert asked(recovery) == str(out)  # the missing directory is named in the question
+
+    outcome = await press(recovery, MenuKey.DOWN, MenuKey.DOWN, MenuKey.ENTER)  # "Huỷ" (3rd item)
+
+    assert outcome == "pop"
+    await store.close()
+
+
+async def test_resume_recovers_by_repointing_at_a_new_backup_directory(
+    make_runtime: MakeRuntime, tmp_path: Path
+) -> None:
+    """The "Chọn thư mục backup khác" branch of the same recovery dialog: picking a directory that
+    backs up the same source (``src_id``) hands over to a ``RunScreen`` reading from it, exactly
+    like an ordinary "Chạy tiếp" would."""
+    gateway = FakeGateway()
+    dst = gateway.add_channel("Restored")
+    out = tmp_path / "out"
+    manifest = seed_backup(out)
+    src = ChannelInfo(manifest.src_id, manifest.src_title, manifest.src_kind)
+    store = await Store.open(tmp_path / "t.db")
+    request = RunRequest(mode="reupload", from_backup=str(out), reset_polls=True)
+    started = await begin_run(store, gateway, src, dst, request)
+    reader = BackupReader(out, manifest)
+    runner = Runner(store, gateway, Limits(), reader_override=reader, tmp_dir=tmp_path / "tmp")
+    await runner.run(started.run)
+    moved = tmp_path / "moved"
+    shutil.copytree(out, moved)  # a copy of the same backup, at a new path
+    shutil.rmtree(out)
+
+    app_ = MenuApp(
+        make_runtime(gateway=gateway, interactive=True),
+        store,
+        Connection(FakeAuth(logged_in=ACCOUNT), gateway),
+        ACCOUNT,
+    )
+    screen = ResumeScreen(app_, mode="resume")
+    result = await screen.on_enter()
+    assert result is not None and result[0] == "push"
+    recovery = result[1]
+    assert isinstance(recovery, WizardScreen)
+    assert await recovery.on_enter() == "stay"
+
+    await press(recovery, MenuKey.ENTER)  # "Chọn thư mục backup khác" (1st item)
+    assert asked(recovery) == t("restore.pick_dir")
+    outcome = await press(recovery, *str(moved), MenuKey.ENTER)
+
+    assert outcome[0] == "push" and isinstance(outcome[1], RunScreen)
+    assert isinstance(outcome[1]._reader_override, BackupReader)
+    await store.close()
+
+
+async def test_history_screen_lists_runs_and_backups_together(
+    make_runtime: MakeRuntime, tmp_path: Path
+) -> None:
+    """T1, Phase 15b: the menu's "Lịch sử" had the same gap as `tgmirror history` — only runs,
+    never backups. Selecting a backup row goes to its own (simpler) detail screen."""
+    gateway = FakeGateway()
+    src, dst = gateway.add_channel("Source"), gateway.add_channel("Copy")
+    gateway.add_message(src.id, "m1")
+    store = await Store.open(tmp_path / "t.db")
+    await begin_run(store, gateway, src, dst, RunRequest())
+    await begin_backup(store, gateway, src, tmp_path / "out")
+
+    app_ = MenuApp(
+        make_runtime(gateway=gateway, interactive=True),
+        store,
+        Connection(FakeAuth(logged_in=ACCOUNT), gateway),
+        ACCOUNT,
+    )
+    screen = HistoryScreen(app_)
+    await screen.on_enter()
+
+    items = [value for _, value in screen._list.items]
+    assert {type(i) for i in items} == {Run, Backup}
+
+    backup_index = next(i for i, v in enumerate(items) if isinstance(v, Backup))
+    run_index = next(i for i, v in enumerate(items) if isinstance(v, Run))
+    screen._list.index = backup_index
+    backup_result = await screen.handle_key(MenuKey.ENTER)
+    assert backup_result[0] == "push" and isinstance(backup_result[1], BackupHistoryDetailScreen)
+
+    screen._list.index = run_index
+    run_result = await screen.handle_key(MenuKey.ENTER)
+    assert run_result[0] == "push" and isinstance(run_result[1], HistoryDetailScreen)
+
     await store.close()

@@ -4,7 +4,10 @@
 
 FROM python:3.11-slim AS build
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Pinned, not :latest (T4, Phase 15b): an unpinned tag can change what a build produces between
+# two runs of the same Dockerfile with no change of our own — bump this deliberately, alongside
+# the `astral-sh/setup-uv` action version in the workflows, not silently on every build.
+COPY --from=ghcr.io/astral-sh/uv:0.8.13 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 
 WORKDIR /app

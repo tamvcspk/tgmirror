@@ -199,6 +199,36 @@ async def test_message_deleted_between_listing_and_export_is_skipped(rig: Rig) -
     assert [r.id for r in records] == [2]
 
 
+async def test_crash_closes_the_backup_failed_instead_of_leaving_it_running(rig: Rig) -> None:
+    """N4, Phase 15b: mirrors the analogous ``Runner`` fix (``engine/runner.py``) — any error that
+    is not ``TgMirrorError`` used to leave the backup ``running`` with a fresh heartbeat, so a
+    resume within the heartbeat window hit ``BackupBusy`` for a process that had already died.
+    ``BackupWriter.run`` now closes it ``failed`` before re-raising, so a resume needs no
+    ``--force-takeover`` even immediately after."""
+    rig.fill(2)
+    store = await rig.store()
+    real_export = rig.gw.export_unit
+
+    async def die(src: int, unit: Any, media_dir: Path, on_transfer: Any = None) -> Any:
+        raise RuntimeError("boom")
+
+    rig.gw.export_unit = die  # type: ignore[method-assign]
+    backup, manifest = await rig.begin(store)
+    with pytest.raises(RuntimeError):
+        await rig.writer().run(backup, rig.dir, manifest)
+    rig.gw.export_unit = real_export  # type: ignore[method-assign]
+
+    dead = await store.get_backup(backup.id)
+    assert dead is not None
+    assert dead.status is RunStatus.FAILED
+    assert dead.fail_reason is not None and dead.fail_reason.startswith("crashed: RuntimeError")
+
+    resumed_backup, resumed_manifest = await rig.begin(store)  # no --force-takeover needed
+    final = await rig.writer().run(resumed_backup, rig.dir, resumed_manifest)
+    assert final.status is RunStatus.DONE
+    assert final.done == 2
+
+
 # ---- decision D3 -------------------------------------------------------------------------------
 
 
@@ -299,6 +329,29 @@ async def test_resume_after_partial_progress(rig: Rig) -> None:
     assert second.status is RunStatus.DONE
     records = backupdir.iter_records(rig.dir)
     assert [r.id for r in records] == [1, 2, 3, 4]  # no duplicate, nothing missing
+
+
+async def test_resume_repairs_a_killed_mid_write_last_line(rig: Rig) -> None:
+    """N3, Phase 15b: a kill mid-``write`` used to leave the broken last line in place forever —
+    the next resume's ``append_records`` wrote right onto it (no repair, no newline in between),
+    producing one permanently corrupt line buried in the middle of the file; every backup after
+    that re-read the same stale ``last_id`` and repeated the append. ``begin_backup`` now repairs
+    the tail (``backupdir.repair_trailing_line``) before anything reads ``last_id`` from disk."""
+    rig.fill(4)
+    store = await rig.store()
+    first = await rig.run(store)
+    assert first.done == 4
+
+    with backupdir.messages_path(rig.dir).open("a", encoding="utf-8") as fh:
+        fh.write('{"id": 5, "date": "2026-0')  # cut off mid-write, no trailing newline
+
+    rig.fill(2, start=5)  # ids 5 and 6 exist at the source; nothing backed up for either yet
+    second = await rig.run(store)  # begin_backup repairs the tail before this reads last_id
+
+    assert second.status is RunStatus.DONE
+    assert second.done == 2  # only 5 and 6: the corrupt fragment was never counted as done
+    records = backupdir.iter_records(rig.dir)  # raises CorruptMessagesFile if the repair failed
+    assert [r.id for r in records] == [1, 2, 3, 4, 5, 6]
 
 
 async def test_filter_cannot_change_on_resume(rig: Rig) -> None:

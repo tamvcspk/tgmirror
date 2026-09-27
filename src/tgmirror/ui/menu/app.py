@@ -48,6 +48,7 @@ class MenuApp:
         self.conn = conn
         self.account = account
         self.own_run_id: int | None = None  # the run *this* process drives, if any (see below)
+        self.own_backup_id: int | None = None  # as ``own_run_id``, for a backup (T1, Phase 15b)
         self._badge: str | None = None
         self._conn_stack: AsyncExitStack | None = None  # set when this app opened ``conn``
         self._stack: list[Screen] = [MainMenuScreen(self)]
@@ -165,16 +166,26 @@ class MenuApp:
                 self._stack.append(screen)
                 if screen.run_id is not None:
                     self.own_run_id = screen.run_id  # this process now holds that run itself
+                if screen.backup_id is not None:
+                    self.own_backup_id = screen.backup_id  # as above, for a backup
                 debug.log("apply.push", top=type(screen).__name__)
                 await self._apply(await screen.on_enter())  # may itself decide to push/pop again
 
     async def _refresh_badge(self) -> None:
-        """The "đang chạy ở nơi khác" badge: some *other* process holds an active run right now.
-        Skips the run this very app is driving (``own_run_id``, set when a ``RunScreen`` is
-        pushed) — its progress already has a whole screen, it does not also need a header badge."""
-        live = await self.store.active_run()
+        """The "đang chạy ở nơi khác" badge: some *other* process holds an active run or backup
+        right now (T1, Phase 15b: a live backup used to be invisible here entirely). Skips
+        whichever this very app is driving itself (``own_run_id``/``own_backup_id``, set when a
+        ``RunScreen``/``BackupScreen`` is pushed) — its progress already has a whole screen, it
+        does not also need a header badge."""
+        live_run = await self.store.active_run()
+        if live_run is not None and live_run.id != self.own_run_id:
+            self._badge = t("menu.running_elsewhere")
+            return
+        live_backup = await self.store.active_backup()
         self._badge = (
-            t("menu.running_elsewhere") if live is not None and live.id != self.own_run_id else None
+            t("menu.running_elsewhere")
+            if live_backup is not None and live_backup.id != self.own_backup_id
+            else None
         )
 
     def _redraw(self) -> None:

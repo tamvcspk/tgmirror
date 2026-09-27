@@ -19,11 +19,10 @@ from pathlib import Path
 from rich.console import Group, RenderableType
 from rich.text import Text
 
-from tgmirror.cli.errors import describe
+from tgmirror.cli.errors import describe_any
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.keys import MenuKey, apply_key
 from tgmirror.core.config import Limits
-from tgmirror.core.errors import TgMirrorError
 from tgmirror.core.gateway import TelegramGateway
 from tgmirror.engine.backup import BackupWriter
 from tgmirror.engine.backupdir import BackupManifest
@@ -96,6 +95,7 @@ class BackupScreen(Screen):
         *,
         limits: Limits,
     ) -> None:
+        self.backup_id = backup.id  # MenuApp reads this so its "running elsewhere" badge skips it
         self._store = store
         self._gateway = gateway
         self._backup = backup
@@ -164,7 +164,7 @@ class BackupScreen(Screen):
             self._reported = True  # report its outcome exactly once, not on every one of those
             exc = self._task.exception()
             if exc is not None:
-                self._lines.append(describe(exc) if isinstance(exc, TgMirrorError) else str(exc))
+                self._lines.append(describe_any(exc))
             else:
                 self._lines.extend(_result_lines(self._task.result()))
         return None

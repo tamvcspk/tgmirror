@@ -17,6 +17,7 @@ from tgmirror.core.errors import (
     ExportBusy,
 )
 from tgmirror.core.paths import Paths
+from tgmirror.engine.backup import begin_backup
 from tgmirror.engine.runs import RunRequest, begin_run
 from tgmirror.store import appdata
 from tgmirror.store.db import Store, default_migrations
@@ -101,6 +102,22 @@ async def test_export_refuses_while_a_run_is_live(tmp_path: Path) -> None:
     gateway = FakeGateway()
     store = await Store.open(paths.db_path)
     await _seed_pair(store, gateway, finish=False)  # still 'running', fresh heartbeat
+
+    with pytest.raises(ExportBusy):
+        await appdata.export_appdata(store, paths, tmp_path / "export.zip")
+    await store.close()
+
+
+async def test_export_refuses_while_a_backup_is_live(tmp_path: Path) -> None:
+    """T1, Phase 15b: a live backup used to slip through this check entirely (only ``active_run``
+    was ever consulted) — a snapshot taken mid-backup, run elsewhere, would back up the same
+    messages a second time."""
+    paths = Paths.under(tmp_path)
+    paths.ensure()
+    gateway = FakeGateway()
+    src = gateway.add_channel("Source")
+    store = await Store.open(paths.db_path)
+    await begin_backup(store, gateway, src, tmp_path / "out")  # still 'running', fresh heartbeat
 
     with pytest.raises(ExportBusy):
         await appdata.export_appdata(store, paths, tmp_path / "export.zip")

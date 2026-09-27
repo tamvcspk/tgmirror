@@ -5,6 +5,7 @@ permission · ``130`` interrupted. Tracebacks only with ``--debug``.
 """
 
 import asyncio
+import errno
 from collections.abc import Coroutine
 from typing import Any, TypeVar
 
@@ -42,6 +43,7 @@ from tgmirror.engine.backup import (
     FiltersChanged,
     WrongSource,
 )
+from tgmirror.engine.backupdir import CorruptMessagesFile
 from tgmirror.engine.endpoints import (
     AmbiguousChannel,
     ChannelNotFound,
@@ -53,12 +55,14 @@ from tgmirror.engine.endpoints import (
 )
 from tgmirror.engine.reupload import UnsupportedMedia
 from tgmirror.engine.runs import (
+    BackupDirMissing,
     InvalidOptions,
     ModeUnsupported,
     NeedsAcknowledgement,
     RunError,
     RunNotFound,
     RunWaiting,
+    WrongBackupSource,
 )
 from tgmirror.filters.model import FilterError
 from tgmirror.filters.parser import FilterMix
@@ -168,6 +172,17 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.backup_wrong_source", dir=exc.directory, title=exc.existing_title)
         case BackupBusy():
             return t("err.backup_busy", id=exc.backup_id)
+        case CorruptMessagesFile():
+            return t("err.corrupt_messages_file", path=exc.path, line=exc.line_number)
+        case BackupDirMissing():
+            return t("err.backup_dir_missing", dir=exc.directory)
+        case WrongBackupSource():
+            return t(
+                "err.wrong_backup_source",
+                dir=exc.directory,
+                expected=exc.expected_src_id,
+                found=exc.found_src_id,
+            )
     return t("err.generic", detail=str(exc))
 
 
@@ -187,13 +202,27 @@ def exit_code(exc: TgMirrorError) -> int:
         | RunError
         | FilterError
         | AppDataError
-        | BackupError,
+        | BackupError
+        | CorruptMessagesFile,
     ):
         return 2
     return 1
 
 
 T = TypeVar("T")
+
+
+def describe_any(exc: BaseException) -> str:
+    """The one-sentence message ``run()`` below would print for *any* exception, ``TgMirrorError``
+    or not (N4, Phase 15b) — also used by the full-screen menu (``RunScreen``/``BackupScreen``),
+    which has no traceback/``--debug`` path of its own and must show the same sentence the classic
+    CLI would for the same crash, instead of a bare ``str(exc)``."""
+    if isinstance(exc, TgMirrorError):
+        return describe(exc)
+    if isinstance(exc, OSError):
+        key = "err.disk_full" if exc.errno == errno.ENOSPC else "err.os_error"
+        return t(key, detail=str(exc))
+    return t("err.crashed", detail=f"{type(exc).__name__}: {exc}")
 
 
 def run(rt: Runtime, coro: Coroutine[Any, Any, T]) -> T:
@@ -211,8 +240,25 @@ def run(rt: Runtime, coro: Coroutine[Any, Any, T]) -> T:
     except Declined:
         typer.echo(t("err.aborted"), err=True)
         raise typer.Exit(1) from None
+    except typer.Exit:
+        # a command already decided its own exit code (e.g. ``run.py::execute``'s 130 for a first
+        # Ctrl+C) — N4's catch-alls below are for an exception nobody meant to raise, not this.
+        raise
     except TgMirrorError as exc:
         if rt.debug:
             raise
         typer.echo(describe(exc), err=True)
         raise typer.Exit(exit_code(exc)) from None
+    except OSError as exc:
+        # N4, Phase 15b: the runner/backup writer now close the run row before re-raising an
+        # error like this (previously an unhandled ``OSError``, e.g. a full disk mid-download,
+        # reached here as a raw traceback and left the row ``running`` forever).
+        if rt.debug:
+            raise
+        typer.echo(describe_any(exc), err=True)
+        raise typer.Exit(1) from None
+    except Exception as exc:  # last resort: one sentence for the user, never a raw traceback
+        if rt.debug:
+            raise
+        typer.echo(describe_any(exc), err=True)
+        raise typer.Exit(1) from None

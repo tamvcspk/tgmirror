@@ -249,6 +249,80 @@ async def test_a_document_forces_the_document_flag(tmp_path: Path) -> None:
     assert stub.sent[0][2]["force_document"] is True
 
 
+async def test_a_documents_original_filename_is_restored(tmp_path: Path) -> None:
+    """C2, Phase 15b: ``filename`` is the backup's own storage name (by message id); restore must
+    send the source's *original* name (``original_filename``), not that storage name."""
+    gw, stub = gateway()
+    write(tmp_path / "5.bin")
+    msg = ExportedMessage(
+        1,
+        NOW,
+        None,
+        None,
+        None,
+        "",
+        None,
+        media=ExportedMedia(
+            kind=MediaKind.DOCUMENT,
+            filename="5.bin",
+            mime="application/x",
+            original_filename="report Q3.pdf",
+        ),
+    )
+    await gw.send_prepared(10, prepared_of(tmp_path, msg), KEEP)
+
+    attrs = stub.sent[0][2]["attributes"]
+    names = [a.file_name for a in attrs if isinstance(a, types.DocumentAttributeFilename)]
+    assert names == ["report Q3.pdf"]
+
+
+async def test_an_audios_title_and_performer_are_restored(tmp_path: Path) -> None:
+    gw, stub = gateway()
+    write(tmp_path / "3.mp3")
+    msg = ExportedMessage(
+        1,
+        NOW,
+        None,
+        None,
+        None,
+        "",
+        None,
+        media=ExportedMedia(
+            kind=MediaKind.AUDIO,
+            filename="3.mp3",
+            mime="audio/mpeg",
+            duration=180,
+            audio_title="Song Title",
+            audio_performer="Some Artist",
+        ),
+    )
+    await gw.send_prepared(10, prepared_of(tmp_path, msg), KEEP)
+
+    attrs = stub.sent[0][2]["attributes"]
+    audio = next(a for a in attrs if isinstance(a, types.DocumentAttributeAudio))
+    assert (audio.title, audio.performer, audio.voice) == ("Song Title", "Some Artist", False)
+
+
+async def test_a_backup_without_the_new_fields_sends_no_extra_attributes(tmp_path: Path) -> None:
+    """A backup made before C2 (Phase 15b) simply has no ``original_filename``/``audio_title``/
+    ``audio_performer`` — restore must behave exactly as it always did (nothing new to send)."""
+    gw, stub = gateway()
+    write(tmp_path / "1.jpg")
+    msg = ExportedMessage(
+        1,
+        NOW,
+        None,
+        None,
+        None,
+        "",
+        None,
+        media=ExportedMedia(kind=MediaKind.PHOTO, filename="1.jpg", mime="image/jpeg"),
+    )
+    await gw.send_prepared(10, prepared_of(tmp_path, msg), KEEP)
+
+    assert stub.sent[0][2]["attributes"] is None
+
+
 async def test_caption_strip_links_uses_the_original_channel_id(tmp_path: Path) -> None:
     gw, stub = gateway()
     write(tmp_path / "1.jpg")
@@ -406,6 +480,47 @@ async def test_an_album_sends_every_file_in_one_call(tmp_path: Path) -> None:
     assert len(uploads) == 2  # one UploadMediaRequest per member, like a live reupload's album
     assert len(posts) == 1  # then one SendMultiMediaRequest for the whole album
     assert [m.message for m in posts[0].multi_media] == ["caption", ""]
+
+
+async def test_an_album_members_original_filename_is_restored(tmp_path: Path) -> None:
+    """C2, Phase 15b: the album path (``_backup_album_member``/``UploadMediaRequest``) is separate
+    code from the single-document path (``send_file``) — needs its own attributes, not just the
+    single-file one above."""
+    gw, stub = gateway()
+    write(tmp_path / "1.bin")
+    write(tmp_path / "2.jpg")
+    first = ExportedMessage(
+        1,
+        NOW,
+        100,
+        None,
+        None,
+        "caption",
+        None,
+        media=ExportedMedia(
+            kind=MediaKind.DOCUMENT, filename="1.bin", original_filename="notes.txt"
+        ),
+    )
+    second = ExportedMessage(
+        2,
+        NOW,
+        100,
+        None,
+        None,
+        "",
+        None,
+        media=ExportedMedia(kind=MediaKind.PHOTO, filename="2.jpg"),
+    )
+    await gw.send_prepared(10, prepared_of(tmp_path, first, second), KEEP)
+
+    uploads = [c for c in stub.calls if isinstance(c, UploadMediaRequest)]
+    doc_media = next(
+        c.media for c in uploads if isinstance(c.media, types.InputMediaUploadedDocument)
+    )
+    names = [
+        a.file_name for a in doc_media.attributes if isinstance(a, types.DocumentAttributeFilename)
+    ]
+    assert names == ["notes.txt"]
 
 
 # ---- upload_prepared is a no-op for a restore ---------------------------------------------------

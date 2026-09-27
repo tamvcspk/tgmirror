@@ -1,7 +1,10 @@
-"""``tgmirror history [n]``: what earlier runs did. The run log is all the state the user sees.
+"""``tgmirror history [n]``: what earlier runs (and backups, T1 Phase 15b) did. The log is all the
+state the user sees.
 
-No Telegram connection. Without a number: the newest runs, one line each. With one: that run in
-detail, including the messages it failed to copy (with the reason) and the limits Telegram set.
+No Telegram connection. Without a number: the newest runs *and backups*, newest first, one line
+each, marked by kind. With one: that run in detail, including the messages it failed to copy (with
+the reason) and the limits Telegram set — a backup has no number of its own to look up here (its
+own directory is its whole record; ``tgmirror status`` shows one in progress).
 """
 
 import json
@@ -17,6 +20,7 @@ from rich.text import Text
 from tgmirror.cli.errors import run
 from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.engine.runs import resolve_run
+from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store
 from tgmirror.store.runs import Run
 from tgmirror.ui.messages import t
@@ -28,14 +32,14 @@ def history(
     ctx: typer.Context,
     number: Annotated[
         str | None,
-        typer.Argument(metavar="[RUN]", help="Show this run in detail."),
+        typer.Argument(metavar="[RUN]", help="Show this run in detail (backups have no number)."),
     ] = None,
     limit: Annotated[
-        int, typer.Option("--limit", "-n", min=1, max=200, help="How many runs to list.")
+        int, typer.Option("--limit", "-n", min=1, max=200, help="How many entries to list.")
     ] = 20,
     as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
 ) -> None:
-    """Show the runs of earlier clones, newest first, or one of them in detail.
+    """Show earlier clones and backups, newest first, or one run in detail.
 
     Example: tgmirror history        (or: tgmirror history 3 --json)
     """
@@ -55,12 +59,28 @@ def _when(value: datetime | None) -> str:
     return value.astimezone().strftime("%Y-%m-%d %H:%M") if value is not None else ""
 
 
-def _status(item: Run) -> str:
+def _status(item: Run | Backup) -> str:
     return t(f"status.{item.status}")
 
 
-def _record(item: Run) -> dict[str, object]:
+def _record(item: Run | Backup) -> dict[str, object]:
+    if isinstance(item, Backup):
+        return {
+            "kind": "backup",
+            "backup": item.id,
+            "source": {"id": item.src_id, "title": item.src_title},
+            "directory": item.dir,
+            "status": item.status.value,
+            "note": item.fail_reason,
+            "started_at": item.started_at.isoformat(),
+            "ended_at": item.ended_at.isoformat() if item.ended_at else None,
+            "copied": item.done,
+            "left_out_by_filter": item.skipped_filter,
+            "gone_from_source": item.gone,
+            "filter": json.loads(item.filters_json),
+        }
     return {
+        "kind": "run",
         "run": item.id,
         "source": {"id": item.src_id, "title": item.src_title},
         "destination": {"id": item.dst_id, "title": item.dst_title},
@@ -79,15 +99,35 @@ def _record(item: Run) -> dict[str, object]:
     }
 
 
-async def _listing(store: Store, limit: int, as_json: bool) -> None:
+async def _recent(store: Store, limit: int) -> list[Run | Backup]:
+    """The newest runs *and* backups together, newest first (T1, Phase 15b): two independent id
+    sequences/tables, so merged and sorted here rather than by one SQL query."""
     runs = await store.list_runs(limit)
+    backups = await store.list_backups(limit)
+    merged: list[Run | Backup] = sorted(
+        [*runs, *backups], key=lambda item: item.started_at, reverse=True
+    )
+    return merged[:limit]
+
+
+def _pair_text(item: Run | Backup) -> Text:
+    # Text, not an f-string: titles/paths may contain "[brackets]", which Rich would read as markup
+    dst = item.dir if isinstance(item, Backup) else item.dst_title
+    return Text(f"{item.src_title} → {dst}")
+
+
+async def _listing(store: Store, limit: int, as_json: bool) -> None:
+    items = await _recent(store, limit)
     if as_json:
-        typer.echo(json.dumps([_record(r) for r in runs], ensure_ascii=False, indent=2))
+        typer.echo(json.dumps([_record(r) for r in items], ensure_ascii=False, indent=2))
         return
-    if not runs:
+    if not items:
         typer.echo(t("history.empty"))
         return
     table = Table(box=box.SIMPLE_HEAD, pad_edge=False, title=t("history.title"))
+    # a bare id would be ambiguous (runs and backups number their rows independently) and a
+    # separate "kind" column has no width left to spare at 80 columns (found by a real test
+    # failure: the fold column wrapped its own header) — one extra letter on the id instead
     table.add_column(t("history.col_run"), justify="right")
     table.add_column(t("history.col_started"), no_wrap=True)
     table.add_column(t("history.col_pair"), overflow="fold")
@@ -95,15 +135,17 @@ async def _listing(store: Store, limit: int, as_json: bool) -> None:
     table.add_column(t("history.col_copied"), justify="right")
     table.add_column(t("history.col_failed"), justify="right")
     table.add_column(t("history.col_filtered"), justify="right")
-    for r in runs:
+    for item in items:
+        is_backup = isinstance(item, Backup)
+        failed = "" if is_backup else (f"{item.failed:,}" if item.failed else "")
         table.add_row(
-            str(r.id),
-            _when(r.started_at),
-            Text(f"{r.src_title} → {r.dst_title}"),  # Text: titles may contain [brackets]
-            _status(r),
-            f"{r.done:,}",
-            f"{r.failed:,}" if r.failed else "",
-            f"{r.skipped_filter:,}" if r.skipped_filter else "",
+            f"{'B' if is_backup else 'R'}{item.id}",
+            _when(item.started_at),
+            _pair_text(item),
+            _status(item),
+            f"{item.done:,}",
+            failed,
+            f"{item.skipped_filter:,}" if item.skipped_filter else "",
         )
     Console().print(table)
 
