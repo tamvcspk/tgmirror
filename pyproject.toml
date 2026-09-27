@@ -41,6 +41,11 @@ dev = [
     "pytest-timeout>=2.4.0",
     "ruff>=0.5",
 ]
+# Phase 14 (docs/06-lo-trinh.md): builds the onedir binary for the GitHub Release, not needed
+# for ordinary dev work. `uv sync --group pyinstaller` before `pyinstaller pyinstaller.spec`.
+pyinstaller = [
+    "pyinstaller>=6.11",
+]
 
 [build-system]
 requires = ["hatchling"]
