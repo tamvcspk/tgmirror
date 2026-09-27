@@ -5,6 +5,7 @@ No terminal and no network: ``FakeGateway``, and a SQLite file under tmp_path.
 
 import asyncio
 import json
+import re
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -326,8 +327,11 @@ def test_status_and_retry_show_up_in_the_help(make_runtime: MakeRuntime) -> None
     # Typer's --help rendering is Rich, which sizes itself from the $COLUMNS env var before
     # falling back to terminal detection (rich.console.Console._width): pin it so the command
     # table doesn't wrap narrower on a CI runner than on a dev machine and split "retry"/"status"
-    # across lines.
+    # across lines. GitHub Actions also sets $GITHUB_ACTIONS, which makes Typer force terminal
+    # mode (colored ANSI output) even though this runner isn't a real tty: strip escape codes so
+    # they can't land between a padding space and the command name and break the plain-text check.
     out = runner.invoke(app, ["--help"], obj=make_runtime(), env={"COLUMNS": "200"}).output
+    out = re.sub(r"\x1b\[[0-9;]*m", "", out)
 
     assert " retry " in out and " status " in out
 

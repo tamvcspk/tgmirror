@@ -21,8 +21,10 @@ MakeRuntime = Callable[..., Runtime]
 
 
 def plain(renderable: RenderableType) -> str:
+    # soft_wrap: a CI temp dir can make paths.config_file longer than any width picked here — the
+    # tests only check for plain-text content, so nothing should be folded or cropped mid-line.
     console = Console(file=io.StringIO(), record=True, no_color=True, width=120)
-    console.print(renderable)
+    console.print(renderable, soft_wrap=True)
     return console.export_text()
 
 
