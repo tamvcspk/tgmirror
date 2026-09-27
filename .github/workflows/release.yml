@@ -1,5 +1,6 @@
 # Phase 13, first slice (docs/06-lo-trinh.md, "Phase 13 — ghi chú"): tests, a wheel/sdist attached
-# to the GitHub Release, and the Docker image pushed to Docker Hub. PyPI publishing, PyInstaller
+# to the GitHub Release, the Docker image pushed to Docker Hub, and the same wheel/sdist published
+# to PyPI over Trusted Publishing (OIDC, Phase 14 — no token stored in the repo). PyInstaller
 # binaries, winget, the APT/RPM repo and AUR are deliberately not here yet — each needs its own
 # external account/secret setup with the user first.
 
@@ -16,6 +17,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -50,6 +53,14 @@ jobs:
 
       - name: Build wheel and sdist
         run: uv build
+
+      - name: Upload the wheel/sdist for the PyPI publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
 
       - name: Smoke test the wheel in a clean venv
         run: |
@@ -117,3 +128,24 @@ jobs:
           files: dist/*
           generate_release_notes: true
           prerelease: ${{ steps.meta.outputs.prerelease }}
+
+  publish-pypi:
+    name: Publish to PyPI (Trusted Publishing)
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tgmirror/${{ needs.release.outputs.version }}/
+    permissions:
+      id-token: write # OIDC token for Trusted Publishing; no API token/secret needed
+    steps:
+      - name: Download the wheel/sdist built by the release job
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true # a re-run after a later step failed does not fail on files already up
