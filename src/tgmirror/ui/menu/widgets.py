@@ -1,10 +1,11 @@
 """Small, pure, keyboard-driven building blocks screens compose (not ``Screen``s themselves: a
 screen owns one or more of these and turns their result into a ``ScreenResult``)."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
-from rich.console import Group, RenderableType
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.text import Text
 
 from tgmirror.cli.keys import MenuKey
@@ -76,3 +77,19 @@ class TypeToFilter:
 
     def render(self) -> RenderableType:
         return Text(f"/ {self.text}", style="dim") if self.text else Text("")
+
+
+class Fit:
+    """``head`` then ``body(rows left)``: a long list gets exactly the rows the frame leaves it
+    (the ``Layout`` region's height), so the highlighted/current row is always on screen. Shared
+    by ``WizardScreen``'s question rendering and any screen with a scrollable ``SelectList``
+    (Phase 15b, ``ChannelsScreen``)."""
+
+    def __init__(self, head: RenderableType, body: Callable[[int | None], RenderableType]) -> None:
+        self._head = head
+        self._body = body
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        head = console.render_lines(self._head, options.update(height=None), pad=False)
+        rows = None if options.height is None else max(options.height - len(head), 4)
+        yield Group(self._head, self._body(rows))

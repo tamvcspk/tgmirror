@@ -12,7 +12,7 @@ with the same sentence the CLI prints; anything else is a bug and propagates.
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.console import Group, RenderableType
 from rich.text import Text
 
 from tgmirror.cli.errors import Declined, describe
@@ -21,6 +21,7 @@ from tgmirror.core.errors import TgMirrorError
 from tgmirror.ui.menu.prompter import GoBack, MenuPrompter
 from tgmirror.ui.menu.screen import Screen, ScreenResult
 from tgmirror.ui.menu.screens.info import InfoScreen
+from tgmirror.ui.menu.widgets import Fit
 from tgmirror.ui.messages import t
 
 Flow = Callable[[MenuPrompter], Awaitable[ScreenResult]]
@@ -113,18 +114,4 @@ class WizardScreen(Screen):
         if question is None or not self.prompter.asking:
             head.append(Text(t("menu.working"), style="dim"))
             return Group(*head)
-        return _Fit(Group(*head), question.render)
-
-
-class _Fit:
-    """``head`` then ``body(rows left)``: a long list gets exactly the rows the frame leaves it
-    (the ``Layout`` region's height), so the highlighted choice is always on screen."""
-
-    def __init__(self, head: RenderableType, body: Callable[[int | None], RenderableType]) -> None:
-        self._head = head
-        self._body = body
-
-    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        head = console.render_lines(self._head, options.update(height=None), pad=False)
-        rows = None if options.height is None else max(options.height - len(head), 4)
-        yield Group(self._head, self._body(rows))
+        return Fit(Group(*head), question.render)
