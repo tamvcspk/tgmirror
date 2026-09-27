@@ -323,7 +323,11 @@ def test_status_json(make_runtime: MakeRuntime, gateway: FakeGateway) -> None:
 
 
 def test_status_and_retry_show_up_in_the_help(make_runtime: MakeRuntime) -> None:
-    out = runner.invoke(app, ["--help"], obj=make_runtime()).output
+    # Typer's --help rendering is Rich, which sizes itself from the $COLUMNS env var before
+    # falling back to terminal detection (rich.console.Console._width): pin it so the command
+    # table doesn't wrap narrower on a CI runner than on a dev machine and split "retry"/"status"
+    # across lines.
+    out = runner.invoke(app, ["--help"], obj=make_runtime(), env={"COLUMNS": "200"}).output
 
     assert " retry " in out and " status " in out
 
