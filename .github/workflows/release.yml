@@ -1,8 +1,10 @@
 # Phase 13, first slice (docs/06-lo-trinh.md, "Phase 13 — ghi chú"): tests, a wheel/sdist attached
 # to the GitHub Release, the Docker image pushed to Docker Hub, and the same wheel/sdist published
-# to PyPI over Trusted Publishing (OIDC, Phase 14 — no token stored in the repo). PyInstaller
-# binaries, winget, the APT/RPM repo and AUR are deliberately not here yet — each needs its own
-# external account/secret setup with the user first.
+# to PyPI over Trusted Publishing (OIDC, Phase 14 — no token stored in the repo). A Windows
+# PyInstaller binary was added in the Phase 14 winget slice below (needed as the asset for the
+# first, manual winget submission); winget's automated update job, a Linux PyInstaller binary, and
+# the APT/RPM repo and AUR are still deliberately not here — each needs its own external
+# account/secret setup, or a manual first step, with the user first.
 #
 # T4, Phase 15b: split from one job into five, each with only the permissions it needs — the job
 # that holds the Docker Hub secret no longer also has `contents: write` (it never needed it), and
@@ -13,6 +15,13 @@
 # that ordering risk. If a later job fails, the earlier ones' results (the version-tagged image,
 # the PyPI release, the GitHub Release) already stand and do not need to be redone — only re-run
 # the job that failed (and anything after it that still depends on it).
+#
+# Phase 14 (winget slice, 2026-09-28): `pyinstaller-windows` builds the onedir binary
+# (`pyinstaller.spec`) and zips it for `github-release` to attach — that zip is the asset the first,
+# manual `wingetcreate new` submission needs (docs/06-lo-trinh.md, "Đã chốt" mục 6). The
+# `winget-release` job that automates *later* winget-pkgs updates is added in a separate commit,
+# once that manual first submission has actually happened — so the `v0.1.1` tag itself never carries
+# a job that could try to touch winget-pkgs before the package id exists there.
 
 name: Release
 
@@ -106,6 +115,44 @@ jobs:
           name: checksums
           path: dist/SHA256SUMS
 
+  pyinstaller-windows:
+    name: Build the Windows PyInstaller binary (winget)
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          python-version: "3.11"
+
+      - name: Install dependencies (including PyInstaller)
+        run: uv sync --frozen --group pyinstaller
+
+      - name: Build the onedir binary
+        run: uv run pyinstaller pyinstaller.spec
+
+      - name: Smoke test the binary
+        working-directory: dist/tgmirror
+        run: |
+          ./tgmirror.exe --version
+          ./tgmirror.exe --help
+          ./tgmirror.exe doctor
+
+      - name: "Package the onedir build as a zip (winget InstallerType: zip)"
+        working-directory: dist
+        run: Compress-Archive -Path tgmirror -DestinationPath "tgmirror-${{ needs.build.outputs.version }}-windows-x64.zip"
+
+      - name: Upload the zip for the GitHub Release and winget jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyinstaller-windows
+          path: dist/*.zip
+
   docker:
     name: Build and push the Docker image (version tag only, never :latest here)
     needs: build
@@ -145,7 +192,7 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: build
+    needs: [build, pyinstaller-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -160,6 +207,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: checksums
+          path: dist
+
+      - name: Download the Windows zip built by the pyinstaller-windows job
+        uses: actions/download-artifact@v4
+        with:
+          name: pyinstaller-windows
           path: dist
 
       - name: GitHub Release
