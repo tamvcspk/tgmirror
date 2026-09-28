@@ -1,10 +1,9 @@
 # Phase 13, first slice (docs/06-lo-trinh.md, "Phase 13 — ghi chú"): tests, a wheel/sdist attached
 # to the GitHub Release, the Docker image pushed to Docker Hub, and the same wheel/sdist published
 # to PyPI over Trusted Publishing (OIDC, Phase 14 — no token stored in the repo). A Windows
-# PyInstaller binary was added in the Phase 14 winget slice below (needed as the asset for the
-# first, manual winget submission); winget's automated update job, a Linux PyInstaller binary, and
-# the APT/RPM repo and AUR are still deliberately not here — each needs its own external
-# account/secret setup, or a manual first step, with the user first.
+# PyInstaller binary and a winget-pkgs update job were added in the Phase 14 winget slice below; a
+# Linux PyInstaller binary and the APT/RPM repo and AUR are still deliberately not here — each
+# needs its own external account/secret setup with the user first.
 #
 # T4, Phase 15b: split from one job into five, each with only the permissions it needs — the job
 # that holds the Docker Hub secret no longer also has `contents: write` (it never needed it), and
@@ -18,10 +17,11 @@
 #
 # Phase 14 (winget slice, 2026-09-28): `pyinstaller-windows` builds the onedir binary
 # (`pyinstaller.spec`) and zips it for `github-release` to attach — that zip is the asset the first,
-# manual `wingetcreate new` submission needs (docs/06-lo-trinh.md, "Đã chốt" mục 6). The
-# `winget-release` job that automates *later* winget-pkgs updates is added in a separate commit,
-# once that manual first submission has actually happened — so the `v0.1.1` tag itself never carries
-# a job that could try to touch winget-pkgs before the package id exists there.
+# manual `wingetcreate new` submission needs (docs/06-lo-trinh.md, "Đã chốt" mục 6). `winget-release`
+# automates *later* winget-pkgs updates via `vedantmgoyal9/winget-releaser`; it was deliberately
+# added in a separate commit from `pyinstaller-windows` so the commit tagged `v0.1.1` never carried
+# a job that could try to touch winget-pkgs before the manual first submission (and the package id
+# it claims) exists there — see "Phase 14 — ghi chú" for why.
 
 name: Release
 
@@ -268,3 +268,29 @@ jobs:
           docker buildx imagetools create \
             --tag docker.io/tamvo1808/tgmirror:latest \
             docker.io/tamvo1808/tgmirror:${{ needs.build.outputs.version }}
+
+  winget-release:
+    name: Submit the new version to winget-pkgs
+    # Never for a pre-release (winget only tracks stable versions), and only after github-release
+    # has attached the zip this reads. This job only *updates* an existing manifest — the first
+    # submission for a brand new package id is a manual `wingetcreate new` run to claim
+    # `tamvcspk.tgmirror` (docs/06-lo-trinh.md, "Đã chốt" mục 6), kept out of the commit that got
+    # tagged `v0.1.1` (see the top-of-file comment) since that manual submission needs v0.1.1's own
+    # release assets to exist first. This job can still land on `main` before the manual step and
+    # the `WINGET_PAT` secret are both in place, so the one step below stays guarded on the secret
+    # being set rather than assuming it already is.
+    needs: [build, github-release]
+    if: needs.build.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      WINGET_PAT: ${{ secrets.WINGET_PAT }}
+    steps:
+      - name: Submit to winget-pkgs
+        if: env.WINGET_PAT != ''
+        uses: vedantmgoyal9/winget-releaser@main
+        with:
+          identifier: tamvcspk.tgmirror
+          installers-regex: '\.zip$'
+          token: ${{ secrets.WINGET_PAT }}
