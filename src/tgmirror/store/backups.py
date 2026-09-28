@@ -65,6 +65,16 @@ class Backup:
     def handled(self) -> int:
         return self.done + self.skipped_filter + self.gone
 
+    @property
+    def total_items(self) -> int:
+        """An upper bound on how many messages this backup has to look at, from the one-shot
+        count ``BackupWriter.run`` takes at the start of every run (mirrors
+        ``RunOptions.total_items``, stored the same non-authoritative way as ``done``/``gone`` —
+        ``engine/backupdir.py``'s directory is still what a resume actually reads). ``0``: not
+        counted yet, or the count call failed and was skipped — callers fall back to the same
+        "total unknown" rendering a run without a count uses."""
+        return self.stats.get("total_items", 0)
+
 
 BACKUP_SELECT = (
     "SELECT id, account, src_id, src_title, src_kind, dir, filters_json, status, control, "

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from tgmirror.core.gateway import ChatKind, TransferPhase
 from tgmirror.engine.transfer import Transfer, TransferTracker
 from tgmirror.store.runs import Control, Run, RunOptions, RunStatus
-from tgmirror.ui.progress import BIG_TRANSFER, LineReporter, size
+from tgmirror.ui.progress import BIG_TRANSFER, BackupLineReporter, LineReporter, size
 
 DOWN, UP = TransferPhase.DOWNLOAD, TransferPhase.UPLOAD
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -156,6 +156,21 @@ def test_a_file_that_was_never_announced_is_not_closed_either() -> None:
     LineReporter(lines.append).transfer(big(20 * MB))  # arrived complete in one go
 
     assert lines == []
+
+
+def test_a_backup_download_gets_the_same_big_file_lines_a_run_does() -> None:
+    """Used to be a no-op (``BackupLineReporter.transfer`` was ``pass``, phase 11a v1) — now shares
+    ``TransferLines`` with ``LineReporter``, so a backup's downloads are no longer invisible."""
+    lines: list[str] = []
+    reporter = BackupLineReporter(lines.append)
+
+    reporter.transfer(big(0))
+    reporter.transfer(big(20 * MB))
+
+    assert lines == [
+        "Downloading message 7: 0% (0 B / 20.0 MB).",
+        "Downloading message 7: 100% (20.0 MB / 20.0 MB, 2.0 MB/s).",
+    ]
 
 
 def test_sizes_are_written_the_way_people_read_them() -> None:

@@ -9,7 +9,8 @@ import pytest
 from tests.fakes import FakeGateway
 from tgmirror.core.gateway import ChatKind, MediaKind, SrcMessage, Unit
 from tgmirror.core.limiter import LimiterState
-from tgmirror.engine.status import MIN_SAMPLE, build_report, cap_days, estimate
+from tgmirror.engine.status import MIN_SAMPLE, backup_estimate, build_report, cap_days, estimate
+from tgmirror.store.backups import Backup
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store
 from tgmirror.store.msgmap import MessageResult
 from tgmirror.store.runs import Control, Run, RunOptions, RunSpec, RunStatus
@@ -198,6 +199,59 @@ def test_messages_found_deleted_count_as_handled_by_a_retry() -> None:
     run = make_run(options=RunOptions(retry_of=1), stats={"done": 1, "gone": 3})
 
     assert estimate(run, NOW, live=True, retry_left=4).fraction == 0.5  # 4 of 8
+
+
+# ---- a backup: the same formulas, once it has a total (engine/backup.py::BackupWriter._analyze) --
+
+
+def make_backup(**changes: object) -> Backup:
+    """A backup that began 100 s ago and saved 250 of an analyzed 1000."""
+    base = Backup(
+        id=1,
+        account="default",
+        src_id=-1001,
+        src_title="Source",
+        src_kind=ChatKind.BROADCAST,
+        dir="/backups/source",
+        filters_json="{}",
+        status=RunStatus.RUNNING,
+        control=Control.NONE,
+        cursor_to=250,
+        resume_at=None,
+        fail_reason=None,
+        stats={"done": 250, "total_items": 1000},
+        started_at=NOW - timedelta(seconds=100),
+        ended_at=None,
+        updated_at=NOW,
+    )
+    return replace(base, **changes)  # type: ignore[arg-type]
+
+
+def test_progress_speed_and_eta_of_a_running_backup() -> None:
+    est = backup_estimate(make_backup(), NOW, live=True)
+
+    assert est.fraction == 0.25
+    assert est.speed == 2.5  # 250 messages in 100 s
+    assert est.eta == timedelta(seconds=300)  # the other 750 at the pace of the first 250
+
+
+def test_a_backup_not_yet_analyzed_has_no_fraction() -> None:
+    est = backup_estimate(make_backup(stats={"done": 250}), NOW, live=True)
+
+    assert est.fraction is None and est.eta is None and est.speed == 2.5
+
+
+def test_a_finished_backup_is_complete_however_much_was_filtered() -> None:
+    backup = make_backup(status=RunStatus.DONE, stats={"done": 40, "total_items": 1000})
+
+    assert backup_estimate(backup, NOW, live=False).fraction == 1.0
+
+
+@pytest.mark.parametrize("status", [RunStatus.PAUSED, RunStatus.WAITING_FLOOD, RunStatus.STOPPED])
+def test_only_a_running_backup_gets_an_eta(status: RunStatus) -> None:
+    est = backup_estimate(make_backup(status=status), NOW, live=status is RunStatus.PAUSED)
+
+    assert est.eta is None and est.fraction == 0.25
 
 
 # ---- what is gathered from the store ---------------------------------------------------------

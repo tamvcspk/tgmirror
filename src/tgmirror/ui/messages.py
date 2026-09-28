@@ -159,6 +159,9 @@ VI: dict[str, str] = {
     "backup.preview_empty": "Xem trước: nguồn không có tin nào trong khoảng đã chọn.",
     "backup.confirm_start": "Backup {src} vào {dir} ngay bây giờ?",
     "backup.start": "Lần backup {id}: {src} → {dir}.",
+    "backup.analyzed": (
+        "Ước tính: tối đa {total} tin cần xem xét (số đếm của Telegram, chưa trừ filter)."
+    ),
     "backup.progress": (
         "Lần backup {id}: {done} tin đã lưu, {skipped} bị filter loại (tới id {cursor})."
     ),
@@ -755,6 +758,9 @@ EN: dict[str, str] = {
     "backup.preview_empty": "Preview: the source has no messages in the chosen range.",
     "backup.confirm_start": "Back up {src} into {dir} now?",
     "backup.start": "Backup {id}: {src} → {dir}.",
+    "backup.analyzed": (
+        "Estimate: up to {total} messages to look at (Telegram's count, the filter not subtracted)."
+    ),
     "backup.progress": (
         "Backup {id}: {done} messages saved, {skipped} filtered out (up to id {cursor})."
     ),

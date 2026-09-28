@@ -733,6 +733,23 @@ class Store:
                 ),
             )
 
+    async def set_backup_total(self, backup_id: int, total: int) -> Backup:
+        """Record how many messages the backup has to look at (its analysis, as ``set_total``
+        does for a run) — a fixed fact, so this *overwrites* ``stats_json["total_items"]``
+        rather than merging like ``advance_backup``'s ``extra_stats``."""
+        async with self._tx() as db:
+            cur = await db.execute("SELECT stats_json FROM backups WHERE id = ?", (backup_id,))
+            row = await cur.fetchone()
+            if row is None:
+                raise StoreError(f"backup {backup_id} does not exist")
+            merged: dict[str, int] = json.loads(row[0])
+            merged["total_items"] = total
+            await db.execute(
+                "UPDATE backups SET stats_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(merged, sort_keys=True), self._ts(), backup_id),
+            )
+        return await self._require_backup(backup_id)
+
     async def advance_backup(
         self, backup_id: int, cursor: int, *, extra_stats: Mapping[str, int] | None = None
     ) -> Backup:

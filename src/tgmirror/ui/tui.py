@@ -33,40 +33,10 @@ from tgmirror.engine.transfer import Transfer
 from tgmirror.store.db import utc_now
 from tgmirror.store.runs import Run
 from tgmirror.ui.messages import t
-from tgmirror.ui.progress import LineReporter, duration
+from tgmirror.ui.progress import LineReporter, bar, floods_tail, progress_line
 
-BAR_WIDTH = 20
 REFRESH = 4  # redraws a second; Live only repaints what changed
 RECENT_LINES = 5  # silent mode: how many notice/transfer lines render() keeps (C3, Phase 15b)
-
-
-def _bar(fraction: float | None) -> Text:
-    filled = 0 if fraction is None else round(max(0.0, min(1.0, fraction)) * BAR_WIDTH)
-    return Text("█" * filled + "░" * (BAR_WIDTH - filled), style="cyan")
-
-
-def _progress_line(
-    run: Run, fraction: float | None, speed: float | None, eta: timedelta | None
-) -> str:
-    total = run.options.total_items
-    base = (
-        t(
-            "tui.progress_total",
-            handled=run.handled,
-            total=max(total, run.handled),
-            percent=round(fraction * 100) if fraction is not None else 0,
-        )
-        if total > 0
-        else t("tui.progress_plain", handled=run.handled)
-    )
-    if speed is None:
-        return base
-    tail = (
-        t("tui.speed", speed=f"{speed:.1f}", eta=duration(eta))
-        if eta is not None
-        else t("tui.speed_no_eta", speed=f"{speed:.1f}")
-    )
-    return f"{base}   {tail}"
 
 
 class TuiReporter:
@@ -166,14 +136,16 @@ class TuiReporter:
             mode=run.mode,
             delay=f"{self._delay:.1f}",
         )
-        progress = _progress_line(run, est.fraction, est.speed, est.eta)
+        progress = progress_line(
+            run.handled, run.options.total_items, est.fraction, est.speed, est.eta
+        )
         counts = t("tui.counts", done=run.done, failed=run.failed, skipped=run.skipped_filter)
-        if self._floods:
-            ago = duration(timedelta(seconds=max(self._clock() - (self._last_flood or 0.0), 0.0)))
-            counts += t("tui.floods", count=self._floods, ago=ago)
+        counts += floods_tail(
+            self._floods, timedelta(seconds=max(self._clock() - (self._last_flood or 0.0), 0.0))
+        )
         body = [
             Text(header),
-            Text.assemble(_bar(est.fraction), "  ", progress),
+            Text.assemble(bar(est.fraction), "  ", progress),
             Text(counts),
         ]
         if self._silent:

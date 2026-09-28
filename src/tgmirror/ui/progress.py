@@ -11,6 +11,8 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
+from rich.text import Text
+
 from tgmirror.core.gateway import TransferPhase
 from tgmirror.engine.transfer import Transfer
 from tgmirror.store.backups import Backup
@@ -20,6 +22,7 @@ from tgmirror.ui.messages import t
 STEP = 5  # percent a transfer must have advanced before its next line...
 HEARTBEAT = 30.0  # ...unless this many seconds have passed (a crawling one still says so)
 BIG_TRANSFER = 8 * 1024 * 1024  # a file smaller than this is over before a line about it would help
+BAR_WIDTH = 20
 
 
 def _plain(value: object) -> object:
@@ -48,6 +51,96 @@ def size(count: float) -> str:
     return f"{value:.0f} {units[unit]}" if unit == 0 else f"{value:.1f} {units[unit]}"
 
 
+def bar(fraction: float | None) -> Text:
+    """A fixed-width ``█``/``░`` bar — shared by ``TuiReporter`` (a run) and ``BackupTuiReporter``
+    (a backup): once each has its own ``Estimate`` (``engine.status.estimate``/``backup_estimate``),
+    drawing it is identical."""
+    filled = 0 if fraction is None else round(max(0.0, min(1.0, fraction)) * BAR_WIDTH)
+    return Text("█" * filled + "░" * (BAR_WIDTH - filled), style="cyan")
+
+
+def progress_line(
+    handled: int, total: int, fraction: float | None, speed: float | None, eta: timedelta | None
+) -> str:
+    """The "N/total (~P%)   speed, ETA" text next to ``bar()`` — primitive-args so a run and a
+    backup share it instead of each formatting their own ``Run``/``Backup`` fields."""
+    base = (
+        t(
+            "tui.progress_total",
+            handled=handled,
+            total=max(total, handled),
+            percent=round(fraction * 100) if fraction is not None else 0,
+        )
+        if total > 0
+        else t("tui.progress_plain", handled=handled)
+    )
+    if speed is None:
+        return base
+    tail = (
+        t("tui.speed", speed=f"{speed:.1f}", eta=duration(eta))
+        if eta is not None
+        else t("tui.speed_no_eta", speed=f"{speed:.1f}")
+    )
+    return f"{base}   {tail}"
+
+
+def floods_tail(count: int, ago: timedelta) -> str:
+    """The " · N throttled (last ... ago)" suffix — identical text ``TuiReporter.render()`` and
+    ``BackupTuiReporter.render()`` used to build inline, verbatim, in two places."""
+    return t("tui.floods", count=count, ago=duration(ago)) if count else ""
+
+
+class TransferLines:
+    """The per-file "big download/upload" lines ``LineReporter.transfer`` used to build alone: a
+    line when a big file starts, has advanced ``STEP`` percent (and at least ``interval`` seconds
+    have passed) or ``HEARTBEAT`` seconds have gone by, and when it is done. Pure ``Transfer`` data
+    in, no ``Run``/``Backup`` coupling, so ``BackupLineReporter`` shares it instead of discarding
+    every transfer (as it used to)."""
+
+    def __init__(
+        self,
+        emit: Callable[[str], None],
+        *,
+        interval: float = 5.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._emit = emit
+        self._interval = interval
+        self._clock = clock
+        self._last: dict[tuple[TransferPhase, int], tuple[float, int]] = {}
+
+    def update(self, transfer: Transfer) -> None:
+        if transfer.total < BIG_TRANSFER:
+            return
+        key = (transfer.phase, transfer.msg_id)
+        now = self._clock()
+        percent = 100 if transfer.finished else min(round(transfer.fraction * 100), 99)
+        last = self._last.get(key)
+        if transfer.finished:
+            if self._last.pop(key, None) is None:
+                return  # never announced: it went by too fast to matter
+        elif last is not None:
+            since, shown = last
+            quiet = now - since < self._interval
+            small = percent - shown < STEP and now - since < HEARTBEAT
+            if quiet or small:
+                return
+            self._last[key] = (now, percent)
+        else:
+            self._last[key] = (now, percent)
+        speed = f", {size(transfer.speed)}/s" if transfer.speed else ""
+        self._emit(
+            t(
+                f"run.transfer_{transfer.phase}",
+                id=transfer.msg_id,
+                percent=percent,
+                done=size(transfer.done),
+                total=size(transfer.total),
+                speed=speed,
+            )
+        )
+
+
 class LineReporter:
     def __init__(
         self,
@@ -60,7 +153,7 @@ class LineReporter:
         self._interval = interval
         self._clock = clock
         self._last: float | None = None
-        self._last_transfer: dict[tuple[TransferPhase, int], tuple[float, int]] = {}
+        self._transfer_lines = TransferLines(emit, interval=interval, clock=clock)
 
     def notice(self, code: str, **params: object) -> None:
         self._emit(t(f"run.{code}", **{k: _plain(v) for k, v in params.items()}))
@@ -96,42 +189,11 @@ class LineReporter:
         ``interval`` seconds have passed) or ``HEARTBEAT`` seconds have gone by, and when it is
         done. A 2 GB upload is a few dozen lines, not hundreds. Small files say nothing: the
         batch line covers them."""
-        if transfer.total < BIG_TRANSFER:
-            return
-        key = (transfer.phase, transfer.msg_id)
-        now = self._clock()
-        percent = 100 if transfer.finished else min(round(transfer.fraction * 100), 99)
-        last = self._last_transfer.get(key)
-        if transfer.finished:
-            if self._last_transfer.pop(key, None) is None:
-                return  # never announced: it went by too fast to matter
-        elif last is not None:
-            since, shown = last
-            quiet = now - since < self._interval
-            small = percent - shown < STEP and now - since < HEARTBEAT
-            if quiet or small:
-                return
-            self._last_transfer[key] = (now, percent)
-        else:
-            self._last_transfer[key] = (now, percent)
-        speed = f", {size(transfer.speed)}/s" if transfer.speed else ""
-        self._emit(
-            t(
-                f"run.transfer_{transfer.phase}",
-                id=transfer.msg_id,
-                percent=percent,
-                done=size(transfer.done),
-                total=size(transfer.total),
-                speed=speed,
-            )
-        )
+        self._transfer_lines.update(transfer)
 
 
 class BackupLineReporter:
-    """Plain-line progress for ``tgmirror backup`` (implements ``engine.backup.Reporter``).
-
-    Per-file transfer lines are not shown yet (unlike ``LineReporter``'s ``transfer``, phase 11
-    v1 keeps this simple: a backup already says how many messages/albums it has saved)."""
+    """Plain-line progress for ``tgmirror backup`` (implements ``engine.backup.Reporter``)."""
 
     def __init__(
         self,
@@ -144,6 +206,7 @@ class BackupLineReporter:
         self._interval = interval
         self._clock = clock
         self._last: float | None = None
+        self._transfer_lines = TransferLines(emit, interval=interval, clock=clock)
 
     def notice(self, code: str, **params: object) -> None:
         self._emit(t(f"backup.{code}", **{k: _plain(v) for k, v in params.items()}))
@@ -164,4 +227,7 @@ class BackupLineReporter:
         )
 
     def transfer(self, transfer: Transfer) -> None:
-        pass
+        """As ``LineReporter.transfer`` — a backup only ever downloads, so
+        ``run.transfer_download`` is the only key this ever emits (``TransferLines`` doesn't know
+        or care which task it's for)."""
+        self._transfer_lines.update(transfer)

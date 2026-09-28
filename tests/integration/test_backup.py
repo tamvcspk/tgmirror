@@ -125,6 +125,16 @@ async def test_backs_up_text_and_photo_in_order(rig: Rig) -> None:
     assert media_file.exists()
 
 
+async def test_analyzes_a_total_like_a_run_does(rig: Rig) -> None:
+    rig.fill(3)
+    store = await rig.store()
+
+    final = await rig.run(store)
+
+    assert final.total_items == 3
+    assert ("analyzed", {"total": 3}) in rig.recorder.notices
+
+
 async def test_album_kept_as_one_unit(rig: Rig) -> None:
     rig.gw.add_album(rig.src.id, [MediaKind.PHOTO, MediaKind.PHOTO, MediaKind.VIDEO], "caption")
     store = await rig.store()

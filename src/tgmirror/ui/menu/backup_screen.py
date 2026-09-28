@@ -5,9 +5,12 @@ control loop rather than sharing a base class (no destination, no ``msg_map``), 
 the same instead of forcing one abstraction over two different progress shapes.
 
 ``BackupTuiReporter`` (below) fills the same role here that ``ui/tui.py::TuiReporter`` fills for
-``RunScreen``: a pure, ``Live``-free ``render()`` the screen pulls each redraw. It cannot reuse
-``TuiReporter`` because ``engine.backup.Reporter.progress`` carries a ``Backup``, not a ``Run`` (a
-backup has no ``total_items``/ETA yet — Phase 11a has no analyze step, out of this phase's scope).
+``RunScreen``: a pure, ``Live``-free ``render()`` the screen pulls each redraw. It does not reuse
+``TuiReporter`` itself (``engine.backup.Reporter.progress`` carries a ``Backup``, not a ``Run``, and
+a backup has no destination/mode/failed-count to show), but since ``BackupWriter`` now analyzes a
+total the same way a run does (``engine/backup.py::BackupWriter._analyze``), it shares the same
+bar/progress-line/floods-line building blocks from ``ui/progress.py`` that ``TuiReporter`` uses, and
+the same notice/transfer-line buffering shape (``BackupLineReporter`` + a ``_recent`` tail).
 
 The run/backup control loop itself (``stop_on_interrupt``, ``p``/``r``/``q``, reporting the outcome
 once, exit 130 on a confirmed Ctrl+C) lives in ``ui/menu/task_screen.py::TaskScreen`` — this screen
@@ -16,7 +19,7 @@ only supplies the task, the reporter and the result lines (Phase 15b, L1).
 
 import time
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from rich.console import Group, RenderableType
@@ -26,13 +29,16 @@ from tgmirror.core.config import Limits
 from tgmirror.core.gateway import TelegramGateway
 from tgmirror.engine.backup import BackupWriter
 from tgmirror.engine.backupdir import BackupManifest
+from tgmirror.engine.status import backup_estimate
 from tgmirror.engine.transfer import Transfer
 from tgmirror.store.backups import Backup
-from tgmirror.store.db import Store
+from tgmirror.store.db import Store, utc_now
 from tgmirror.ui.lines import backup_result_lines, backup_start_line
 from tgmirror.ui.menu.task_screen import TaskScreen
 from tgmirror.ui.messages import t
-from tgmirror.ui.progress import duration
+from tgmirror.ui.progress import BackupLineReporter, bar, floods_tail, progress_line
+
+RECENT_LINES = 5  # as ui/tui.py::TuiReporter's silent mode: the last few notice/transfer lines
 
 
 class BackupTuiReporter:
@@ -41,12 +47,25 @@ class BackupTuiReporter:
     owns no ``Live`` of its own — ``BackupScreen`` pulls ``render()`` each redraw, same as
     ``RunScreen`` does with ``TuiReporter``."""
 
-    def __init__(self, backup: Backup, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        backup: Backup,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        now: Callable[[], datetime] = utc_now,
+    ) -> None:
         self._backup = backup
         self._clock = clock
+        self._now = now
+        self._recent: list[str] = []
+        self._lines = BackupLineReporter(self._buffer, clock=clock)  # notices, transfer lines
         self._floods = 0
         self._last_flood: float | None = None
         self._paused = False
+
+    def _buffer(self, line: str) -> None:
+        self._recent.append(line)
+        del self._recent[:-RECENT_LINES]
 
     def notice(self, code: str, **params: object) -> None:
         if code == "paused":
@@ -56,24 +75,31 @@ class BackupTuiReporter:
         if code in ("flood_waiting", "throttled"):
             self._floods += 1
             self._last_flood = self._clock()
+        self._lines.notice(code, **params)
 
     def progress(self, backup: Backup) -> None:
         self._backup = backup
 
     def transfer(self, transfer: Transfer) -> None:
-        pass  # no per-file lines yet (matches BackupLineReporter)
+        self._lines.transfer(transfer)
 
     def render(self) -> RenderableType:
         # no header line here: ``BackupScreen._lines`` already printed "Lần backup ..." once above
         # this panel, and the menu's footer already shows the hotkey hint (``Screen.footer_hint``)
         b = self._backup
+        est = backup_estimate(b, now=self._now(), live=not self._paused)
+        progress = progress_line(b.handled, b.total_items, est.fraction, est.speed, est.eta)
         counts = t(
             "backup.progress", id=b.id, done=b.done, skipped=b.skipped_filter, cursor=b.cursor_to
         )
-        if self._floods:
-            ago = duration(timedelta(seconds=max(self._clock() - (self._last_flood or 0.0), 0.0)))
-            counts += t("tui.floods", count=self._floods, ago=ago)
-        lines = [Text(counts)]
+        counts += floods_tail(
+            self._floods, timedelta(seconds=max(self._clock() - (self._last_flood or 0.0), 0.0))
+        )
+        lines = [
+            Text.assemble(bar(est.fraction), "  ", progress),
+            Text(counts),
+            *(Text(line, style="dim") for line in self._recent),
+        ]
         if self._paused:
             lines.append(Text(t("backup.paused")))
         return Group(*lines)

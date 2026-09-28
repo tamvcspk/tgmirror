@@ -21,7 +21,14 @@ from typing import Protocol
 
 from tgmirror import __version__
 from tgmirror.core.config import Limits
-from tgmirror.core.errors import FloodWait, PeerFlood, PerMessage, TgMirrorError, Transient
+from tgmirror.core.errors import (
+    FloodWait,
+    GatewayError,
+    PeerFlood,
+    PerMessage,
+    TgMirrorError,
+    Transient,
+)
 from tgmirror.core.gateway import ChannelInfo, ChatKind, MessageReader, TelegramGateway, Unit
 from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.engine import backupdir, planner
@@ -33,7 +40,7 @@ from tgmirror.engine.runs import check_runnable
 from tgmirror.engine.transfer import Transfer, TransferTracker
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
-from tgmirror.filters.pushdown import plan_read
+from tgmirror.filters.pushdown import ReadPlan, plan_read
 from tgmirror.store.backups import Backup, BackupSpec
 from tgmirror.store.db import Clock, Store, utc_now
 from tgmirror.store.runs import Control, RunStatus
@@ -237,6 +244,7 @@ class BackupWriter:
             spec = FilterSpec.from_json(manifest.filters_json)
             plan = plan_read(spec, cursor, pushdown=pushdown)
             matcher = None if spec.is_empty else Matcher(spec)
+            backup = await self._analyze(backup, reader, plan)
             status = RunStatus.DONE
             async with aclosing(
                 planner.units(
@@ -286,6 +294,25 @@ class BackupWriter:
         final = await self._store.get_backup(backup.id)
         assert final is not None
         return final
+
+    async def _analyze(self, backup: Backup, reader: MessageReader, plan: ReadPlan) -> Backup:
+        """Count what the backup has to look at, so its progress can say "x of y" — the same
+        courtesy ``engine.runner.Runner._analyze`` does for a run, using the same un-paced-but-
+        flood-aware ``reader.count`` (hard rule 1's documented exception, extended here to a
+        backup's ``FloodOwner``). Unlike a run, there is no retry/head-clamp case to skip: a
+        backup row is a fresh insert per ``begin_backup`` call, and its filter cannot have
+        changed since the last resume (``FiltersChanged``), so re-deriving the count on every
+        ``run()`` is always safe. A Telegram error that is not a rate limit leaves the total
+        unknown (``0``) and the backup carries on, exactly as an unanalyzed run does."""
+        try:
+            total = await reader.count(backup.src_id, min_id=plan.min_id, filters=plan.server)
+        except (FloodWait, PeerFlood):
+            raise
+        except GatewayError:
+            return backup
+        backup = await self._store.set_backup_total(backup.id, total)
+        self._reporter.notice("analyzed", total=total)
+        return backup
 
     async def _handle(
         self,

@@ -57,6 +57,35 @@ class StatusReport:
     cap_days: int  # days of rest the daily cap will cost before that is done (0: it fits today)
 
 
+def _estimate(
+    *,
+    elapsed: float,
+    handled: int,
+    span: int,
+    progressed: int,
+    done: bool,
+    running: bool,
+    live: bool,
+) -> Estimate:
+    """The fraction/speed/ETA formulas ``estimate``/``backup_estimate`` share, once each has
+    reduced its own ``Run``/``Backup`` to these primitives — a run and a backup mean the same
+    thing by "elapsed", "handled so far" and "span" (an upper-bound total), so the arithmetic
+    itself does not need two copies."""
+    speed = handled / elapsed if elapsed >= MIN_SAMPLE and handled else None
+
+    if done:
+        fraction: float | None = 1.0
+    elif span > 0:
+        fraction = min(max(progressed / span, 0.0), 1.0)
+    else:
+        fraction = None
+
+    eta = None
+    if running and live and elapsed >= MIN_SAMPLE and 0 < progressed < span:
+        eta = timedelta(seconds=elapsed * (span - progressed) / progressed)
+    return Estimate(fraction, speed, eta)
+
+
 def estimate(run: Run, now: datetime, *, live: bool, retry_left: int | None = None) -> Estimate:
     """Progress, speed and ETA of ``run`` as of ``now`` (see the module docstring for the caveats).
 
@@ -65,7 +94,6 @@ def estimate(run: Run, now: datetime, *, live: bool, retry_left: int | None = No
     end = now if live else (run.ended_at or run.updated_at)
     elapsed = max((end - run.started_at).total_seconds(), 0.0)
     handled = run.done + run.failed + run.gone
-    speed = handled / elapsed if elapsed >= MIN_SAMPLE and handled else None
 
     if run.options.retry_of is not None:
         span, progressed = handled + (retry_left or 0), handled
@@ -78,17 +106,38 @@ def estimate(run: Run, now: datetime, *, live: bool, retry_left: int | None = No
     else:
         span = progressed = 0  # unknown total (a run from before the total was recorded)
 
-    if run.status is RunStatus.DONE:
-        fraction: float | None = 1.0
-    elif span > 0:
-        fraction = min(max(progressed / span, 0.0), 1.0)
-    else:
-        fraction = None
+    return _estimate(
+        elapsed=elapsed,
+        handled=handled,
+        span=span,
+        progressed=progressed,
+        done=run.status is RunStatus.DONE,
+        running=run.status is RunStatus.RUNNING,
+        live=live,
+    )
 
-    eta = None
-    if run.status is RunStatus.RUNNING and live and elapsed >= MIN_SAMPLE and 0 < progressed < span:
-        eta = timedelta(seconds=elapsed * (span - progressed) / progressed)
-    return Estimate(fraction, speed, eta)
+
+def backup_estimate(backup: Backup, now: datetime, *, live: bool) -> Estimate:
+    """As ``estimate``, for a backup: since ``BackupWriter`` now analyzes a total the same way a
+    run does (``engine/backup.py::BackupWriter._analyze``), the same formulas apply once reduced
+    to the same primitives — no retry, no id-span fallback (a backup keeps no ``src_last_id``)."""
+    end = now if live else (backup.ended_at or backup.updated_at)
+    elapsed = max((end - backup.started_at).total_seconds(), 0.0)
+    handled = backup.handled
+    if backup.total_items > 0:
+        span, progressed = max(backup.total_items, handled), handled
+    else:
+        span = progressed = 0  # not analyzed yet, or the count call failed
+
+    return _estimate(
+        elapsed=elapsed,
+        handled=handled,
+        span=span,
+        progressed=progressed,
+        done=backup.status is RunStatus.DONE,
+        running=backup.status is RunStatus.RUNNING,
+        live=live,
+    )
 
 
 async def build_report(store: Store, run: Run, *, now: datetime, daily_cap: int) -> StatusReport:
@@ -142,10 +191,13 @@ def cap_days(left: int, daily_cap: int, sent_today: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class BackupStatusReport:
-    """As ``StatusReport``, for a backup (T1, Phase 15b) — much simpler: a backup has no known
-    total to measure progress against (Phase 11a has no analyze step, same reason
-    ``ui/menu/backup_screen.py::BackupTuiReporter`` shows no ETA either), so this is only a
-    speed, never a fraction/ETA."""
+    """As ``StatusReport``, for a backup (T1, Phase 15b) — much simpler: only a speed, never a
+    fraction/ETA. A backup does have a total now (``Backup.total_items``,
+    ``engine/backup.py::BackupWriter._analyze``) and ``backup_estimate`` computes a fraction/ETA
+    from it exactly as ``estimate`` does for a run — ``ui/menu/backup_screen.py::BackupTuiReporter``
+    uses that directly. ``build_backup_report``/``tgmirror status`` were left out of that when the
+    reporters gained it (deliberately out of scope, see the plan that added ``backup_estimate``):
+    a natural follow-up, not done here."""
 
     backup: Backup
     now: datetime
