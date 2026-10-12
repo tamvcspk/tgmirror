@@ -1,0 +1,14 @@
+{
+  "created_at": "2026-10-12T16:44:19.856944+00:00",
+  "filters_json": "{\"include\": [{\"link\": []}]}",
+  "format_version": 1,
+  "protected_ack": false,
+  "src_about": "",
+  "src_id": -1004436761742,
+  "src_kind": "broadcast",
+  "src_noforwards": false,
+  "src_title": "mediacenter",
+  "tgmirror_version": "0.1.1",
+  "topics": [],
+  "updated_at": "2026-10-12T16:44:19.856944+00:00"
+}

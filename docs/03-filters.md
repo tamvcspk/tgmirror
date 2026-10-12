@@ -45,7 +45,7 @@ Các điểm đã chốt khi làm phase 3 (không phải D1–D9):
 | `is_reply` | bool | Tin trả lời một tin khác. Trong forum, tin chỉ *nằm trong* một topic (header trả lời trỏ vào chính topic) **không** là reply — **chưa kiểm trên tài khoản thật** |
 | `edited` | bool | `edit_date` có giá trị |
 | `link` | `true` (bất kỳ link), hoặc list domain | Domain của link trong text/caption (entity URL và text-URL), chữ thường, bỏ `www.`; `example.com` khớp cả `blog.example.com` nhưng không khớp `notexample.com`. `link: []` = như `true`. Cờ `--has-link` (bất kỳ) và `--link-domain DOMAIN` (lặp được; có domain thì không cần `--has-link`). Trên backup làm trước Phase 18a, domain được suy gần đúng từ HTML |
-| `filename` | list glob | Tên file gốc của media, không phân biệt hoa/thường (`*.pdf`). Tin không có file thì sai |
+| `filename` | list glob | Tên file gốc của media, không phân biệt hoa/thường (`*.pdf`). Tin không có tên thì sai: **ảnh không có tên file** (nên `*.jpg` không khớp ảnh), còn tài liệu, GIF và sticker thường có (đã thấy trên tài khoản thật, 2026-10-12) |
 | `forwards`, `reactions` | `{min,max}` | Số lần tin bị forward; tổng mọi reaction. Thiếu thì sai, như `views` |
 
 `date` và `id` là điều kiện toàn cục (đẩy xuống server, xem dưới). Cùng loại với chúng (Phase 18a): **`message_ids`**, danh sách id tin cụ thể — dùng cho `--exact` (một selection đã đóng băng, xem "Selection" dưới). Một album được lấy khi **bất kỳ** tin nào của nó có trong danh sách (không bao giờ tách album, luật 4); danh sách được sắp xếp và bỏ trùng khi lưu.
