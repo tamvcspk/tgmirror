@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 
 from tgmirror.cli.errors import UsageProblem, run
+from tgmirror.cli.refs import SOURCE_HELP
 from tgmirror.cli.runtime import Runtime, authorized
 from tgmirror.core.gateway import ChatKind
 from tgmirror.engine.endpoints import find_channel
@@ -17,9 +18,7 @@ from tgmirror.ui.tables import print_topics, topics_json
 
 def topics(
     ctx: typer.Context,
-    src: Annotated[
-        str, typer.Argument(help='Forum: "@username" (quoted in PowerShell), id or exact title.')
-    ],
+    src: Annotated[str, typer.Argument(help="The forum. " + SOURCE_HELP)],
     as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
 ) -> None:
     """List a forum's topics (id, title, closed).

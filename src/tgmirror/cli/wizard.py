@@ -14,14 +14,16 @@ from typing import Any, TypeVar
 
 from tgmirror.cli.errors import UsageProblem, describe
 from tgmirror.core.gateway import CaptionMode, ChannelInfo, MediaKind, TopicInfo
+from tgmirror.engine import selection
 from tgmirror.engine.endpoints import (
     InvalidChannelTitle,
     NewChannelSpec,
     eligible_destinations,
     validate_new_channel,
 )
+from tgmirror.engine.selection import LastDiscovery
 from tgmirror.filters.model import FilterError, FilterSpec
-from tgmirror.filters.parser import FlagFilters, from_file, from_flags
+from tgmirror.filters.parser import FlagFilters, from_flags
 from tgmirror.store.runs import Run
 from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import Choice, Prompter
@@ -230,25 +232,37 @@ async def pick_strategy(prompter: Prompter, *, protected: bool) -> StrategyChoic
 
 
 async def pick_filters(
-    prompter: Prompter, *, can_keep: bool = False, topics: Sequence[TopicInfo] = ()
+    prompter: Prompter,
+    *,
+    can_keep: bool = False,
+    topics: Sequence[TopicInfo] = (),
+    last: LastDiscovery | None = None,
 ) -> FilterSpec | None:
     """Step 3: no filter, a few criteria, or a YAML file. A rejected answer asks again.
 
     ``can_keep`` (the pair was cloned before) adds the first choice, "keep the filter of the
     previous run", answered with ``None`` like giving no filter flag at all. ``topics`` (already
     fetched by the caller when the source is a forum, phase 8) adds a topic checkbox to the
-    criteria step.
+    criteria step. ``last`` (phase 18a, what ``tgmirror inspect`` last selected in this source)
+    adds "use that result", answered with its filter, judged again as the run goes (a live
+    filter, like typing it).
     """
     choices = [
         Choice(t("filter.none"), "none"),
         Choice(t("filter.criteria"), "criteria"),
         Choice(t("filter.file"), "file"),
     ]
+    if last is not None:
+        when = last.taken_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        choices.insert(0, Choice(t("filter.use_last", count=f"{last.count:,}", when=when), "last"))
     if can_keep:
         choices.insert(0, Choice(t("filter.keep"), "keep"))
     how = await prompter.select(t("filter.pick"), choices)
     if how == "keep":
         return None
+    if how == "last":
+        assert last is not None
+        return last.filters
     if how == "none":
         return FilterSpec()
     for attempt in range(1, MAX_FILTER_ATTEMPTS + 1):
@@ -316,5 +330,8 @@ async def _ask_criteria(prompter: Prompter, *, topics: Sequence[TopicInfo] = ())
 
 
 async def _ask_file(prompter: Prompter) -> FilterSpec:
-    """Tab-completes like a shell (``Prompter.path``): a YAML file, so files are shown too."""
-    return from_file(Path((await prompter.path(t("filter.ask_file"))).strip().strip("\"'")))
+    """Tab-completes like a shell (``Prompter.path``): a YAML file, so files are shown too. A
+    plain filter file or a selection file (phase 18a, ``tgmirror inspect --save``) — its filter
+    is used live; a frozen list in it is ``--exact``'s business, not the wizard's."""
+    path = Path((await prompter.path(t("filter.ask_file"))).strip().strip("\"'"))
+    return (await asyncio.to_thread(selection.load, path)).filters

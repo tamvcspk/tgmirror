@@ -6,6 +6,7 @@ no schedule, and Ctrl+C ends it with the progress saved. Cloning the same pair a
 what is newer (delta) with the filter of the previous run.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Annotated
@@ -21,8 +22,12 @@ from tgmirror.cli.filter_options import (
     ExcludeMediaOption,
     ExcludeRegexOption,
     FilterFileOption,
+    ForwardedFromOption,
+    ForwardedOption,
     FromUserOption,
     HashtagOption,
+    HasLinkOption,
+    LinkDomainOption,
     MaxSizeOption,
     MediaOption,
     MinSizeOption,
@@ -33,9 +38,10 @@ from tgmirror.cli.filter_options import (
     collect,
 )
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.cli.selection_options import ExactOption, SelectionOption, check_args, for_channel
 from tgmirror.core.errors import ForwardsRestricted
 from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
-from tgmirror.engine import preview
+from tgmirror.engine import preview, selection
 from tgmirror.engine.endpoints import (
     Endpoints,
     NewChannelSpec,
@@ -173,6 +179,12 @@ def clone(
     filter_file: FilterFileOption = None,
     from_user: FromUserOption = None,
     topic: TopicOption = None,
+    forwarded: ForwardedOption = None,
+    forwarded_from: ForwardedFromOption = None,
+    has_link: HasLinkOption = False,
+    link_domain: LinkDomainOption = None,
+    selection: SelectionOption = None,
+    exact: ExactOption = False,
     no_filter: Annotated[
         bool,
         typer.Option(
@@ -270,11 +282,18 @@ def clone(
             filter_file=filter_file,
             from_user=from_user,
             topic=topic,
+            forwarded=forwarded,
+            forwarded_from=forwarded_from,
+            has_link=has_link,
+            link_domain=link_domain,
         )  # a bad filter is a usage error before anything is asked or written
         if no_filter:
             if filters is not None:
                 raise UsageProblem("err.conflicting_flags", flags="--no-filter / filter flags")
+            if selection is not None:
+                raise UsageProblem("err.conflicting_flags", flags="--no-filter / --selection")
             filters = FilterSpec()
+        check_args(selection, exact, filters)
         options = CloneOptions(
             src=src,
             dst=dst,
@@ -302,6 +321,11 @@ def clone(
             if not channels:
                 typer.echo(t("channels.empty"))
                 raise typer.Exit(1)
+            if selection is not None:
+                chosen, named = await asyncio.to_thread(
+                    for_channel, rt.paths, channels, src=src, selection=selection, exact=exact
+                )
+                options = replace(options, filters=chosen, src=named)
             async with opened_store(rt) as store:
                 flow = CloneFlow(rt, store, conn.gateway, channels, options)
                 await run_steps(rt.prompter, flow.steps())
@@ -604,8 +628,11 @@ class CloneFlow:
             topics: Sequence[TopicInfo] = ()
             if self._source.kind is ChatKind.FORUM:
                 topics = await self._gateway.list_topics(self._source.id)
+            last = await asyncio.to_thread(
+                selection.last_discovery, self._rt.paths.selections_dir, self._source.id
+            )
             self._filters = await wizard.pick_filters(
-                self._prompter, can_keep=self._seen_before, topics=topics
+                self._prompter, can_keep=self._seen_before, topics=topics, last=last
             )
 
     async def _confirm(self) -> None:

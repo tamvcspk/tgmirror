@@ -144,6 +144,20 @@ class FakeGateway:
         geo: tuple[float, float] | None = None,
         venue_title: str | None = None,
         contact: tuple[str, str, str] | None = None,
+        # phase 18a metadata
+        is_forward: bool = False,
+        fwd_from_id: int | None = None,
+        fwd_from_name: str | None = None,
+        reply_to_id: int | None = None,
+        edit_date: datetime | None = None,
+        link_domains: tuple[str, ...] = (),
+        file_name: str | None = None,
+        file_key: str | None = None,
+        forwards: int | None = None,
+        reactions: int | None = None,
+        post_author: str | None = None,
+        via_bot_id: int | None = None,
+        pinned: bool = False,
     ) -> SrcMessage:
         msg_id = self._alloc_id(channel)
         msg = SrcMessage(
@@ -162,6 +176,19 @@ class FakeGateway:
             title=title,
             topic_id=topic_id,
             from_user_id=from_user_id,
+            is_forward=is_forward or fwd_from_id is not None or fwd_from_name is not None,
+            fwd_from_id=fwd_from_id,
+            fwd_from_name=fwd_from_name,
+            reply_to_id=reply_to_id,
+            edit_date=edit_date,
+            link_domains=link_domains,
+            file_name=file_name,
+            file_key=file_key,
+            forwards=forwards,
+            reactions=reactions,
+            post_author=post_author,
+            via_bot_id=via_bot_id,
+            pinned=pinned,
         )
         self.messages[channel].append(msg)
         if poll_options or geo is not None or contact is not None:
@@ -369,6 +396,8 @@ class FakeGateway:
                     mime=msg.mime,
                     size=msg.size,
                     duration=msg.duration,
+                    original_filename=msg.file_name,
+                    file_key=msg.file_key,
                 )
             else:
                 extra = self._export_extra.get((src, msg.id))
@@ -407,6 +436,17 @@ class FakeGateway:
                     text_html=msg.text,
                     views=msg.views,
                     media=media,
+                    is_forward=msg.is_forward,
+                    fwd_from_id=msg.fwd_from_id,
+                    fwd_from_name=msg.fwd_from_name,
+                    reply_to_id=msg.reply_to_id,
+                    edit_date=msg.edit_date,
+                    link_domains=msg.link_domains,
+                    forwards=msg.forwards,
+                    reactions=msg.reactions,
+                    post_author=msg.post_author,
+                    via_bot_id=msg.via_bot_id,
+                    pinned=msg.pinned,
                 )
             )
         return out

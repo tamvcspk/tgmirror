@@ -40,7 +40,15 @@ Các điểm đã chốt khi làm phase 3 (không phải D1–D9):
 | `from_user` | list id (một số = list một phần tử) | Nguồn group/forum, any-of. **Chỉ nhận id** (không `@username`): giữ `filters/model.py`/`matcher.py`/`parser.py` không đụng I/O. Tin của nguồn broadcast không có id người gửi nên predicate luôn sai (thiếu thuộc tính) |
 | `topic` | list id (một số = list một phần tử) | Chỉ forum, any-of. **Chỉ nhận id**, không tên topic — `tgmirror topics <src>` tra id/tên. Tin ở General của forum không có topic id ở tầng Telethon (giống nguồn không phải forum); `topic: 1` (General, như `tgmirror topics` và wizard hiển thị) vẫn khớp chúng: matcher coi tin không có topic id là General |
 
-`date` và `id` là điều kiện toàn cục (đẩy xuống server, xem dưới).
+| `forwarded` | bool | Phase 18a. `true`: tin có header "Forwarded from"; `false`: tin không phải forward. Cờ `--forwarded`/`--not-forwarded` |
+| `forwarded_from` | list id (kể cả số âm) | Id đã đánh dấu của kênh/người gốc, đúng như `tgmirror inspect --by forward` in ra (kênh: `-100...`); any-of. Một người ẩn danh chỉ để lại tên, không có id, nên không bao giờ khớp. Cờ `--forwarded-from ID` |
+| `is_reply` | bool | Tin trả lời một tin khác. Trong forum, tin chỉ *nằm trong* một topic (header trả lời trỏ vào chính topic) **không** là reply — **chưa kiểm trên tài khoản thật** |
+| `edited` | bool | `edit_date` có giá trị |
+| `link` | `true` (bất kỳ link), hoặc list domain | Domain của link trong text/caption (entity URL và text-URL), chữ thường, bỏ `www.`; `example.com` khớp cả `blog.example.com` nhưng không khớp `notexample.com`. `link: []` = như `true`. Cờ `--has-link` (bất kỳ) và `--link-domain DOMAIN` (lặp được; có domain thì không cần `--has-link`). Trên backup làm trước Phase 18a, domain được suy gần đúng từ HTML |
+| `filename` | list glob | Tên file gốc của media, không phân biệt hoa/thường (`*.pdf`). Tin không có file thì sai |
+| `forwards`, `reactions` | `{min,max}` | Số lần tin bị forward; tổng mọi reaction. Thiếu thì sai, như `views` |
+
+`date` và `id` là điều kiện toàn cục (đẩy xuống server, xem dưới). Cùng loại với chúng (Phase 18a): **`message_ids`**, danh sách id tin cụ thể — dùng cho `--exact` (một selection đã đóng băng, xem "Selection" dưới). Một album được lấy khi **bất kỳ** tin nào của nó có trong danh sách (không bao giờ tách album, luật 4); danh sách được sắp xếp và bỏ trùng khi lưu.
 
 ## Album
 
@@ -57,6 +65,7 @@ Exclude luôn dùng `any` (một tin bị loại thì cả album bị loại) đ
 | include có một rule với đúng một hashtag | `search="#tag"` | `contains` **không** đẩy: `search` của Telegram khớp theo từ, còn `contains` là chuỗi con, đẩy xuống sẽ mất tin hợp lệ |
 | `date.from` / `date.to` | Gateway đổi ngày thành id bằng một lời gọi `get_messages(offset_date=..., reverse=True, limit=1)` rồi dùng `min_id`/`max_id` | Không dùng `offset_date` của `iter_messages`: với `search`/`filter` Telethon coi nó là `max_date` và hỏng khi `reverse=True` |
 | `id.from` / `id.to` | `min_id` / `max_id` | Telethon **loại trừ** `max_id` nên gateway truyền `to + 1` |
+| `message_ids` (Phase 18a) | `min_id` = id nhỏ nhất − lề, `max_id` = id lớn nhất + lề | Chỉ thu hẹp khoảng đọc (cùng lề album); matcher vẫn chọn đúng từng id. Không đẩy `link`/`forwarded`/... xuống server: `InputMessagesFilterUrl` chưa được kiểm trên Telegram thật nên không biết có bỏ sót tin hợp lệ không ("không chắc thì không đẩy"); các predicate metadata khác không có filter tương ứng |
 
 Quy tắc: pushdown chỉ được **thu hẹp an toàn** (không bao giờ loại nhầm tin hợp lệ) và **không bao giờ cắt album** (luật 4). Vì vậy:
 
@@ -77,12 +86,15 @@ Nhiều rule OR hoặc `regex`/`contains` → không đẩy phần đó (quét �
 --since 2024-01-01         --until 2025-01-01
 --min-size 10MB            --max-size 2GB
 --from-user 12345 (lặp được = OR, chỉ id)   --topic 7 (lặp được = OR, chỉ id; `tgmirror topics <src>` tra id)
+--forwarded | --not-forwarded               --forwarded-from -1001234567890 (lặp được = OR, id đã đánh dấu)
+--has-link                                  --link-domain example.com (lặp được = OR)
 --album any|all|first
---filter-file filters.yaml  (không trộn với các flag lọc trên; nếu trộn thì báo lỗi rõ ràng, mã 2)
+--filter-file filters.yaml  (không trộn với các flag lọc trên; nếu trộn thì báo lỗi rõ ràng, mã 2; chỉ nhận file filter thuần)
+--selection FILE | @last    --exact   (Phase 18a, `clone`/`backup`/`restore`; không trộn với cờ lọc; xem "Selection" dưới)
 --pushdown / --no-pushdown  --preview / --no-preview   (không phải filter, chỉ của `new`)
 ```
 
-Ghép cờ thành filter: các cờ "dương" (`--media`, `--hashtag`, `--contains`, `--regex`, `--min-size`, `--max-size`, `--from-user`, `--topic`) tạo **một** rule `include` (AND); mỗi cờ `--exclude-*` là **một rule `exclude` riêng** (OR). Việc phức tạp hơn (nhiều rule include, `mime`, `duration`, `views`, `id`, `has_caption`) dùng YAML. Wizard thu thập cùng các giá trị chuỗi này rồi qua cùng `from_flags`, nên cờ, YAML và wizard cho ra cùng một filter (có test); bước filter của wizard còn có checkbox chọn topic khi nguồn là forum (tự lấy id qua `list_topics`).
+Ghép cờ thành filter: các cờ "dương" (`--media`, `--hashtag`, `--contains`, `--regex`, `--min-size`, `--max-size`, `--from-user`, `--topic`) tạo **một** rule `include` (AND); mỗi cờ `--exclude-*` là **một rule `exclude` riêng** (OR). Việc phức tạp hơn (nhiều rule include, `mime`, `duration`, `views`, `forwards`, `reactions`, `filename`, `is_reply`, `edited`, `id`, `has_caption`) dùng YAML. Wizard thu thập cùng các giá trị chuỗi này rồi qua cùng `from_flags`, nên cờ, YAML và wizard cho ra cùng một filter (có test); bước filter của wizard còn có checkbox chọn topic khi nguồn là forum (tự lấy id qua `list_topics`).
 
 Filter được lưu (JSON đã chuẩn hóa: hashtag chữ thường, size dạng `"<byte>B"`, ngày UTC ISO, giá trị mặc định bỏ đi; `{}` là không lọc) trong `mirrors.filters_json` (và ghi lại ở `runs.filters_json` của mỗi lần chạy), nạp lại được (có test round-trip).
 
@@ -99,3 +111,29 @@ Filter được **nhớ** theo cặp nguồn/đích (`mirrors.filters_json`). Ch
 - **`--no-filter`** → bỏ filter đã nhớ (cũng là quét lại từ đầu, không sao chép trùng). Không dùng chung với cờ lọc (mã 2).
 
 Wizard: với cặp đã từng clone, bước filter có thêm lựa chọn đầu tiên "Giữ filter của lần chạy trước" (tương đương không đưa cờ lọc). Chỉ có logic này ở `Store.start_run`; đây là chỗ **duy nhất** con trỏ được lùi (xem `04-state-checkpoint.md`). Nếu tiến trình khác đang chạy cặp đó (heartbeat còn mới) thì từ chối, không đổi gì.
+
+## Selection — mang một filter từ `inspect` sang lệnh thật (Phase 18a)
+
+`tgmirror inspect` là nơi thử/chỉnh/đếm một filter; `clone`/`backup`/`restore` là nơi dùng nó một lần. Một **file selection** (YAML, đọc/sửa/commit/gửi cho người khác được) mang filter đó từ lệnh này sang lệnh kia, thay cho một "lựa chọn hiện tại" ẩn trong chương trình. Không phải "job": chương trình không liệt kê hay quản lý chúng.
+
+```yaml
+# tgmirror selection - made by `tgmirror inspect` 2026-10-12 10:31 UTC
+version: 1
+source: {id: -1001234567890, title: "Kênh A"}   # id là căn cứ; title chỉ để người đọc. Thư mục backup: {id: ..., backup: ./backups/kenh_a}
+filter:                                          # đúng ngôn ngữ ở trên
+  include: [{media: [video], hashtag: ["#tutorial"]}]
+  date: {from: 2024-01-01}
+snapshot:                                        # chỉ có khi --freeze (và luôn có ở @last)
+  taken_at: 2026-10-12T10:31:00+00:00
+  upto_id: 58211                                 # id lớn nhất đã đọc: danh sách đầy đủ tới đây
+  count: 412
+  ids_file: chosen.ids                           # một id mỗi dòng; sửa tay được (xóa dòng = bỏ tin; # là ghi chú)
+```
+
+- **Đọc**: `--selection FILE` (file selection, hoặc file filter thuần như `--filter-file` — một file không có `version`/`filter`/`source`/`snapshot` chính là file filter nên không cần migration) hoặc `--selection @last`. `--filter-file` vẫn chỉ nhận file filter thuần: đưa nó một file selection bị từ chối kèm gợi ý dùng `--selection` (nó sẽ âm thầm bỏ nguồn và danh sách đã đóng băng).
+- **`@last`**: mỗi lần `inspect` quét **xong** một nguồn, nó ghi đè `<data_dir>/selections/last-<id nguồn>.yaml` (+ `.ids`, luôn có danh sách để `--exact` chạy được trên nó). Quét dở (Ctrl+C, FloodWait quá dài) không ghi — một danh sách dở không phải kết quả. Chỉ là file: không nằm trong `tgmirror.db`, không đi theo `appdata export`, không liệt kê hay quản lý. `--selection @last` cần biết nguồn (`--src`/`<src>`/thư mục backup) vì file được đặt tên theo id nguồn.
+- **Nguồn**: `source` điền cho `--src`/`<src>`/`<dir>` khi lệnh không có; có cả hai mà khác nhau thì mã 2 ("id tin nhắn chỉ có nghĩa trong đúng nguồn của nó"). Selection làm từ một thư mục backup (`source.backup`) điền cho `restore`.
+- **Sống hay đóng băng**: mặc định filter của selection được **đánh giá lại lúc chạy** (delta: lần sau lấy cả tin mới khớp; phần `snapshot` bị bỏ qua). `--exact` chỉ lấy đúng các id đã đóng băng — dựng thành predicate `message_ids` của filter (nên resume/delta/lưu `filters_json` không đổi gì), filter gốc không đánh giá lại. Không có `snapshot` thì `--exact` bị từ chối (mã 2).
+- **Kiểm tra** như filter: sai thì mã 2 trước khi hỏi hay ghi gì. Khóa lạ, `version` mới hơn, hoặc `transform` (chưa có, Phase 19) bị từ chối thay vì dùng một nửa.
+- **Wizard** của `clone`/`backup`/`restore`: bước filter có thêm lựa chọn "Dùng kết quả khám phá gần nhất của nguồn này (N tin, giờ)" khi `@last` của nguồn đó tồn tại (dùng filter của nó, đánh giá sống); lựa chọn "file YAML" nhận cả file filter lẫn file selection.
+- **`inspect` in sẵn lệnh kế tiếp** ("Dùng tiếp với đúng filter này"): `engine/selection.py::to_flags` dựng lại cờ từ `FilterSpec`, và **luôn kiểm bằng cách dựng ngược cờ thành filter** — chỉ in khi đúng nguyên (nhiều rule include, `mime`, `duration`, `id`, ... không có cờ → in `--selection @last` hoặc đường dẫn `--save`).

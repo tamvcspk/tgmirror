@@ -300,3 +300,48 @@ def test_manifest_path_helpers(tmp_path) -> None:
     assert backupdir.manifest_path(tmp_path) == tmp_path / "backup.json"
     assert backupdir.messages_path(tmp_path) == tmp_path / "messages.jsonl"
     assert backupdir.media_dir(tmp_path) == tmp_path / "media"
+
+
+def test_phase_18a_metadata_round_trips_and_stays_out_of_a_plain_line(tmp_path) -> None:
+    rich = ExportedMessage(
+        id=1,
+        date=NOW,
+        grouped_id=None,
+        topic_id=None,
+        from_user_id=None,
+        text_html="x",
+        views=None,
+        media=ExportedMedia(kind=MediaKind.DOCUMENT, filename="1.pdf", file_key="d42"),
+        is_forward=True,
+        fwd_from_id=-1001234567890,
+        fwd_from_name="Origin",
+        reply_to_id=7,
+        edit_date=NOW,
+        link_domains=("example.com", "t.me"),
+        forwards=0,  # a count of zero is data, not "unknown"
+        reactions=12,
+        post_author="Ann",
+        via_bot_id=9,
+        pinned=True,
+    )
+    plain = ExportedMessage(
+        id=2, date=NOW, grouped_id=None, topic_id=None, from_user_id=None, text_html="y", views=None
+    )
+
+    backupdir.append_records(tmp_path, [rich, plain])
+
+    assert backupdir.iter_records(tmp_path) == [rich, plain]
+    line = backupdir.messages_path(tmp_path).read_text(encoding="utf-8").splitlines()[1]
+    assert set(backupdir.record_to_dict(plain)) == {"id", "date", "text_html"}
+    assert '"id": 2' in line or '"id":2' in line
+
+
+def test_a_line_from_before_phase_18a_reads_with_the_new_fields_unset(tmp_path) -> None:
+    backupdir.messages_path(tmp_path).write_text(
+        '{"id": 1, "date": "2026-01-01T00:00:00+00:00", "text_html": "old"}\n', encoding="utf-8"
+    )
+
+    (record,) = backupdir.iter_records(tmp_path)
+
+    assert not record.is_forward and record.fwd_from_id is None and record.edit_date is None
+    assert record.link_domains == () and record.forwards is None and not record.pinned

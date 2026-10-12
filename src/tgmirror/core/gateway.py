@@ -87,6 +87,20 @@ class SrcMessage:
     title: str | None = None  # game/invoice title or poll question, for a placeholder text
     topic_id: int | None = None  # forum topic this message belongs to (1 = General); phase 8
     from_user_id: int | None = None  # sender of a group/forum message; phase 8
+    # --- phase 18a: everything a report or a predicate looks at, all free in a live read ---
+    is_forward: bool = False  # carries a "Forwarded from" header
+    fwd_from_id: int | None = None  # marked peer id of the original channel/user, when visible
+    fwd_from_name: str | None = None  # its title/name, or the hidden name a user chose to show
+    reply_to_id: int | None = None  # a genuine reply (not the topic a forum message sits in)
+    edit_date: datetime | None = None  # when it was last edited, ``None`` if never
+    link_domains: tuple[str, ...] = ()  # distinct domains of the links in text/caption
+    file_name: str | None = None  # the media file's own name, as the sender uploaded it
+    file_key: str | None = None  # stable file id (``d<id>``/``p<id>``): same file, same key
+    forwards: int | None = None  # how many times the post was forwarded
+    reactions: int | None = None  # all reactions together
+    post_author: str | None = None  # signature of a channel post
+    via_bot_id: int | None = None  # the inline bot a message was sent through
+    pinned: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +227,7 @@ class ExportedMedia:
     # before this field existed simply has none, and restore then falls back to what it always
     # did (Telegram/hachoir detecting them from the file itself).
     original_filename: str | None = None
+    file_key: str | None = None  # ``SrcMessage.file_key`` (phase 18a): same file, same key
     audio_title: str | None = None
     audio_performer: str | None = None
     # poll/quiz
@@ -246,6 +261,19 @@ class ExportedMessage:
     text_html: str
     views: int | None
     media: ExportedMedia | None = None
+    # --- phase 18a: the same optional metadata ``SrcMessage`` carries, so ``inspect`` and the new
+    # predicates work on a backup. Absent in a backup made before; all default to "not there".
+    is_forward: bool = False
+    fwd_from_id: int | None = None
+    fwd_from_name: str | None = None
+    reply_to_id: int | None = None
+    edit_date: datetime | None = None
+    link_domains: tuple[str, ...] = ()
+    forwards: int | None = None
+    reactions: int | None = None
+    post_author: str | None = None
+    via_bot_id: int | None = None
+    pinned: bool = False
 
 
 @dataclass(frozen=True, slots=True)

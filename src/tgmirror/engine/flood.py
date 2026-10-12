@@ -78,6 +78,12 @@ class FloodOwner:
     def of_backup(cls, backup: Backup) -> "FloodOwner":
         return cls(backup.account, 1, backup_id=backup.id)
 
+    @classmethod
+    def of_inspect(cls, account: str = "default") -> "FloodOwner":
+        """A scan with no row of its own (phase 18a): its flood events carry neither id, but still
+        feed the account's limiter state, so a later run starts from what the scan learned."""
+        return cls(account, 1)
+
 
 class FloodGuard:
     def __init__(

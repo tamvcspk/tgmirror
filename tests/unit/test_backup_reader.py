@@ -172,3 +172,49 @@ async def test_quiz_with_unknown_correct_option_is_unanswered(tmp_path) -> None:
     assert got[1].quiz_unanswered is True
     assert got[2].quiz_unanswered is False
     assert got[3].quiz_unanswered is False  # a plain poll never needs a correct answer
+
+
+async def test_phase_18a_metadata_reaches_src_message(tmp_path) -> None:
+    record = ExportedMessage(
+        1,
+        NOW,
+        None,
+        None,
+        None,
+        "see <a href='https://x.example.org/'>this</a>",
+        None,
+        media=ExportedMedia(
+            kind=MediaKind.DOCUMENT,
+            filename="1.pdf",
+            original_filename="Report.pdf",
+            file_key="d42",
+        ),
+        is_forward=True,
+        fwd_from_id=-1001,
+        fwd_from_name="Origin",
+        reply_to_id=5,
+        edit_date=NOW,
+        forwards=3,
+        reactions=4,
+        pinned=True,
+    )
+    _seed(tmp_path, [record])
+
+    (got,) = await BackupReader(tmp_path, _manifest()).get_messages(-1001, [1])
+
+    assert (got.is_forward, got.fwd_from_id, got.fwd_from_name) == (True, -1001, "Origin")
+    assert (got.reply_to_id, got.edit_date, got.forwards, got.reactions) == (5, NOW, 3, 4)
+    assert (got.file_name, got.file_key, got.pinned) == ("Report.pdf", "d42", True)
+    # an older/untracked record still has its links read from the HTML
+    assert got.link_domains == ("x.example.org",)
+
+
+async def test_recorded_link_domains_win_over_the_html_guess(tmp_path) -> None:
+    record = ExportedMessage(
+        1, NOW, None, None, None, "https://guess.example.com", None, link_domains=("real.org",)
+    )
+    _seed(tmp_path, [record])
+
+    (got,) = await BackupReader(tmp_path, _manifest()).get_messages(-1001, [1])
+
+    assert got.link_domains == ("real.org",)

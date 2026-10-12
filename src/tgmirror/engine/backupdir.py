@@ -164,10 +164,37 @@ def record_to_dict(message: ExportedMessage) -> dict[str, Any]:
         data["views"] = message.views
     if (media := _media_to_dict(message.media)) is not None:
         data["media"] = media
+    # phase 18a: optional like everything above, so an older reader of the format (and an older
+    # backup read by this one) simply never sees them; FORMAT_VERSION stays 1
+    for name in _META_FIELDS:
+        value = getattr(message, name)
+        if isinstance(value, tuple):
+            if value:
+                data[name] = list(value)
+        elif value is not None and value is not False:  # a count of 0 is data, False is default
+            data[name] = value
+    if message.edit_date is not None:
+        data["edit_date"] = message.edit_date.astimezone(UTC).isoformat()
     return data
 
 
+# the phase 18a fields that are stored as they are (``edit_date`` needs a string, handled apart)
+_META_FIELDS = (
+    "is_forward",
+    "fwd_from_id",
+    "fwd_from_name",
+    "reply_to_id",
+    "link_domains",
+    "forwards",
+    "reactions",
+    "post_author",
+    "via_bot_id",
+    "pinned",
+)
+
+
 def record_from_dict(data: dict[str, Any]) -> ExportedMessage:
+    edit_date = data.get("edit_date")
     return ExportedMessage(
         id=data["id"],
         date=datetime.fromisoformat(data["date"]),
@@ -177,6 +204,17 @@ def record_from_dict(data: dict[str, Any]) -> ExportedMessage:
         text_html=data.get("text_html", ""),
         views=data.get("views"),
         media=_media_from_dict(data.get("media")),
+        is_forward=bool(data.get("is_forward", False)),
+        fwd_from_id=data.get("fwd_from_id"),
+        fwd_from_name=data.get("fwd_from_name"),
+        reply_to_id=data.get("reply_to_id"),
+        edit_date=None if edit_date is None else datetime.fromisoformat(edit_date),
+        link_domains=tuple(data.get("link_domains", ())),
+        forwards=data.get("forwards"),
+        reactions=data.get("reactions"),
+        post_author=data.get("post_author"),
+        via_bot_id=data.get("via_bot_id"),
+        pinned=bool(data.get("pinned", False)),
     )
 
 

@@ -18,6 +18,7 @@ from tgmirror.cli.commands import (
     control,
     doctor,
     history,
+    inspect,
     restore,
     retry,
     run,
@@ -25,6 +26,7 @@ from tgmirror.cli.commands import (
     topics,
 )
 from tgmirror.cli.errors import run as run_command
+from tgmirror.cli.refs import SourceCommand
 from tgmirror.cli.runtime import Runtime, default_runtime
 
 app = typer.Typer(
@@ -119,11 +121,12 @@ app.command("login")(auth.login)
 app.command("logout")(auth.logout)
 app.command("whoami")(auth.whoami)
 app.command("channels")(channels.channels)
-app.command("topics")(topics.topics)
+app.command("topics", cls=SourceCommand)(topics.topics)
 app.command("clone")(clone.clone)
 app.command("run")(run.run_clone)
-app.command("backup")(backup.backup)
+app.command("backup", cls=SourceCommand)(backup.backup)
 app.command("restore")(restore.restore)
+app.command("inspect", cls=SourceCommand)(inspect.inspect_command)
 app.command("pause")(control.pause)
 app.command("stop")(control.stop)
 app.command("history")(history.history)

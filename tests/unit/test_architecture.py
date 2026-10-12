@@ -69,3 +69,15 @@ def test_the_runner_reaches_telegram_only_through_the_flood_guard() -> None:
             assert any(f"guard.{how}(" in nearby for how in ("reader", "write", "transfer")), (
                 f"runner.py line {number + 1} uses the gateway outside the flood guard"
             )
+
+
+def test_inspect_reads_a_channel_only_through_the_flood_guard() -> None:
+    """Hard rule 1: a scan is thousands of read requests, so ``tgmirror inspect`` is no one-shot
+    command — its reader is ``guard.reader(...)`` and the raw gateway is only asked for the
+    one-shot setup (listing chats)."""
+    text = (SRC / "cli" / "commands" / "inspect.py").read_text(encoding="utf-8")
+
+    assert "guard.reader(conn.gateway)" in text
+    for forbidden in ("conn.gateway.iter_messages", "conn.gateway.get_messages", ".export_unit("):
+        assert forbidden not in text
+    assert text.count("conn.gateway.") == 1 and "conn.gateway.list_channels()" in text

@@ -21,6 +21,7 @@ Inside a rule, predicates are ANDed; rules are ORed. Service messages are always
 | `filters/parser.py` | `FlagFilters` (what the flags and the wizard collect) → `from_flags`, `from_file` (YAML), `resolve` (mixing `--filter-file` with flags is `FilterMix`) |
 | `filters/pushdown.py` | `plan_read(spec, cursor, pushdown=, content=) → ReadPlan(min_id, ServerFilter, complete_albums)` |
 | `filters/matcher.py` | `Matcher(spec).matches(unit) -> bool`; no I/O (regex has a timeout → `FilterError`) |
+| `engine/selection.py` | Phase 18a: selection files (`filter` + optional `source`/`snapshot`), `@last`, `to_flags` (filter → CLI flags, always verified by building the spec back); `--selection`/`--exact` wiring is `cli/selection_options.py` |
 | `engine/planner.py`, `batcher.py`, `preview.py` | apply the matcher to units (`Skip` for the dropped), complete albums after content pushdown, credit skips to batches, sample for the wizard preview |
 
 ## Adding a predicate — checklist
@@ -45,10 +46,14 @@ Inside a rule, predicates are ANDed; rules are ORed. Service messages are always
 - Filter-skipped messages are not written to `msg_map` (see `checkpoint-state`); they only bump `skipped_filter` and advance the cursor. This is different from *unsupported* messages (game, invoice, ...), which are recorded as `skipped`.
 - `media` also has `geo contact game invoice`; `topic` (forum only) and `from_user` (group/forum only) are id-only lists (phase 8) — never a username or topic name, so `filters/model.py`/`matcher.py`/`parser.py` stay I/O-free; `tgmirror topics <src>` is where a user looks up an id (`docs/03-filters.md`).
 
+- **Phase 18a metadata predicates** (`forwarded`, `forwarded_from`, `is_reply`, `edited`, `link`, `filename`, `forwards`, `reactions`) read optional `SrcMessage` fields that a live read and a backup both carry (`core/telethon_gateway.py::_extras`); none is pushed down — `link` ↔ `InputMessagesFilterUrl` is a *maybe* until a real account says it never drops a match. `forwarded_from` takes marked peer ids (negative for channels), not `Ids`. `link: true`/`[]` is "any link"; domains match subdomains, never look-alikes (`core/links.py::domain_matches`).
+- **`message_ids`** (global, like `date`/`id`) is what `--exact` becomes: an album is taken when *any* member is listed; `plan_read` narrows the read range by it. A selection's frozen list is never judged against the filter again.
+- A selection file is not a filter file: `--filter-file` refuses one (`FilterFileError` naming `--selection`) because it would silently drop `source` and `snapshot`; the wizard's "YAML file" choice reads both (`selection.load`).
+
 ## Preview (wizard step 5)
 
 `engine/preview.py::sample` reads the first 100 messages of the range (id/date bounds only, no content narrowing, so the sample is not biased) through the matcher and shows matched/scanned plus a few captions; `new` prints it and, on a terminal, asks to save before anything is created. Preview reads count against the read limiter (see `flood-safety`).
 
 ## Doc sync
 
-Before finishing, run the `doc-sync` skill. A new or changed predicate updates the predicate/pushdown tables in `docs/03-filters.md`, the CLI shorthand list there and in `docs/02-cli-ux.md`, and this skill if the layer responsibilities changed.
+Before finishing, run the `doc-sync` skill. A new or changed predicate updates the predicate/pushdown tables in `docs/03-filters.md` (and `engine/selection.py::to_flags` if it has a flag), the CLI shorthand list there and in `docs/02-cli-ux.md`, and this skill if the layer responsibilities changed.

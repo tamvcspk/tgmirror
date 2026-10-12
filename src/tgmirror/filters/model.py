@@ -25,6 +25,7 @@ from pydantic import (
 
 from tgmirror.core.errors import TgMirrorError
 from tgmirror.core.gateway import MediaKind
+from tgmirror.core.links import domain_of
 
 
 class FilterError(TgMirrorError):
@@ -119,6 +120,30 @@ Ids = Annotated[
 ]
 
 
+def normalize_domain(value: str) -> str:
+    """``https://www.Example.com/a`` / ``example.com`` to ``example.com``."""
+    domain = domain_of(value)
+    if domain is None:
+        raise ValueError(f"{value!r} is not a domain like example.com")
+    return domain
+
+
+def _domains(value: Any) -> Any:
+    """``link: true`` means any link (the empty tuple); ``link: example.com`` is a one-item list."""
+    if value is True:
+        return ()
+    if value is False:
+        raise ValueError("link: false is not a filter; exclude the rule with exclude: instead")
+    return _listify(value)
+
+
+# ``forwarded_from`` (phase 18a): the marked peer id of the original channel/user, as ``inspect
+# --by forward`` prints it — negative for channels and supergroups, so not ``Ids`` (> 0 only).
+PeerIds = Annotated[tuple[int, ...], BeforeValidator(_listify), Field(min_length=1)]
+# ``link``: domains; an empty tuple is "any link at all"
+Domains = Annotated[tuple[str, ...], BeforeValidator(_domains)]
+
+
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
@@ -204,11 +229,43 @@ class Rule(_Model):
     views: CountRange | None = None
     from_user: Ids | None = None  # group/forum sources only (phase 8)
     topic: Ids | None = None  # forum sources only (phase 8)
+    # phase 18a: metadata every live read carries (a backup keeps it as optional fields)
+    forwarded: bool | None = None
+    forwarded_from: PeerIds | None = None
+    is_reply: bool | None = None
+    edited: bool | None = None
+    link: Domains | None = None  # () = any link, else any of these domains (subdomains count)
+    filename: Names | None = None  # glob on the media file's own name, any case
+    forwards: CountRange | None = None
+    reactions: CountRange | None = None
 
-    @field_validator("from_user", "topic")
+    @field_validator("from_user", "topic", "forwarded_from")
     @classmethod
     def _dedup_ids(cls, ids: tuple[int, ...] | None) -> tuple[int, ...] | None:
         return None if ids is None else tuple(dict.fromkeys(ids))
+
+    @field_validator("forwarded_from")
+    @classmethod
+    def _peer_ids_are_ids(cls, ids: tuple[int, ...] | None) -> tuple[int, ...] | None:
+        if ids is not None and 0 in ids:
+            raise ValueError("0 is not a channel or user id")
+        return ids
+
+    @field_validator("link")
+    @classmethod
+    def _link_domains(cls, domains: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if domains is None:
+            return None
+        return tuple(dict.fromkeys(normalize_domain(d) for d in domains))
+
+    @field_validator("filename")
+    @classmethod
+    def _filename_globs(cls, globs: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if globs is None:
+            return None
+        if any(not g.strip() for g in globs):
+            raise ValueError("a file name pattern cannot be empty")
+        return tuple(dict.fromkeys(g.strip().casefold() for g in globs))
 
     @field_validator("hashtag")
     @classmethod
@@ -258,11 +315,19 @@ class FilterSpec(_Model):
     exclude: tuple[Rule, ...] = ()
     when: DateRange | None = Field(None, alias="date")
     ids: IdRange | None = Field(None, alias="id")
+    # phase 18a: exactly these messages (``--exact``, a frozen selection). An album is judged by
+    # its members: one of them in the list takes the whole album (rule 4: never split one).
+    message_ids: Ids | None = None
     album: AlbumMode = "any"
+
+    @field_validator("message_ids")
+    @classmethod
+    def _sorted_ids(cls, ids: tuple[int, ...] | None) -> tuple[int, ...] | None:
+        return None if ids is None else tuple(sorted(set(ids)))
 
     @property
     def is_empty(self) -> bool:
-        return not (self.include or self.exclude or self.when or self.ids)
+        return not (self.include or self.exclude or self.when or self.ids or self.message_ids)
 
     def to_json(self) -> str:
         """The canonical form stored in ``mirrors.filters_json`` (``{}`` for no filter)."""

@@ -254,15 +254,25 @@ for batch in batcher(planner.units(run), run.batch_size):
 
 Ánh xạ từ Telethon sang `core/errors.py` nằm ở một chỗ: `map_exception` trong `core/telethon_gateway.py` (thêm các lỗi đăng nhập: `InvalidCode`, `CodeExpired`, `PasswordRequired`, `InvalidPassword`, `InvalidPhone`, `BadApiCredentials`, `NotLoggedIn`; và `TooManyChannels`, `SessionBusy`, `PerMessage` từ `MessageIdInvalidError`). Lỗi của store/lần chạy (`StoreError`, `SchemaTooNew`, `RunBusy` ở `core/errors.py`; `RunNotFound`, `ModeUnsupported`, `RunWaiting` ở `engine/runs.py`) cũng qua `cli/errors.py`. Lỗi RPC chưa biết → `GatewayError` với tên lỗi của Telegram, không để `RPCError` lọt ra ngoài. CLI đổi mỗi lỗi thành một câu và một mã thoát ở `cli/errors.py`.
 
+## Khám phá (Phase 18a, `engine/inspect.py` + `engine/preflight.py` + `engine/selection.py`)
+
+Chi tiết lệnh ở `02-cli-ux.md` ("Khám phá nguồn"), file selection ở `03-filters.md` ("Selection"). Kiến trúc:
+
+- **`SrcMessage` mang thêm metadata** (đều có sẵn trong tin Telethon, không tốn request): `is_forward`, `fwd_from_id`/`fwd_from_name`, `reply_to_id`, `edit_date`, `link_domains`, `file_name`, `file_key`, `forwards`, `reactions`, `post_author`, `via_bot_id`, `pinned`. Một hàm duy nhất (`core/telethon_gateway.py::_extras`) tạo các trường dùng chung cho `SrcMessage` và `ExportedMessage` (cùng tên khóa) nên một lần đọc sống và một lần xuất backup không thể lệch nhau; `core/links.py` (thuần) định nghĩa "domain của một link" cho cả gateway, `BackupReader` và predicate `link`. Các trường mới của backup là **tùy chọn** trong `messages.jsonl` (`FORMAT_VERSION` giữ 1: một backup cũ đọc lên với "không có", một backup mới đọc bằng bản cũ bỏ qua khóa lạ); `ExportedMedia.file_key` cho id file ổn định (`d<id document>`/`p<id photo>`: Telegram giữ nguyên khi forward, nên cùng khóa = cùng file đăng lại).
+- **`engine/inspect.py`**: `Inspector` gom luồng unit thành `Report` (tổng, phần được chọn, các bảng `--by`); `scan` chạy trên **mọi** `MessageReader` — gateway sống qua `FloodGuard` hay `BackupReader` — nên một báo cáo phục vụ kênh lẫn thư mục backup; dùng cùng `Matcher` với `clone`/`backup`/`restore`, nên số inspect đếm là số chúng sẽ lấy. Thuần: không chuỗi dành cho người dùng (hai khóa "không có" `NONE`; `ui/` nói thành lời).
+- **`engine/preflight.py`**: `Preflight` nhận từng unit được chọn và nói nó sẽ đi đường nào, bằng đúng `strategy.router` + `reupload.plan_unit` mà runner dùng (`by_reference = not noforwards`, `topic_hashtag` như `_topic_hashtag`), cộng số lời gọi ghi (một lời gọi forward mang tối đa `batch_size` unit; các đường khác một lời gọi một unit), sàn thời gian theo limiter, số ngày theo `daily_cap`.
+- **`engine/selection.py`**: đọc/ghi file selection (YAML + `.ids`, ghi qua file tạm rồi đổi tên, `.ids` trước), `to_flags` (filter → cờ, có kiểm ngược), `last_discovery` cho wizard. `cli/selection_options.py` là phần CLI của `--selection`/`--exact` (so nguồn, điền `--src`/`<dir>`). `--exact` được cài bằng predicate `message_ids` của `FilterSpec` — không đổi `Runner`, nên delta/resume/`filters_json` chạy như một filter bình thường.
+- **Luật 1**: `inspect` đi qua `FloodGuard` (`FloodOwner.of_inspect`); chỉ `list_channels`/`list_topics` đầu lệnh là bước chuẩn bị một lần. Test kiến trúc giữ điều đó (`test_inspect_reads_a_channel_only_through_the_flood_guard`).
+
 ## Cấu trúc gói
 
 ```
 src/tgmirror/
-  core/     gateway.py  auth.py  telethon_gateway.py  limiter.py  errors.py  config.py  paths.py
-  engine/   endpoints.py  runs.py  planner.py  batcher.py  strategy.py  copy.py  reupload.py  flood.py  reconcile.py  preview.py  runner.py  status.py  topics.py  backup.py  backupdir.py  backup_reader.py
+  core/     gateway.py  auth.py  telethon_gateway.py  limiter.py  errors.py  config.py  paths.py  links.py
+  engine/   endpoints.py  runs.py  planner.py  batcher.py  strategy.py  copy.py  reupload.py  flood.py  reconcile.py  preview.py  runner.py  status.py  topics.py  backup.py  backupdir.py  backup_reader.py  inspect.py  preflight.py  selection.py
   filters/  model.py  parser.py  pushdown.py  matcher.py
   store/    schema.sql  db.py  runs.py  msgmap.py  floodlog.py  limiterstate.py  topicmap.py  backups.py
-  cli/      app.py  wizard.py  filter_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py topics.py clone.py run.py retry.py status.py control.py history.py config.py backup.py restore.py ...)
+  cli/      app.py  wizard.py  filter_options.py  selection_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py topics.py clone.py run.py retry.py status.py control.py history.py config.py backup.py restore.py inspect.py ...)
   ui/       messages.py  prompts.py  tables.py  progress.py  tui.py
             menu/  (app full-screen: app, screen, prompter, widgets, run_screen, screens/)
 tests/      fakes.py (FakeGateway, FakeAuth, ScriptedPrompter)  unit/  integration/

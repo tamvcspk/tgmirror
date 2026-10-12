@@ -31,7 +31,7 @@ Docs and skills are the project's memory. A stale doc is worse than none: the ne
 | Filter model, predicates, pushdown, album semantics | `docs/03-filters.md`, skill `filter-dsl`; CLI flags also in `docs/02-cli-ux.md` |
 | Commands, flags, wizard steps, TUI, exit codes, config keys | `docs/02-cli-ux.md`, skill `cli-wizard`, README usage block if user-visible |
 | New/renamed/moved module or package layout | `docs/01-kien-truc.md` (package tree), `CLAUDE.md` (Layout) |
-| A decision D1–D9 changes, or a new decision | `docs/00-tong-quan.md` table + dated entry in `docs/06-lo-trinh.md` decision log (+ affected skills). **Ask the user first** — decisions are theirs |
+| A decision D1–D10 changes, or a new decision | `docs/00-tong-quan.md` table + dated entry in `docs/06-lo-trinh.md` decision log (+ affected skills). **Ask the user first** — decisions are theirs |
 | A spike/unknown from `docs/06-lo-trinh.md` is resolved | Record the answer in `docs/06-lo-trinh.md` (tick it, add the finding), then fix every doc/skill that hedged on it (e.g. remove "verify" caveats in `telethon-engine`) |
 | A phase starts or finishes | Status checklist in `docs/06-lo-trinh.md` |
 | New hard rule / invariant / convention | `CLAUDE.md` (Hard rules or Conventions) and the owning skill |

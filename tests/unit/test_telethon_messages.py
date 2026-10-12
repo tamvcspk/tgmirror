@@ -513,3 +513,87 @@ async def test_get_messages_maps_errors_and_unknown_chats() -> None:
     client.unknown.add(-1002)
     with pytest.raises(NoPermission):
         await gateway_on(client).get_messages(-1002, [5])
+
+
+# ---- phase 18a: the metadata a live read carries --------------------------------------------
+
+
+def test_forward_header_gives_origin_id_and_name() -> None:
+    header = types.MessageFwdHeader(date=NOW, from_id=types.PeerChannel(555))
+    reduced = src_message(message(1, fwd_from=header))
+
+    assert reduced is not None and reduced.is_forward
+    assert reduced.fwd_from_id == -1000000000555  # marked id, as ChannelInfo.id is
+    hidden = types.MessageFwdHeader(date=NOW, from_name="Hidden Person")
+    shown = src_message(message(2, fwd_from=hidden))
+    assert shown is not None and shown.is_forward and shown.fwd_from_id is None
+    assert shown.fwd_from_name == "Hidden Person"
+    plain = src_message(message(3))
+    assert plain is not None and not plain.is_forward and plain.fwd_from_name is None
+
+
+def test_reply_is_a_genuine_reply_only() -> None:
+    reply = types.MessageReplyHeader(reply_to_msg_id=3)
+    in_topic = types.MessageReplyHeader(reply_to_msg_id=40, forum_topic=True, reply_to_top_id=7)
+    topic_root = types.MessageReplyHeader(reply_to_msg_id=7, forum_topic=True)
+    topic_only = types.MessageReplyHeader(reply_to_msg_id=7, forum_topic=True, reply_to_top_id=7)
+
+    ids = [
+        src_message(message(i, reply_to=header)).reply_to_id  # type: ignore[union-attr]
+        for i, header in enumerate((reply, in_topic, topic_root, topic_only, None), 1)
+    ]
+
+    # a message that only *sits in* a topic carries the topic id as reply_to_msg_id: no reply
+    assert ids == [3, 40, None, None, None]
+
+
+def test_links_come_from_url_entities() -> None:
+    text = "see https://www.example.com/a and docs"
+    entities = [
+        types.MessageEntityUrl(offset=4, length=25),
+        types.MessageEntityTextUrl(offset=34, length=4, url="https://docs.example.org/x"),
+        types.MessageEntityBold(offset=0, length=3),
+    ]
+    reduced = src_message(message(1, message=text, entities=entities))
+
+    assert reduced is not None
+    assert reduced.link_domains == ("example.com", "docs.example.org")
+
+
+def test_counts_authorship_and_flags() -> None:
+    reactions = types.MessageReactions(
+        results=[
+            types.ReactionCount(reaction=types.ReactionEmoji("👍"), count=3),
+            types.ReactionCount(reaction=types.ReactionEmoji("🔥"), count=2),
+        ]
+    )
+    edited = NOW + timedelta(hours=1)
+    reduced = src_message(
+        message(
+            1,
+            forwards=4,
+            reactions=reactions,
+            post_author="Ann",
+            via_bot_id=9,
+            pinned=True,
+            edit_date=edited,
+        )
+    )
+
+    assert reduced is not None
+    assert (reduced.forwards, reduced.reactions) == (4, 5)
+    assert (reduced.post_author, reduced.via_bot_id, reduced.pinned) == ("Ann", 9, True)
+    assert reduced.edit_date == edited
+
+
+def test_file_name_and_key_only_for_real_attachments() -> None:
+    named = document(types.DocumentAttributeFilename("Report.pdf"))
+    reduced = src_message(message(1, media=named))
+    assert reduced is not None
+    assert (reduced.file_name, reduced.file_key) == ("Report.pdf", "d1")
+
+    photo = src_message(message(2, media=PHOTO))
+    assert photo is not None and photo.file_key == "p1" and photo.file_name is None
+
+    text = src_message(message(3, message="just text"))
+    assert text is not None and text.file_key is None and text.file_name is None

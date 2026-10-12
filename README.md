@@ -2,7 +2,7 @@
 
 CLI tool that clones a Telegram channel, group or forum you have joined into another one (existing or newly created; forum topics are mapped topic to topic), using your own Telegram API credentials (MTProto, via [Telethon](https://github.com/LonamiWebs/Telethon)).
 
-> Status: **phases 0-13 done** (of 17+; see `docs/06-lo-trinh.md`), including group/supergroup/forum sources with topic mapping (phase 8), OS keyring for `api_id`/`api_hash` (phase 9), `tgmirror appdata export`/`import` to move to another machine (phase 10), `tgmirror backup`/`restore` to and from a plain directory (phase 11), a Docker image (phase 12, **confirmed working against real Telegram** by hand), and CI plus a release workflow that builds a wheel/sdist, pushes the Docker image to Docker Hub and publishes to PyPI over Trusted Publishing (OIDC, no token in the repo) on a tag (phase 13, not yet run against a real tag) — but phases 8-11 and 13 have each only been checked against a fake Telegram/keyring/filesystem in tests so far, **not yet run end to end with a real account** (a real forum, a real keyring, a real cross-machine export/import, a real restore, a real tagged release). The full-screen menu has `backup`/`restore` entries (phase 15a); a whole-project hardening pass before release (phase 15b) is under way. PyInstaller binaries, winget, and the APT/RPM/AUR channels (phase 14), and the first real tagged release, `v0.1.1` (phase 16), are not started. `clone` copies at once (server-side copy, or download-then-reupload for protected/caption-changing cases), Ctrl+C or `docker stop` stops it and saves progress; running the same pair again is a **delta** (only new messages). A destination no longer has to match the source's kind (e.g. group → channel is fine); a forum source paired with a non-forum destination can keep each topic's name as a hashtag instead of losing it. Filters (media/hashtag/regex/date/id/size/topic/sender, with server-side narrowing), the rate limiter (AIMD delay, FloodWait auto-wait, daily cap), `retry`/`status`, and reupload (captions, polls/quizzes/locations, prefetching) all exist and have each been run by hand on a real account at least once except phases 8-11 and 13's mechanics (see `docs/06-lo-trinh.md` for exactly what has and has not been tried live). Typing bare `tgmirror` on a real terminal opens a full-screen, keyboard-driven app (menu) instead of typing each command by hand; `tgmirror doctor` checks the session, `cryptg`, destination permissions and prints the safety notes below. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
+> Status: **`v0.1.1` released** (2026-09-28: PyPI, Docker Hub `tamvo1808/tgmirror`, GitHub Release with a Windows PyInstaller zip; winget submission pending review). Phases 0-13, 15 and 16 are done (see `docs/06-lo-trinh.md`): server-side copy and download-then-reupload, filters with server-side narrowing, the rate limiter (AIMD delay, FloodWait auto-wait, daily cap), `retry`/`status`, group/supergroup/forum sources with topic mapping, OS keyring for `api_id`/`api_hash`, `tgmirror appdata export`/`import`, `tgmirror backup`/`restore` (restore confirmed against real Telegram), a Docker image, and a full-screen keyboard-driven app when you type bare `tgmirror`. Still **not run end to end with a real account**: a real multi-topic forum, a real keyring, a real cross-machine export/import (see the roadmap for exactly what has and has not been tried live). Next, toward 0.2.0 (unreleased): `inspect`/report with reusable selections is implemented on `main` and was tried on a real account (reply/forward/reactions/duplicates, a 13,000-message scan in 2 min 22 s), transforms such as hashtag ↔ topic while copying come after it; then 0.3.0 (bulk delete/edit/repost in place, always behind a confirmed plan) — see `docs/07-inspect-transform.md`. `clone` copies at once, Ctrl+C or `docker stop` stops it and saves progress; running the same pair again is a **delta** (only new messages). `tgmirror doctor` checks the session, `cryptg`, destination permissions and prints the safety notes below. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
 
 ## Goals
 
@@ -12,6 +12,7 @@ CLI tool that clones a Telegram channel, group or forum you have joined into ano
 - Pause / stop / resume with checkpoints (keys `p` / `r` / `q`), then run the same clone again for a **delta** that only copies new messages.
 - Fast (server-side copy, batching) and gentle (adaptive rate limiting, FLOOD_WAIT handling, anti-spam hygiene).
 - Back up a source to a directory on disk (`backup`) and rebuild it on a channel later (`restore`) — same filters, pause/stop/resume and "Restrict saving content" handling as a clone.
+- See what a source holds and what a filter selects before copying (`inspect`: counts by media, month, hashtag, forward origin, link domain, ...; a pre-flight of what a clone/backup/restore would do), and reuse that selection for the real command (`--selection @last`, `--save`/`--freeze`, `--exact`). Read-only: it never writes to Telegram.
 
 ## Install
 
@@ -47,6 +48,14 @@ docker run --rm -v tgm-data:/data -v tgm-config:/config tgmirror run --yes
 
 ## Usage
 
+**Naming a channel** (`<src>` of `inspect`/`topics`/`backup`, and `--src`/`--dst` of `clone`): the chat must be one your account joined. Any of these works:
+
+- `"@username"` — keep the quotes in PowerShell (it swallows an unquoted `@name`), or write the bare username `my_channel`;
+- the id, with or without the `-100` prefix: `-1002428805566`, `1002428805566` or `2428805566` (`tgmirror channels` lists them);
+- the exact title, any case: `"My channel"` (it must be unique).
+
+An id that starts with `-` is read as an option when it is a positional argument (`inspect`, `topics`, `backup`): drop the minus (`tgmirror inspect 1002428805566`) or put `--` before it, after the other options (`tgmirror inspect --by topic -- -1002428805566`). `--src -1002428805566` on `clone` is fine as it is. Links such as `https://t.me/...` are not accepted yet.
+
 Available now:
 
 ```bash
@@ -75,11 +84,98 @@ tgmirror config set KEY VALUE        # change one [limits] key (validated before
 tgmirror doctor                      # session, cryptg, destination permissions, safety notes
 tgmirror appdata export tgmirror-backup.zip        # snapshot tgmirror.db + config.toml (no secrets) into a zip
 tgmirror appdata import tgmirror-backup.zip [--yes] # restore it on another machine; existing data is moved aside, not deleted; log in again after
+tgmirror inspect "@my_channel" --media video --since 2024-01-01 --by month  # what the source holds and what the filter selects (read-only; or a backup directory, offline)
+tgmirror inspect "@my_channel" --media video --plan clone --caption strip-links  # pre-flight: how its units would travel, how much moves, how long the limiter keeps it
+tgmirror clone --src "@my_channel" --dst-new "Videos" --selection @last --yes  # copy exactly the filter the last inspect of that source used
 tgmirror backup "@my_channel" ./backups/my_channel  # save a source to a directory on disk (or `tgmirror backup` for the wizard); run it again for the same directory to get only what is new
 tgmirror restore ./backups/my_channel --dst-new --yes  # rebuild a channel from a backup directory (or `tgmirror restore` for the wizard); always re-uploads, since there is no server-side copy from disk
 ```
 
 While a clone runs in a terminal: `p` pause (it holds until resumed), `r` resume, `q` stop; Ctrl+C also stops (exit 130). Everything runs in your terminal: no background process and no schedule.
+
+### Reference: filters, selections and flags
+
+`tgmirror <command> --help` lists every flag of a command; this is the lookup table. The full semantics are in [docs/03-filters.md](docs/03-filters.md) (filters, selections) and [docs/02-cli-ux.md](docs/02-cli-ux.md) (commands).
+
+#### Filters
+
+The same flags on `clone`, `backup`, `restore` and `inspect` (the wizard asks for the same values). A filter is checked before anything is read or written: a bad one exits with code 2.
+
+| Flag | Keeps | Notes |
+|---|---|---|
+| `--media video,photo` | these media types | `photo video audio voice document gif sticker video_note poll geo contact game invoice webpage text`; `text` = text only |
+| `--hashtag "#news"` | messages with this hashtag | repeat for any-of; whole tag, any case |
+| `--contains "word"` | text/caption containing it | repeat for any-of; substring, any case |
+| `--regex "pat"` | text/caption matching it | case-sensitive (`(?i)` to ignore case); a pattern taking over 0.5 s on a message stops the run with an error naming it |
+| `--since 2024-01-01` / `--until 2025-01-01` | a date range | UTC; `--until` day is **not** included |
+| `--min-size 10MB` / `--max-size 2GB` | files of that size | the unit is required (`KB`, `MB`, `GB`, 1 KB = 1024 B); a text message has no size, so `--max-size` drops it |
+| `--from-user ID` | messages of this sender | group/forum sources; ids only; repeat for any-of |
+| `--topic ID` | messages of this forum topic | ids from `tgmirror topics <src>`; `1` is General; repeat for any-of |
+| `--forwarded` / `--not-forwarded` | forwarded messages / the rest | |
+| `--forwarded-from ID` | forwarded from this channel/user | marked id as `inspect --by forward` prints it (`-100...`); repeat for any-of |
+| `--has-link` | messages containing a link | |
+| `--link-domain example.com` | links to this domain | subdomains count (`blog.example.com`), look-alikes do not; repeat for any-of |
+| `--exclude-regex "pat"` | **leaves out** matches | repeat; each one is its own exclusion |
+| `--exclude-media sticker` | **leaves out** these types | |
+| `--album any\|all\|first` | how an album is judged | default `any`: one matching member takes the whole album. An album is never split |
+| `--filter-file f.yaml` | a YAML filter | not together with the flags above |
+
+How they combine: the "keeps" flags describe **one** rule that every message must satisfy together (`--media video --hashtag "#a"` = video **and** `#a`); repeating one flag is any-of; every `--exclude-*` is a separate exclusion that wins. Anything richer goes in YAML:
+
+```yaml
+include:                      # rules are OR-ed; the predicates inside one rule are AND-ed
+  - {media: [video], hashtag: ["#tutorial"], size: {min: 10MB}}
+  - {regex: "(?i)giveaway"}
+exclude:
+  - {contains: ["ads"]}
+date: {from: 2024-01-01, to: 2025-01-01}
+id: {from: 1000, to: 50000}
+album: any
+```
+
+YAML also has predicates with no flag: `mime` (`video/*`), `duration` (`5m`, `1h30m`), `views`, `forwards`, `reactions` (`{min, max}`), `filename` (`"*.pdf"`), `is_reply`, `edited`, `has_caption`. Hashtags need quotes in YAML (`"#news"`: a bare `#` starts a comment). A message lacking what a predicate looks at (the `size` of a text, the `views` of a group post) never matches it, `max` included.
+
+#### Look first, then copy: `inspect` and selections
+
+```bash
+tgmirror inspect "@my_channel" --media video --since 2024-01-01   # counts: what the source holds, what the filter selects
+tgmirror inspect "@my_channel" --media video --plan clone         # + what a clone of exactly that would do
+tgmirror clone --src "@my_channel" --dst-new "Videos" --selection @last --yes   # then copy exactly that
+```
+
+| Flag | Meaning |
+|---|---|
+| `inspect --by media --by month` | tables to show (repeat the flag): `media month year hashtag topic sender forward domain size duplicate`; default `media month hashtag` |
+| `inspect --top N` | rows per ranking table, the rest as "other" (`0` = all; month/year/size always show everything) |
+| `inspect --list [--limit N]` | also list the selected messages (default 50 shown) |
+| `inspect --csv FILE` | **every** selected message, one row each (UTF-8 with BOM, opens in Excel); not the tables |
+| `inspect --json` | the report, the plan and every selected message on stdout (progress goes to stderr) |
+| `inspect --plan clone\|backup\|restore` | pre-flight: units by way (forward / by file id / download + upload / left out), volume to move, write calls, the limiter's time floor, days at `daily_cap`, what would stop the run. Takes `--mode --caption --caption-text --reset-polls --ignore-unsupported --placeholder --topic-as-hashtag` like the real command; `restore` only for a backup directory |
+| `inspect --save FILE [--freeze]` | save the filter as a selection file; `--freeze` also writes the ids of the selected messages (`FILE.ids`, one per line, editable) |
+| `--selection FILE\|@last` | on `clone`/`backup`/`restore`: use a selection instead of filter flags. `@last` is what `inspect` last made of that source (kept after every complete scan) |
+| `--exact` | with `--selection`: take exactly the frozen ids, even if more messages match now |
+
+`inspect` is read-only (it never writes to Telegram or downloads media, so it needs no "Restrict saving content" statement); it reads the **whole** source (about 11 s per 1,000 messages measured) and prints the commands to continue with at the end. A backup directory works as the source (`tgmirror inspect ./backups/my_channel`), offline. A selection names its source: using it on another one is refused.
+
+#### Copy options (`clone`; `backup`/`restore` take the ones that apply)
+
+| Flag | Meaning |
+|---|---|
+| `--src`, `--dst` \| `--dst-new "Title"` (+ `--about`) | source, existing destination or a new one |
+| `--mode auto\|copy\|reupload` | `auto` (default): server-side copy, and what needs a new caption/topic hashtag is sent again by file id; `copy`: forward only; `reupload`: download and upload everything (the only way to copy a "Restrict saving content" source) |
+| `--caption keep\|strip-links\|append\|none` (+ `--caption-text`) | what happens to the captions of media messages |
+| `--topic-as-hashtag` / `--no-topic-as-hashtag` | forum source into a destination without topics: keep each topic's name as a hashtag |
+| `--reset-polls`, `--ignore-unsupported`, `--placeholder` | with `reupload`: re-create polls (votes are lost) / leave out what cannot be copied / and post a note where it was |
+| `--yes-i-administer-this-channel` | your own statement for a "Restrict saving content" source (see "Responsible use"); `--yes` never stands in for it |
+| `--no-filter`, `--fresh` | drop the remembered filter / start the pair over (asks first) |
+| `--pushdown` / `--no-pushdown` | let Telegram narrow the reading (default), or read everything and filter here (to check nothing is missed) |
+| `--preview` / `--no-preview` | sample the first 100 messages against the filter before starting |
+| `--batch-size N` | messages per copy call (default from `[limits] batch_size`) |
+| `--wait` | sit out a FloodWait of any length (default: stop after `[limits] max_auto_wait`) |
+| `--force-takeover` | run although another process seems to hold the pair (only if it is dead) |
+| `--yes`, `-y` | skip the one confirmation question |
+
+Exit codes: `0` done (or stopped with `q`/`tgmirror stop`), `1` general error, `2` wrong usage (including a bad filter), `3` stopped by a FloodWait/PeerFlood/daily cap, `4` missing permission (including a source that restricts saving content), `130` Ctrl+C or `docker stop` (progress saved; `inspect` prints what it had read).
 
 ### Full-screen menu
 

@@ -11,7 +11,7 @@ skipped, so it cannot safely resume with a new one; back up into a new directory
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated
 
@@ -25,8 +25,12 @@ from tgmirror.cli.filter_options import (
     ExcludeMediaOption,
     ExcludeRegexOption,
     FilterFileOption,
+    ForwardedFromOption,
+    ForwardedOption,
     FromUserOption,
     HashtagOption,
+    HasLinkOption,
+    LinkDomainOption,
     MaxSizeOption,
     MediaOption,
     MinSizeOption,
@@ -37,9 +41,11 @@ from tgmirror.cli.filter_options import (
     collect,
 )
 from tgmirror.cli.interrupt import stop_on_interrupt
+from tgmirror.cli.refs import SOURCE_HELP
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.cli.selection_options import ExactOption, SelectionOption, check_args, for_channel
 from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
-from tgmirror.engine import preview
+from tgmirror.engine import preview, selection
 from tgmirror.engine.backup import BackupWriter, WrongSource, begin_backup
 from tgmirror.engine.backupdir import BackupManifest, read_manifest
 from tgmirror.engine.endpoints import SourceRestricted, find_channel
@@ -59,7 +65,7 @@ def backup(
     ctx: typer.Context,
     src: Annotated[
         str | None,
-        typer.Argument(help='Source: "@username" (quoted in PowerShell), id or exact title.'),
+        typer.Argument(help=SOURCE_HELP),
     ] = None,
     directory: Annotated[
         Path | None,
@@ -88,6 +94,12 @@ def backup(
     filter_file: FilterFileOption = None,
     from_user: FromUserOption = None,
     topic: TopicOption = None,
+    forwarded: ForwardedOption = None,
+    forwarded_from: ForwardedFromOption = None,
+    has_link: HasLinkOption = False,
+    link_domain: LinkDomainOption = None,
+    selection: SelectionOption = None,
+    exact: ExactOption = False,
     pushdown: Annotated[
         bool,
         typer.Option(
@@ -145,7 +157,12 @@ def backup(
             filter_file=filter_file,
             from_user=from_user,
             topic=topic,
+            forwarded=forwarded,
+            forwarded_from=forwarded_from,
+            has_link=has_link,
+            link_domain=link_domain,
         )  # a bad filter is a usage error before anything is asked or written
+        check_args(selection, exact, filters)
         options = BackupOptions(
             src=src,
             dir=directory,
@@ -161,6 +178,11 @@ def backup(
             if not channels:
                 typer.echo(t("channels.empty"))
                 raise typer.Exit(1)
+            if selection is not None:
+                chosen, named = await asyncio.to_thread(
+                    for_channel, rt.paths, channels, src=src, selection=selection, exact=exact
+                )
+                options = replace(options, filters=chosen, src=named)
             async with opened_store(rt) as store:
                 flow = BackupFlow(rt, store, conn.gateway, channels, options)
                 await run_steps(rt.prompter, flow.steps())
@@ -239,6 +261,7 @@ class BackupFlow:
         self._store = store
         self._gateway = gateway
         self._channels = channels
+        self._selections_dir = rt.paths.selections_dir
         self._o = o = options
         self._prompter = prompter or rt.prompter
         self._interactive = rt.interactive if interactive is None else interactive
@@ -358,7 +381,12 @@ class BackupFlow:
             topics: Sequence[TopicInfo] = ()
             if self._source.kind is ChatKind.FORUM:
                 topics = await self._gateway.list_topics(self._source.id)
-            self._filters = await wizard.pick_filters(self._prompter, can_keep=False, topics=topics)
+            last = await asyncio.to_thread(
+                selection.last_discovery, self._selections_dir, self._source.id
+            )
+            self._filters = await wizard.pick_filters(
+                self._prompter, can_keep=False, topics=topics, last=last
+            )
 
     async def _confirm(self) -> None:
         """Wizard step 5 (the preview, when shown) and the one question before it starts."""

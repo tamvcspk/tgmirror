@@ -45,6 +45,13 @@ Every wizard outcome must be expressible with flags/YAML, and both paths call th
 - [ ] Never prints secrets (`api_hash`, session, phone, login code). Phone/code prompts use hidden input where applicable.
 - [ ] Tests with Typer's `CliRunner` and `FakeGateway`.
 
+## `inspect` and selections (Phase 18a)
+
+- `tgmirror inspect` is read-only and has its own shape (no `*Flow`, no confirmation): filters from `cli/filter_options.py::collect`, source = channel *or* backup directory (`_classify`: a folder named like a chat title is still a title unless it holds `backup.json`; a path-looking directory without one is `err.not_a_backup`). A channel is read through `FloodGuard` — never `conn.gateway.iter_messages` (a test guards it). Progress goes to stderr so `--json`/`--csv` stdout stays data.
+- `--selection`/`--exact` live in `cli/selection_options.py` and are resolved in each command's `command()` *after* the channel list is known (`@last` is keyed by source id), then handed to the flow as `options.filters`/`options.src`. Do not add selection logic to a `*Flow`; the one wizard addition is the "use the latest inspect result" choice in `wizard.pick_filters(last=...)`, shared by the CLI and the menu.
+- A command whose positional argument names a channel (`inspect`, `topics`, `backup`) registers with `cls=SourceCommand` and takes `help=SOURCE_HELP` (`cli/refs.py`): a marked id like `-100...` is otherwise parsed as an option, and the user sees "No such option: -1". Options (`clone --src`) do not have the problem.
+- New filter flags are declared once in `filter_options.py` and passed through `collect(...)` by **all four** commands (`clone`, `backup`, `restore`, `inspect`).
+
 ## TUI conventions
 
 - `ui/tui.py::TuiReporter` implements `Reporter` like `LineReporter`; which one runs is `Runtime.reporter`, picked in `default_runtime()` by whether a real terminal is attached — never by `interactive` (see "Structure" above).

@@ -59,6 +59,8 @@ When adding or changing a code path that can raise flood errors:
 - Stop event during a flood sleep → returns promptly, state saved.
 - Daily cap reached → `waiting_flood`, resumes next day (fake clock).
 
+- **`tgmirror inspect` (Phase 18a)** reads through `FloodGuard` like a run's source, with `FloodOwner.of_inspect()` (neither `run_id` nor `backup_id` in `flood_log`); a FloodWait longer than `max_auto_wait` ends the scan with the partial report and exit code 3. It is a long scan, so it is *not* in the one-shot exception list.
+
 ## Doc sync
 
 Before finishing, run the `doc-sync` skill. Typical updates from this area: changed defaults or new `[limits]` keys (`docs/05-chong-flood.md` **and** `docs/02-cli-ux.md` config block, with the reason for the change), new error handling rows in `docs/01-kien-truc.md`, and this skill's spec section if behaviour changed.

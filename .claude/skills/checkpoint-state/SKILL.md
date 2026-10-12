@@ -55,6 +55,8 @@ Cloning the same pair again (`clone` or `run`) is a new run on the same mirror: 
 
 `BackupWriter._analyze` (mirrors `Runner._analyze`) sets `stats_json["total_items"]` once near the top of every `run()` call via `Store.set_backup_total`, which *overwrites* that one key instead of `advance_backup`'s additive merge — also purely for display (the same un-paced-but-flood-aware `reader.count()` a run's analysis uses, now also available to a backup's `FloodOwner`), never read back to decide what to do next. Recomputed unconditionally on every call, not gated on "already analyzed": a backup row is a fresh insert per `begin_backup`, so there is no same-row resume case to protect against.
 
+- Phase 18a: `messages.jsonl` lines gain **optional** metadata keys (`is_forward`, `fwd_from_id`, `reply_to_id`, `link_domains`, ...) and `media.file_key`; `FORMAT_VERSION` stays 1 and an older line reads with them unset. `tgmirror inspect` writes **no** run/backup row and no `msg_map`; its only files are `selections/last-<id>.yaml` (+ `.ids`), outside `tgmirror.db`.
+
 ## Restore (Phase 11b)
 
 `tgmirror restore` is **not** a new persistence mechanism: it is an ordinary run, using `mirrors`/`msg_map`/write-ahead/reconcile exactly as above. Two things differ:

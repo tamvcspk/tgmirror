@@ -16,6 +16,8 @@ import yaml
 
 from tgmirror.filters.model import FilterError, FilterSpec
 
+_SELECTION_KEYS = frozenset({"version", "filter", "source", "snapshot", "transform"})
+
 
 class FilterFileError(FilterError):
     """The ``--filter-file`` could not be read or is not YAML."""
@@ -45,10 +47,18 @@ class FlagFilters:
     album: str | None = None
     from_user: list[int] = field(default_factory=list)  # group/forum sources only (phase 8)
     topic: list[int] = field(default_factory=list)  # forum sources only (phase 8)
+    # phase 18a. ``forwarded=False`` is a real answer (``--not-forwarded``), unlike an empty value.
+    forwarded: bool | None = None
+    forwarded_from: list[int] = field(default_factory=list)
+    has_link: bool = False  # any link at all; ``link_domain`` narrows it
+    link_domain: list[str] = field(default_factory=list)
 
     @property
     def given(self) -> bool:
-        return any(getattr(self, f.name) for f in fields(self))
+        # ``forwarded=False`` counts (it is a tri-state); ``has_link=False`` is just "not asked"
+        return self.forwarded is not None or any(
+            getattr(self, f.name) for f in fields(self) if f.name != "forwarded"
+        )
 
 
 def _split(text: str | None) -> list[str] | None:
@@ -71,6 +81,14 @@ def from_flags(flags: FlagFilters) -> FilterSpec:
         rule["from_user"] = flags.from_user
     if flags.topic:
         rule["topic"] = flags.topic
+    if flags.forwarded is not None:
+        rule["forwarded"] = flags.forwarded
+    if flags.forwarded_from:
+        rule["forwarded_from"] = flags.forwarded_from
+    if flags.link_domain:
+        rule["link"] = flags.link_domain
+    elif flags.has_link:
+        rule["link"] = []
     if flags.min_size is not None or flags.max_size is not None:
         size = {"min": flags.min_size, "max": flags.max_size}
         rule["size"] = {k: v for k, v in size.items() if v is not None}
@@ -111,6 +129,10 @@ def from_file(path: Path) -> FilterSpec:
         raise FilterFileError(f"{path} is not valid YAML{where}: {problem}.{hint}") from None
     if data is not None and not isinstance(data, dict):
         raise FilterFileError(f"{path} must hold a mapping (include:, exclude:, date:, ...)")
+    if data is not None and _SELECTION_KEYS & data.keys():
+        # a file `tgmirror inspect --save` wrote: it names a source and may freeze a list of ids,
+        # which --filter-file (the filter alone) would silently drop
+        raise FilterFileError(f"{path} is a selection file: give it to --selection instead")
     try:
         return FilterSpec.from_data(data)
     except FilterError as exc:

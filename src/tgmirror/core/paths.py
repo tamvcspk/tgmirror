@@ -42,6 +42,12 @@ class Paths:
         return self.data_dir / "sessions"
 
     @property
+    def selections_dir(self) -> Path:
+        """``last-<source id>.yaml``: the selection ``tgmirror inspect`` last made of a source
+        (``--selection @last``). Plain files, not part of the database or an app-data export."""
+        return self.data_dir / "selections"
+
+    @property
     def tmp_dir(self) -> Path:
         """Scratch space for strategy B downloads (``tmp/<run>/<msg_id>``)."""
         return self.data_dir / "tmp"

@@ -28,6 +28,7 @@ from tgmirror.core.gateway import (
     TopicInfo,
     Unit,
 )
+from tgmirror.core.links import domains_in_html
 from tgmirror.engine import backupdir
 
 _TAG = re.compile(r"<[^>]+>")
@@ -78,6 +79,20 @@ def _src_message(message: ExportedMessage) -> SrcMessage:
         title=title,
         topic_id=message.topic_id,
         from_user_id=message.from_user_id,
+        is_forward=message.is_forward,
+        fwd_from_id=message.fwd_from_id,
+        fwd_from_name=message.fwd_from_name,
+        reply_to_id=message.reply_to_id,
+        edit_date=message.edit_date,
+        # a backup made before 18a recorded no domains: fall back to what its HTML links to
+        link_domains=message.link_domains or domains_in_html(message.text_html),
+        file_name=media.original_filename if media is not None else None,
+        file_key=media.file_key if media is not None else None,
+        forwards=message.forwards,
+        reactions=message.reactions,
+        post_author=message.post_author,
+        via_bot_id=message.via_bot_id,
+        pinned=message.pinned,
     )
 
 

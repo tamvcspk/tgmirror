@@ -14,6 +14,7 @@ from fnmatch import fnmatchcase
 import regex
 
 from tgmirror.core.gateway import GENERAL_TOPIC_ID, SrcMessage, Unit
+from tgmirror.core.links import domain_matches
 from tgmirror.filters.model import (
     CountRange,
     DurationRange,
@@ -73,6 +74,47 @@ def _compile(rule: Rule) -> list[Predicate]:
         topics = frozenset(rule.topic)
         # a General message has no topic id of its own; ``topic: 1`` means it
         checks.append(lambda m: (m.topic_id or GENERAL_TOPIC_ID) in topics)
+    checks.extend(_metadata_checks(rule))
+    return checks
+
+
+def _metadata_checks(rule: Rule) -> list[Predicate]:
+    """The phase 18a predicates, over the optional metadata a message may carry."""
+    checks: list[Predicate] = []
+    if rule.forwarded is not None:
+        forwarded = rule.forwarded
+        checks.append(lambda m: m.is_forward == forwarded)
+    if rule.forwarded_from is not None:
+        origins = frozenset(rule.forwarded_from)
+        checks.append(lambda m: m.fwd_from_id in origins)
+    if rule.is_reply is not None:
+        reply = rule.is_reply
+        checks.append(lambda m: (m.reply_to_id is not None) == reply)
+    if rule.edited is not None:
+        edited = rule.edited
+        checks.append(lambda m: (m.edit_date is not None) == edited)
+    if rule.link is not None:
+        domains = rule.link
+        if domains:
+            checks.append(
+                lambda m: any(domain_matches(d, w) for d in m.link_domains for w in domains)
+            )
+        else:
+            checks.append(lambda m: bool(m.link_domains))
+    if rule.filename is not None:
+        names = rule.filename
+        checks.append(
+            lambda m: (
+                m.file_name is not None
+                and any(fnmatchcase(m.file_name.casefold(), g) for g in names)
+            )
+        )
+    if rule.forwards is not None:
+        forwards = rule.forwards
+        checks.append(lambda m: _within(m.forwards, forwards))
+    if rule.reactions is not None:
+        reactions = rule.reactions
+        checks.append(lambda m: _within(m.reactions, reactions))
     return checks
 
 
@@ -97,9 +139,12 @@ class Matcher:
         self._spec = spec
         self._include = [_compile(r) for r in spec.include]
         self._exclude = [_compile(r) for r in spec.exclude]
+        self._only = None if spec.message_ids is None else frozenset(spec.message_ids)
 
     def matches(self, unit: Unit) -> bool:
         if not self._global_ok(unit.messages[0]):
+            return False
+        if self._only is not None and self._only.isdisjoint(unit.ids):
             return False
         if any(_hit(rule, m) for rule in self._exclude for m in unit.messages):
             return False

@@ -81,6 +81,7 @@ from tgmirror.core.gateway import (
     TransferPhase,
     Unit,
 )
+from tgmirror.core.links import domains_of
 from tgmirror.core.paths import Paths
 from tgmirror.core.pool import RequestBudget, run_parts
 from tgmirror.core.session_lock import session_lock
@@ -369,6 +370,106 @@ def _topic_of(message: custom.Message) -> int | None:
     return reply_to.reply_to_top_id or reply_to.reply_to_msg_id
 
 
+def _reply_to_of(message: custom.Message) -> int | None:
+    """The id of the message this one genuinely replies to, or ``None``.
+
+    Phase 18a, unverified on a real account (same caveat as ``_topic_of``): in a forum every
+    message of a topic carries ``reply_to_msg_id`` = the topic's id, which is no reply; a real
+    reply inside a topic has ``reply_to_top_id`` = the topic and ``reply_to_msg_id`` = its target.
+    """
+    reply_to = message.reply_to
+    if not isinstance(reply_to, types.MessageReplyHeader):
+        return None
+    target = reply_to.reply_to_msg_id
+    if target is None:
+        return None
+    if getattr(reply_to, "forum_topic", False):
+        top = reply_to.reply_to_top_id
+        if top is None or top == target:
+            return None
+    return target
+
+
+def _peer_id_of(peer: object) -> int | None:
+    try:
+        return None if peer is None else utils.get_peer_id(peer)
+    except (TypeError, ValueError):
+        return None
+
+
+def _forward_of(message: custom.Message) -> tuple[bool, int | None, str | None]:
+    """``(is_forward, original peer id, its name)``: the id only when the origin is visible, the
+    name from the header (a user who hides it) or from the entity Telethon resolved for it."""
+    header = message.fwd_from
+    if header is None:
+        return False, None, None
+    name: str | None = header.from_name or None
+    if name is None:
+        origin = getattr(message.forward, "chat", None) or getattr(message.forward, "sender", None)
+        title = getattr(origin, "title", None) or getattr(origin, "first_name", None)
+        name = str(title) if title else None
+    return True, _peer_id_of(header.from_id), name
+
+
+def _link_domains(message: custom.Message) -> tuple[str, ...]:
+    urls = [
+        entity.url if isinstance(entity, types.MessageEntityTextUrl) else text
+        for entity, text in message.get_entities_text()
+        if isinstance(entity, types.MessageEntityTextUrl | types.MessageEntityUrl)
+    ]
+    return domains_of(urls)
+
+
+def _reaction_total(message: custom.Message) -> int | None:
+    reactions = message.reactions
+    if reactions is None or not reactions.results:
+        return None
+    return sum(r.count for r in reactions.results)
+
+
+def _file_key(message: custom.Message) -> str | None:
+    """A stable id of the attached file (``d<document id>`` / ``p<photo id>``): Telegram keeps it
+    when a message is forwarded, so equal keys mean the same file posted again. Only real
+    attachments: ``message.photo``/``document`` would also return a link preview's picture."""
+    if not _is_attachment(message):
+        return None
+    if message.document is not None:
+        return f"d{message.document.id}"
+    if message.photo is not None:
+        return f"p{message.photo.id}"
+    return None
+
+
+def _is_attachment(message: custom.Message) -> bool:
+    return isinstance(message.media, types.MessageMediaPhoto | types.MessageMediaDocument)
+
+
+def _file_name(message: custom.Message) -> str | None:
+    if not _is_attachment(message):
+        return None
+    file = message.file
+    return file.name if file is not None and file.name else None
+
+
+def _extras(message: custom.Message) -> dict[str, Any]:
+    """The phase 18a metadata shared by ``SrcMessage`` and ``ExportedMessage`` (same keyword names),
+    so a live read and a backup export can never disagree about what a message carries."""
+    is_forward, fwd_from_id, fwd_from_name = _forward_of(message)
+    return {
+        "is_forward": is_forward,
+        "fwd_from_id": fwd_from_id,
+        "fwd_from_name": fwd_from_name,
+        "reply_to_id": _reply_to_of(message),
+        "edit_date": message.edit_date,
+        "link_domains": _link_domains(message),
+        "forwards": message.forwards,
+        "reactions": _reaction_total(message),
+        "post_author": message.post_author or None,
+        "via_bot_id": message.via_bot_id,
+        "pinned": bool(message.pinned),
+    }
+
+
 def src_message(message: object) -> SrcMessage | None:
     """Reduce a Telethon message to ``SrcMessage``; ``None`` for anything that is not a message."""
     # Telethon's patched MessageEmpty is a custom.Message too, so it has to be excluded by name
@@ -376,8 +477,7 @@ def src_message(message: object) -> SrcMessage | None:
         return None
     size = duration = mime = None
     # only real attachments: ``message.file`` would also describe a link preview's picture
-    attachment = isinstance(message.media, types.MessageMediaPhoto | types.MessageMediaDocument)
-    if attachment and (file := message.file) is not None:
+    if _is_attachment(message) and (file := message.file) is not None:
         size, duration, mime = file.size, file.duration, file.mime_type
     title, quiz_unanswered = _title_and_quiz(message)
     return SrcMessage(
@@ -396,6 +496,9 @@ def src_message(message: object) -> SrcMessage | None:
         title=title,
         topic_id=_topic_of(message),
         from_user_id=message.sender_id,
+        file_name=_file_name(message),
+        file_key=_file_key(message),
+        **_extras(message),
     )
 
 
@@ -1188,6 +1291,7 @@ class TelethonGateway:
                         size=f.size,
                         duration=f.duration,
                         original_filename=f.name,
+                        file_key=_file_key(message),
                         audio_title=f.title,
                         audio_performer=f.performer,
                     )
@@ -1203,6 +1307,7 @@ class TelethonGateway:
                         text_html=tl_html.unparse(message.message or "", message.entities or []),
                         views=message.views,
                         media=media,
+                        **_extras(message),
                     )
                 )
         return out

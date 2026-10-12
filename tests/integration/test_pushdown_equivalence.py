@@ -46,12 +46,32 @@ SPECS: dict[str, dict[str, Any]] = {
     "everything": {},
     "topic": {"include": [{"topic": [1, 2]}]},
     "from_user": {"include": [{"from_user": [100]}]},
+    # phase 18a: never pushed down themselves, but they must not break what is pushed beside them
+    "forwarded": {"include": [{"forwarded": True}]},
+    "photos, not forwarded": {"include": [{"media": ["photo"], "forwarded": False}]},
+    "hashtag and link": {"include": [{"hashtag": ["#a"], "link": ["a.com"]}]},
+    "any link, album all": {"include": [{"link": True}], "album": "all"},
+    "edited videos": {"include": [{"media": ["video"], "edited": True}]},
+    "exact ids": {"message_ids": [5, 6, 7, 40, 41, 120]},
+    "exact ids and photos": {
+        "message_ids": [5, 6, 7, 40, 41, 120],
+        "include": [{"media": ["photo"]}],
+    },
 }
+
+
+def _metadata(rng: random.Random) -> dict[str, Any]:
+    return {
+        "is_forward": rng.random() < 0.3,
+        "link_domains": ("a.com",) if rng.random() < 0.25 else (),
+        "edit_date": START if rng.random() < 0.2 else None,
+    }
 
 
 def channel(seed: int) -> tuple[FakeGateway, int]:
     """A channel where every unit (single or album) is dated one 6 hours after the previous."""
     rng = random.Random(seed)
+    meta = random.Random(seed + 1000)  # apart, so the stream above stays what it always was
     gw = FakeGateway()
     src = gw.add_channel("Source").id
     for index in range(90):
@@ -73,6 +93,7 @@ def channel(seed: int) -> tuple[FakeGateway, int]:
                     date=when,
                     topic_id=topic,
                     from_user_id=sender,
+                    **_metadata(meta),
                 )
         else:
             gw.add_message(
@@ -83,6 +104,7 @@ def channel(seed: int) -> tuple[FakeGateway, int]:
                 date=when,
                 topic_id=topic,
                 from_user_id=sender,
+                **_metadata(meta),
             )
         if rng.random() < 0.05:
             gw.add_message(src, is_service=True, date=when)

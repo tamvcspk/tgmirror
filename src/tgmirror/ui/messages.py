@@ -248,6 +248,10 @@ VI: dict[str, str] = {
     ),
     "err.missing_flag": "Thiếu {flag} (không có terminal để hỏi).",
     "err.conflicting_flags": "Không dùng cùng lúc {flags}.",
+    "err.channel_id_as_option": (
+        "«{given}» bị hiểu là một cờ vì bắt đầu bằng dấu «-». Gõ id không có dấu trừ "
+        "({bare}) hoặc đặt «--» trước nó, sau các cờ khác: tgmirror ... -- {given}"
+    ),
     "err.needs_yes": "Sẽ tạo kênh mới nên cần {flag} khi không có terminal để xác nhận.",
     "err.channel_not_found": (
         "Không thấy kênh/nhóm «{ref}» trong danh sách đã join. Xem `tgmirror channels`."
@@ -368,6 +372,7 @@ VI: dict[str, str] = {
     # filters (wizard step 3, preview, refilter)
     "filter.pick": "Lọc nội dung sao chép?",
     "filter.keep": "Giữ filter của lần chạy trước",
+    "filter.use_last": "Dùng kết quả khám phá gần nhất của nguồn này ({count} tin, {when})",
     "filter.none": "Không lọc: sao chép tất cả",
     "filter.criteria": "Chọn tiêu chí",
     "filter.file": "Nạp từ file YAML",
@@ -609,6 +614,113 @@ VI: dict[str, str] = {
     "menu.config_edit_title": "Sửa {name}",
     "menu.config_prompt_value": "Giá trị mới cho {name}",
     "menu.running_elsewhere": "đang chạy ở nơi khác",
+    # inspect (phase 18a)
+    "inspect.source": "Nguồn: {src}",
+    "inspect.totals": (
+        "Đã đọc {messages} tin ({units} đơn vị, {albums} album), {size}, từ {first} đến {last}."
+    ),
+    "inspect.selected": ("Khớp filter: {messages} tin ({units} đơn vị, {albums} album), {size}."),
+    "inspect.empty": "Nguồn không có tin nào.",
+    "inspect.partial": (
+        "Đã dừng sớm: báo cáo chỉ gồm các tin tới id {last_id}, không phải cả nguồn."
+    ),
+    "inspect.progress": "Đang đọc: {messages} tin (tới id {last_id})...",
+    "inspect.stopping": (
+        "Đang dừng, sẽ in báo cáo của phần đã đọc (Ctrl+C lần nữa để thoát ngay)."
+    ),
+    "inspect.flood_waiting": (
+        "Telegram yêu cầu chờ {seconds}s; đang chờ rồi đọc tiếp (Ctrl+C để dừng)."
+    ),
+    "inspect.throttled": (
+        "Telegram giới hạn liên tiếp: tạm thời đọc chậm lại ({delay}s giữa các lần)."
+    ),
+    "inspect.by.media": "Theo loại media",
+    "inspect.by.month": "Theo tháng",
+    "inspect.by.year": "Theo năm",
+    "inspect.by.hashtag": "Theo hashtag",
+    "inspect.by.topic": "Theo topic",
+    "inspect.by.sender": "Theo người gửi",
+    "inspect.by.forward": "Theo nguồn forward",
+    "inspect.by.domain": "Theo domain của link",
+    "inspect.by.size": "Theo cỡ file",
+    "inspect.by.duplicate": "File đăng nhiều lần",
+    "inspect.col.value": "Giá trị",
+    "inspect.col.messages": "Tin",
+    "inspect.col.size": "Dung lượng",
+    "inspect.none_forward": "(không phải forward)",
+    "inspect.none_sender": "(bài đăng của kênh)",
+    "inspect.other": "(khác: {count} mục)",
+    "inspect.no_rows": "(không có)",
+    "inspect.not_a_forum": "(nguồn này không phải forum nên không có topic)",
+    "inspect.list_title": "Tin khớp",
+    "inspect.list_more": ("... còn {count} tin nữa (--limit để xem thêm, --csv FILE để xuất hết)."),
+    "inspect.csv_written": "Đã ghi {count} tin vào {path}.",
+    "inspect.by_unknown": "--by {value!r} không có; chọn trong: {choices}.",
+    "inspect.bad_number": "{flag} phải là một số không âm.",
+    # selections (phase 18a)
+    "selection.exact_needs_selection": (
+        "--exact cần --selection FILE (hoặc @last): đó là nơi có danh sách đã đóng băng."
+    ),
+    "selection.last_needs_src": (
+        "--selection @last cần biết nguồn nào: thêm nguồn (--src, hoặc thư mục backup) hoặc dùng "
+        "một file selection."
+    ),
+    "selection.no_last": (
+        "Chưa có kết quả khám phá nào của «{title}»: chạy `tgmirror inspect` trên nguồn đó trước "
+        "(hoặc dùng --selection FILE)."
+    ),
+    "selection.source_mismatch": (
+        "File selection này là của nguồn {theirs}, không phải nguồn của lệnh này: id tin nhắn "
+        "chỉ có nghĩa trong đúng nguồn của nó."
+    ),
+    "inspect.saved": "Đã lưu selection vào {path}.",
+    "inspect.saved_ids": "Đã lưu selection vào {path} cùng danh sách {count} id ({ids}).",
+    "inspect.freeze_needs_save": "--freeze cần --save FILE (nơi lưu danh sách đóng băng).",
+    "inspect.next_title": "Dùng tiếp với đúng filter này:",
+    "inspect.next_selection": "(filter này không viết được bằng cờ; dùng file selection)",
+    "inspect.plan_title": "Kế hoạch {what}:",
+    "inspect.plan_kind.clone": "clone (mode {mode}, caption {caption})",
+    "inspect.plan_kind.backup": "backup",
+    "inspect.plan_kind.restore": "restore",
+    "inspect.col.way": "Cách",
+    "inspect.col.units": "Đơn vị",
+    "inspect.way.copy": "forward (Telegram sao chép phía server)",
+    "inspect.way.reference": "gửi lại bằng mã file (không tải)",
+    "inspect.way.reupload": "tải xuống rồi tải lên lại",
+    "inspect.way.download": "tải xuống đĩa",
+    "inspect.way.left_out": "bỏ qua",
+    "inspect.plan_writes": (
+        "{calls} lời gọi ghi lên Telegram; limiter đợi tối thiểu {time} giữa chúng, tức "
+        "ít nhất {days} ngày ở trần {cap} tin/ngày."
+    ),
+    "inspect.plan_no_writes": "Không ghi gì lên Telegram.",
+    "inspect.plan_transfer": (
+        "Phải truyền {size} (file lớn nhất {largest}); thời gian truyền phụ thuộc đường mạng nên "
+        "chưa tính."
+    ),
+    "inspect.plan_blocked": (
+        "Sẽ dừng ngay ở: {what}. Thêm --ignore-unsupported hoặc --placeholder (với --mode "
+        "reupload) để bỏ qua chúng."
+    ),
+    "inspect.plan_left_out": "Sẽ bỏ qua: {what}.",
+    "inspect.plan_protected": (
+        "Nguồn bật «Restrict saving content»: phần tải xuống cần lời tuyên bố "
+        "--yes-i-administer-this-channel (quyết định D3)."
+    ),
+    "inspect.plan_unknown": "--plan {value!r} không có; chọn clone, backup hoặc restore.",
+    "inspect.plan_flags_need_plan": (
+        "--mode, --caption, --caption-text, --reset-polls, --ignore-unsupported, --placeholder "
+        "và --topic-as-hashtag chỉ dùng cùng --plan."
+    ),
+    "inspect.plan_restore_needs_backup": (
+        "--plan restore cần nguồn là một thư mục backup; với kênh dùng --plan clone hoặc backup."
+    ),
+    "inspect.plan_needs_channel": (
+        "--plan {kind} cần nguồn là kênh; với thư mục backup dùng --plan restore."
+    ),
+    "inspect.plan_backup_options": (
+        "--plan backup tải hết về đĩa nên không có --mode/--caption/...; bỏ các cờ đó."
+    ),
 }
 
 EN: dict[str, str] = {
@@ -842,6 +954,11 @@ EN: dict[str, str] = {
     ),
     "err.missing_flag": "Missing {flag} (no terminal to ask).",
     "err.conflicting_flags": "Do not use {flags} together.",
+    "err.channel_id_as_option": (
+        "«{given}» is read as an option because it starts with «-». Write the id without "
+        "the minus ({bare}) or put «--» before it, after the other options: "
+        "tgmirror ... -- {given}"
+    ),
     "err.needs_yes": (
         "A new channel would be created, so {flag} is required without a terminal to confirm."
     ),
@@ -968,6 +1085,7 @@ EN: dict[str, str] = {
     ),
     "filter.pick": "Filter what gets copied?",
     "filter.keep": "Keep the filter of the previous run",
+    "filter.use_last": "Use the latest inspect result for this source ({count} messages, {when})",
     "filter.none": "No filter: copy everything",
     "filter.criteria": "Pick criteria",
     "filter.file": "Load from a YAML file",
@@ -1214,6 +1332,118 @@ EN: dict[str, str] = {
     "menu.config_edit_title": "Edit {name}",
     "menu.config_prompt_value": "New value for {name}",
     "menu.running_elsewhere": "running elsewhere",
+    # inspect (phase 18a)
+    "inspect.source": "Source: {src}",
+    "inspect.totals": (
+        "Read {messages} messages ({units} units, {albums} albums), {size}, from {first} to {last}."
+    ),
+    "inspect.selected": (
+        "Matches the filter: {messages} messages ({units} units, {albums} albums), {size}."
+    ),
+    "inspect.empty": "The source has no messages.",
+    "inspect.partial": (
+        "Stopped early: the report only covers messages up to id {last_id}, not the whole source."
+    ),
+    "inspect.progress": "Reading: {messages} messages (up to id {last_id})...",
+    "inspect.stopping": (
+        "Stopping; the report of what was read will be printed (Ctrl+C again quits at once)."
+    ),
+    "inspect.flood_waiting": (
+        "Telegram asks to wait {seconds}s; waiting, then reading on (Ctrl+C stops)."
+    ),
+    "inspect.throttled": (
+        "Telegram is limiting repeatedly: reading more slowly for now ({delay}s between requests)."
+    ),
+    "inspect.by.media": "By media type",
+    "inspect.by.month": "By month",
+    "inspect.by.year": "By year",
+    "inspect.by.hashtag": "By hashtag",
+    "inspect.by.topic": "By topic",
+    "inspect.by.sender": "By sender",
+    "inspect.by.forward": "By forward origin",
+    "inspect.by.domain": "By link domain",
+    "inspect.by.size": "By file size",
+    "inspect.by.duplicate": "Files posted more than once",
+    "inspect.col.value": "Value",
+    "inspect.col.messages": "Messages",
+    "inspect.col.size": "Size",
+    "inspect.none_forward": "(not forwarded)",
+    "inspect.none_sender": "(channel post)",
+    "inspect.other": "(other: {count} items)",
+    "inspect.no_rows": "(none)",
+    "inspect.not_a_forum": "(this source is not a forum, so it has no topics)",
+    "inspect.list_title": "Matching messages",
+    "inspect.list_more": (
+        "... {count} more messages (--limit to see more, --csv FILE to export them all)."
+    ),
+    "inspect.csv_written": "Wrote {count} messages to {path}.",
+    "inspect.by_unknown": "--by {value!r} does not exist; choose from: {choices}.",
+    "inspect.bad_number": "{flag} must be a non-negative number.",
+    # selections (phase 18a)
+    "selection.exact_needs_selection": (
+        "--exact needs --selection FILE (or @last): that is where the frozen list is."
+    ),
+    "selection.last_needs_src": (
+        "--selection @last needs to know which source: give one (--src, or a backup directory) "
+        "or use a selection file."
+    ),
+    "selection.no_last": (
+        "There is no inspect result for «{title}» yet: run `tgmirror inspect` on that source "
+        "first (or use --selection FILE)."
+    ),
+    "selection.source_mismatch": (
+        "This selection file is for source {theirs}, not this command's source: message ids only "
+        "mean something in their own source."
+    ),
+    "inspect.saved": "Selection saved to {path}.",
+    "inspect.saved_ids": "Selection saved to {path} with a list of {count} ids ({ids}).",
+    "inspect.freeze_needs_save": "--freeze needs --save FILE (where the frozen list goes).",
+    "inspect.next_title": "Continue with exactly this filter:",
+    "inspect.next_selection": "(this filter cannot be written as flags; use the selection file)",
+    "inspect.plan_title": "Plan for {what}:",
+    "inspect.plan_kind.clone": "clone (mode {mode}, caption {caption})",
+    "inspect.plan_kind.backup": "backup",
+    "inspect.plan_kind.restore": "restore",
+    "inspect.col.way": "How",
+    "inspect.col.units": "Units",
+    "inspect.way.copy": "forward (Telegram copies server-side)",
+    "inspect.way.reference": "sent again by file id (nothing downloaded)",
+    "inspect.way.reupload": "downloaded and uploaded again",
+    "inspect.way.download": "downloaded to disk",
+    "inspect.way.left_out": "left out",
+    "inspect.plan_writes": (
+        "{calls} write calls to Telegram; the limiter waits at least {time} between them, so "
+        "at least {days} day(s) at the cap of {cap} messages/day."
+    ),
+    "inspect.plan_no_writes": "Nothing is written to Telegram.",
+    "inspect.plan_transfer": (
+        "{size} has to move (largest file {largest}); how long that takes depends on the "
+        "connection and is not counted."
+    ),
+    "inspect.plan_blocked": (
+        "It would stop at once at: {what}. Add --ignore-unsupported or --placeholder (with "
+        "--mode reupload) to leave them out."
+    ),
+    "inspect.plan_left_out": "It would leave out: {what}.",
+    "inspect.plan_protected": (
+        "The source restricts saving content: the downloaded part needs your statement, "
+        "--yes-i-administer-this-channel (decision D3)."
+    ),
+    "inspect.plan_unknown": "--plan {value!r} does not exist; choose clone, backup or restore.",
+    "inspect.plan_flags_need_plan": (
+        "--mode, --caption, --caption-text, --reset-polls, --ignore-unsupported, --placeholder "
+        "and --topic-as-hashtag only go with --plan."
+    ),
+    "inspect.plan_restore_needs_backup": (
+        "--plan restore needs a backup directory as the source; for a channel use --plan clone "
+        "or backup."
+    ),
+    "inspect.plan_needs_channel": (
+        "--plan {kind} needs a channel as the source; for a backup directory use --plan restore."
+    ),
+    "inspect.plan_backup_options": (
+        "--plan backup downloads everything to disk, so it has no --mode/--caption/...; drop them."
+    ),
 }
 
 

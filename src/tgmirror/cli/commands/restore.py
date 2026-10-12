@@ -7,6 +7,7 @@ gateway. Running it again on the same pair (or `tgmirror run`) continues the del
 other clone.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,8 +24,12 @@ from tgmirror.cli.filter_options import (
     ExcludeMediaOption,
     ExcludeRegexOption,
     FilterFileOption,
+    ForwardedFromOption,
+    ForwardedOption,
     FromUserOption,
     HashtagOption,
+    HasLinkOption,
+    LinkDomainOption,
     MaxSizeOption,
     MediaOption,
     MinSizeOption,
@@ -35,8 +40,14 @@ from tgmirror.cli.filter_options import (
     collect,
 )
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.cli.selection_options import (
+    ExactOption,
+    SelectionOption,
+    check_args,
+    for_backup,
+)
 from tgmirror.core.gateway import ChannelInfo, TelegramGateway, TopicInfo
-from tgmirror.engine import preview
+from tgmirror.engine import preview, selection
 from tgmirror.engine.backup_reader import BackupReader
 from tgmirror.engine.backupdir import BackupManifest, read_manifest
 from tgmirror.engine.endpoints import (
@@ -135,6 +146,12 @@ def restore(
     filter_file: FilterFileOption = None,
     from_user: FromUserOption = None,
     topic: TopicOption = None,
+    forwarded: ForwardedOption = None,
+    forwarded_from: ForwardedFromOption = None,
+    has_link: HasLinkOption = False,
+    link_domain: LinkDomainOption = None,
+    selection: SelectionOption = None,
+    exact: ExactOption = False,
     pushdown: Annotated[
         bool,
         typer.Option(
@@ -212,9 +229,20 @@ def restore(
             filter_file=filter_file,
             from_user=from_user,
             topic=topic,
+            forwarded=forwarded,
+            forwarded_from=forwarded_from,
+            has_link=has_link,
+            link_domain=link_domain,
         )  # a bad filter is a usage error before anything is asked or written
+        check_args(selection, exact, filters)
+        if selection is not None:
+            filters, directory_named = await asyncio.to_thread(
+                _selection_for, rt, directory, selection, exact
+            )
+        else:
+            directory_named = directory
         options = RestoreOptions(
-            dir=directory,
+            dir=directory_named,
             dst=dst,
             dst_new=dst_new,
             about=about,
@@ -249,6 +277,16 @@ def restore(
                 )
 
     run(rt, command())
+
+
+def _selection_for(
+    rt: Runtime, directory: Path | None, selection: str, exact: bool
+) -> tuple[FilterSpec, Path | None]:
+    """``--selection`` for a restore: the filter, and the directory a selection file names when
+    none was given. ``@last`` is keyed by the backup's original channel id, from its manifest."""
+    manifest = read_manifest(directory) if directory is not None else None
+    src_id = manifest.src_id if manifest is not None else None
+    return for_backup(rt.paths, directory, src_id=src_id, selection=selection, exact=exact)
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,7 +485,12 @@ class RestoreFlow:
             manifest = self._manifest
             assert manifest is not None
             topics: Sequence[TopicInfo] = [TopicInfo(t.id, t.title) for t in manifest.topics]
-            self._filters = await wizard.pick_filters(self._prompter, can_keep=False, topics=topics)
+            last = await asyncio.to_thread(
+                selection.last_discovery, self._rt.paths.selections_dir, manifest.src_id
+            )
+            self._filters = await wizard.pick_filters(
+                self._prompter, can_keep=False, topics=topics, last=last
+            )
 
     async def _confirm_fresh(self) -> None:
         """``--fresh`` (N6, Phase 15b): mirrors ``clone``'s (via ``run.py::confirm_fresh``) — a

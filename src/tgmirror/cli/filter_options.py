@@ -125,6 +125,35 @@ TopicOption = Annotated[
         rich_help_panel=PANEL,
     ),
 ]
+ForwardedOption = Annotated[
+    bool | None,
+    typer.Option(
+        "--forwarded/--not-forwarded",
+        help="Only forwarded messages, or only those that are not.",
+        rich_help_panel=PANEL,
+    ),
+]
+ForwardedFromOption = Annotated[
+    list[int] | None,
+    typer.Option(
+        "--forwarded-from",
+        help="Only messages forwarded from this channel/user id; repeat for any-of. "
+        "`tgmirror inspect --by forward` lists them.",
+        rich_help_panel=PANEL,
+    ),
+]
+HasLinkOption = Annotated[
+    bool,
+    typer.Option("--has-link", help="Only messages that contain a link.", rich_help_panel=PANEL),
+]
+LinkDomainOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--link-domain",
+        help="Only messages linking to this domain (subdomains count); repeat for any-of.",
+        rich_help_panel=PANEL,
+    ),
+]
 
 
 def collect(
@@ -143,6 +172,10 @@ def collect(
     filter_file: Path | None,
     from_user: list[int] | None = None,
     topic: list[int] | None = None,
+    forwarded: bool | None = None,
+    forwarded_from: list[int] | None = None,
+    has_link: bool = False,
+    link_domain: list[str] | None = None,
 ) -> FilterSpec | None:
     """The filter the flags describe, or ``None`` when none was given. Raises ``FilterError``."""
     flags = FlagFilters(
@@ -159,5 +192,9 @@ def collect(
         album=album,
         from_user=from_user or [],
         topic=topic or [],
+        forwarded=forwarded,
+        forwarded_from=forwarded_from or [],
+        has_link=has_link,
+        link_domain=link_domain or [],
     )
     return resolve(flags, filter_file)

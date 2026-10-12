@@ -50,6 +50,10 @@ def plan_read(
             min_id = max(cursor, spec.ids.from_ - 1 - ALBUM_MARGIN)
         if spec.ids.to is not None:
             max_id = spec.ids.to + ALBUM_MARGIN
+    if spec.message_ids:  # a frozen list: nothing outside its span can match
+        min_id = max(min_id, spec.message_ids[0] - 1 - ALBUM_MARGIN)
+        listed_max = spec.message_ids[-1] + ALBUM_MARGIN
+        max_id = listed_max if max_id is None else min(max_id, listed_max)
     since = spec.when.from_ if spec.when else None
     until = spec.when.to if spec.when else None
 

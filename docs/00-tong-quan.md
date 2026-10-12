@@ -36,6 +36,7 @@ Người dùng đã join một kênh Telegram. Họ muốn tạo bản sao của
 | D7 | Typer + questionary + Rich | CLI + wizard + progress gọn nhẹ |
 | D8 | Python >= 3.11, `uv` | Hiện đại, cài đặt nhanh |
 | D9 | Engine chỉ phụ thuộc `TelegramGateway` (protocol) | Test được bằng `FakeGateway`, không cần mạng |
+| D10 | **Ghi/xoá tại chỗ trên kênh của user được phép, chỉ khi có xác nhận** (chốt 2026-10-12, chưa cài: Phase 20, release 0.3.0). Ngoài vai trò đích của clone, tgmirror được sửa/xoá/đăng lại tin trên một kênh user quản trị (`edit`/`delete`/`repost`), luôn qua plan → xác nhận → apply: plan đóng băng danh sách tin và in tóm tắt/diff; có terminal thì gõ lại **số tin** (không phải Có/Không); không có terminal thì `--yes` **kèm** `--expect N` khớp số trong plan. Backup trước khi xoá là tùy chọn (hỏi Có/Không). Chi tiết: `07-inspect-transform.md`, mục 6 | Thao tác này không đảo ngược được trên Telegram, nên giống D3: không bao giờ âm thầm, luôn là hành động cố ý của user |
 
 ## Pháp lý & sử dụng có trách nhiệm
 
