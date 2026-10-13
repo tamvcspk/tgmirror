@@ -45,6 +45,11 @@ Every wizard outcome must be expressible with flags/YAML, and both paths call th
 - [ ] Never prints secrets (`api_hash`, session, phone, login code). Phone/code prompts use hidden input where applicable.
 - [ ] Tests with Typer's `CliRunner` and `FakeGateway`.
 
+## Transform (Phase 19a)
+
+- `--transform FILE` lives in `cli/transform_options.py` (`TransformOption`, `resolve`) and is declared by `clone`, `restore` and `inspect` (`--plan` only). The file is parsed in `command()` before anything is asked or created, so a bad transform is exit 2; `Transform` (pure, `engine/transform.py`) is then carried as `CloneOptions.transform`/`RestoreOptions.transform` and ends in `RunRequest.transform_json`. A selection's `transform:` arrives through `for_channel`/`for_backup(takes_transform=True)`; `backup` leaves it `False`, so a selection with a transform is refused there. Any command that builds a `RunRequest` from a remembered pair must copy `transform_json` (`run.py`, `retry.py`).
+- It is not a wizard step (the flag is a superset of the wizard, rule 7): giving one counts as having answered the strategy questions (`CloneFlow._pick_strategy`'s `given`). `wizard._ask_file` refuses a selection file that carries one rather than use its filter and silently drop the rest.
+
 ## `inspect` and selections (Phase 18a)
 
 - `tgmirror inspect` is read-only and has its own shape (no `*Flow`, no confirmation): filters from `cli/filter_options.py::collect`, source = channel *or* backup directory (`_classify`: a folder named like a chat title is still a title unless it holds `backup.json`; a path-looking directory without one is `err.not_a_backup`). A channel is read through `FloodGuard` — never `conn.gateway.iter_messages` (a test guards it). Progress goes to stderr so `--json`/`--csv` stdout stays data.

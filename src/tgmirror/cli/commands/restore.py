@@ -46,6 +46,8 @@ from tgmirror.cli.selection_options import (
     check_args,
     for_backup,
 )
+from tgmirror.cli.transform_options import TransformOption
+from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.gateway import ChannelInfo, TelegramGateway, TopicInfo
 from tgmirror.engine import preview, selection
 from tgmirror.engine.backup_reader import BackupReader
@@ -59,6 +61,7 @@ from tgmirror.engine.endpoints import (
     plan_endpoints,
 )
 from tgmirror.engine.runs import RunRequest, begin_run, check_options, check_runnable
+from tgmirror.engine.transform import Transform
 from tgmirror.filters.model import FilterSpec
 from tgmirror.store.db import Store, utc_now
 from tgmirror.ui.messages import t
@@ -108,6 +111,7 @@ def restore(
     caption_text: Annotated[
         str | None, typer.Option("--caption-text", help="Text for --caption append.")
     ] = None,
+    transform_file: TransformOption = None,
     ignore_unsupported: Annotated[
         bool,
         typer.Option(
@@ -235,12 +239,14 @@ def restore(
             link_domain=link_domain,
         )  # a bad filter is a usage error before anything is asked or written
         check_args(selection, exact, filters)
+        carried: Transform | None = None
         if selection is not None:
-            filters, directory_named = await asyncio.to_thread(
+            filters, directory_named, carried = await asyncio.to_thread(
                 _selection_for, rt, directory, selection, exact
             )
         else:
             directory_named = directory
+        transform = await resolve_transform(transform_file, carried)
         options = RestoreOptions(
             dir=directory_named,
             dst=dst,
@@ -249,6 +255,7 @@ def restore(
             admin_ack=admin_ack,
             caption=caption,
             caption_text=caption_text,
+            transform=transform,
             ignore_unsupported=ignore_unsupported,
             placeholder=placeholder,
             topic_as_hashtag=topic_as_hashtag,
@@ -281,12 +288,19 @@ def restore(
 
 def _selection_for(
     rt: Runtime, directory: Path | None, selection: str, exact: bool
-) -> tuple[FilterSpec, Path | None]:
+) -> tuple[FilterSpec, Path | None, Transform]:
     """``--selection`` for a restore: the filter, and the directory a selection file names when
     none was given. ``@last`` is keyed by the backup's original channel id, from its manifest."""
     manifest = read_manifest(directory) if directory is not None else None
     src_id = manifest.src_id if manifest is not None else None
-    return for_backup(rt.paths, directory, src_id=src_id, selection=selection, exact=exact)
+    return for_backup(
+        rt.paths,
+        directory,
+        src_id=src_id,
+        selection=selection,
+        exact=exact,
+        takes_transform=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +315,7 @@ class RestoreOptions:
     admin_ack: bool = False
     caption: str | None = None
     caption_text: str | None = None
+    transform: Transform = Transform()  # phase 19: --transform, or a selection file's
     ignore_unsupported: bool = False
     placeholder: bool = False
     topic_as_hashtag: bool | None = None
@@ -381,6 +396,7 @@ class RestoreFlow:
             filters_json=None if self._filters is None else self._filters.to_json(),
             caption=self._o.caption or "keep",
             caption_text=self._o.caption_text or "",
+            transform_json=self._o.transform.to_json(),
             reset_polls=True,  # a backup never keeps votes: restoring a poll is always fresh
             ignore_unsupported=self._o.ignore_unsupported,
             placeholder=self._o.placeholder,

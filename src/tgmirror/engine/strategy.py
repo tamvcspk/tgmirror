@@ -13,6 +13,7 @@ from collections.abc import Callable
 from enum import StrEnum
 
 from tgmirror.core.gateway import CaptionMode, MediaKind, Unit
+from tgmirror.engine.transform import Transform
 
 MODES = ("auto", "copy", "reupload")
 
@@ -26,12 +27,27 @@ class Strategy(StrEnum):
 Router = Callable[[Unit], Strategy]
 
 
-def may_reupload(mode: str, caption: CaptionMode | str, topic_hashtag: bool = False) -> bool:
+def may_reupload(
+    mode: str,
+    caption: CaptionMode | str,
+    topic_hashtag: bool = False,
+    transform: Transform | None = None,
+) -> bool:
     """Whether a run in ``mode`` with this caption handling (and, phase 8, a topic hashtag to
-    append) can download content and send it again, which is what decision D3 guards for a source
-    that restricts saving content."""
-    rewrites = caption != CaptionMode.KEEP or topic_hashtag
+    append; phase 19, a transform) can download content and send it again, which is what decision
+    D3 guards for a source that restricts saving content."""
+    rewrites = (
+        caption != CaptionMode.KEEP
+        or topic_hashtag
+        or (transform is not None and not transform.is_empty)
+    )
     return mode == "reupload" or (mode == "auto" and rewrites)
+
+
+def has_plain_text(unit: Unit) -> bool:
+    """A text message (or a link preview): the content itself, which only a transform with
+    ``text_too`` rewrites (phase 19)."""
+    return any(m.text and m.media in (MediaKind.TEXT, MediaKind.WEBPAGE) for m in unit.messages)
 
 
 def has_caption(unit: Unit) -> bool:
@@ -81,20 +97,31 @@ def has_files(unit: Unit) -> bool:
 
 
 def router(
-    mode: str, caption: CaptionMode, *, by_reference: bool = False, topic_hashtag: bool = False
+    mode: str,
+    caption: CaptionMode,
+    *,
+    by_reference: bool = False,
+    topic_hashtag: bool = False,
+    transform: Transform | None = None,
 ) -> Router:
     """The strategy of each unit for a run in ``mode`` with this caption handling.
 
     ``by_reference`` says the source lets content be saved, so a unit that ``auto`` would
     download can be sent by its file ids instead. ``topic_hashtag`` (phase 8) says a forum unit
-    must carry its topic as a hashtag, which only a unit sent again can do."""
+    must carry its topic as a hashtag, which only a unit sent again can do. ``transform``
+    (phase 19) rewrites captions (and, with ``text_too``, plain text) the same way."""
     if mode == "reupload":
         return lambda unit: Strategy.REUPLOAD
-    if mode == "copy" or (caption is CaptionMode.KEEP and not topic_hashtag):
+    transformed = transform is not None and not transform.is_empty
+    rewrites_text = transform is not None and transform.rewrites_text
+    caption_rewrites = caption is not CaptionMode.KEEP or transformed
+    if mode == "copy" or (not caption_rewrites and not topic_hashtag):
         return lambda unit: Strategy.COPY
 
     def auto(unit: Unit) -> Strategy:
-        rewritten = caption is not CaptionMode.KEEP and has_caption(unit)
+        rewritten = (caption_rewrites and has_caption(unit)) or (
+            rewrites_text and has_plain_text(unit)
+        )
         if not (rewritten or (topic_hashtag and takes_hashtag(unit))):
             return Strategy.COPY
         return Strategy.REFERENCE if by_reference and has_files(unit) else Strategy.REUPLOAD

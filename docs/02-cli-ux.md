@@ -154,6 +154,29 @@ done 4,180 · failed 3 · skipped(filter) 27,911 · flood 2 (last 38s ago)
 - `--caption append` cần `--caption-text` (và ngược lại). Caption dài quá giới hạn của Telegram sau khi cộng: tin đó `failed` với lý do của Telegram, `retry` xử lý sau.
 - Offset của entity theo UTF-16 như Telegram; định dạng (đậm, nghiêng, ...) được giữ và dịch chuyển khi xóa link.
 
+### Transform (`--transform FILE`, Phase 19a)
+
+`--caption` là cú pháp tắt của một **danh sách thao tác** chạy theo thứ tự; `--transform` nhận danh sách đầy đủ từ một file YAML (hoặc từ phần `transform:` của file selection, `03-filters.md`, "Selection"):
+
+```yaml
+version: 1
+caption:
+  - strip_links: source        # source | all — `source` = đúng `--caption strip-links` (link) …
+  - remove_mentions: source    # … cộng `@nguồn`; `all` = mọi @mention
+  - remove_hashtags: ["#ads", "quangcao"]   # hoặc: all
+  - replace: {regex: "(?i)liên hệ @\\w+", with: ""}   # `with` là chữ nguyên văn, không có \1
+  - append: "— Kênh B"         # cách hai dòng trống, như `--caption append`
+  - clear: true                # bỏ caption, như `--caption none`
+  - text_too: true             # mặc định chỉ caption của tin media; true = cả tin chữ
+```
+
+- Một khóa mỗi mục; `text_too` là mục đặc biệt (một lần, không phải thao tác). Khóa lạ, `version` mới hơn, thao tác lạ, regex sai, hashtag có khoảng trắng, hay `clear` cùng `text_too` (xóa sạch mọi tin chữ) → mã 2 trước khi hỏi hay ghi gì, nêu đúng vị trí (`caption[2].replace.regex: ...`). Các khóa của những lát cắt sau của Phase 19 (`topics`, `topic_map`, `reply`, `forward_header`, `links`) bị từ chối với thông báo riêng, không bị lờ đi.
+- Dùng chung một đường code với `--caption`: cùng viết lại entity theo UTF-16, cùng chiến lược theo unit (`strategy.router`): chỉ unit mà thao tác có thể đổi (tin media có caption; với `text_too` cả tin chữ) bị gửi lại — bằng mã file khi nguồn cho lưu nội dung, tải xuống/lên khi `noforwards` — phần còn lại vẫn forward. Router không biết trước một thao tác có đổi gì không, nên tin có caption mà thao tác không khớp vẫn bị gửi lại giống nhau (đúng như `--caption append` trên tin đã có caption). D3 áp như `--caption`: `--yes-i-administer-this-channel` / câu gõ nguyên văn.
+- Không ghép: `--transform` cùng `--caption` khác `keep` là lỗi mã 2; `--transform` cùng `--selection` có `transform:` là lỗi mã 2; `--mode copy` với transform không rỗng là lỗi mã 2. `backup` từ chối file selection mang transform (nó không áp transform); bước "nạp từ file" của wizard cũng từ chối và chỉ sang `--selection`.
+- Có trên `clone` và `restore` (cùng đường code: restore đọc từ thư mục backup nhưng viết lại caption bằng cùng `rewrite_caption`), và trên `inspect --plan clone|restore` để pre-flight đếm đúng số unit đi từng đường; `inspect --plan ... --save` ghi transform vào file selection.
+- Nhớ theo cặp (`RunOptions.transform_json`): `run`/`retry` dùng lại; không có cờ nào để "bỏ" nó ở `run` (clone lại với transform khác). Tin đã sao chép **không** bị sửa lại khi đổi transform.
+- `text_too` chạm tin chữ: tin chữ bị xóa sạch sau thao tác (vd. `replace` thay cả tin bằng rỗng) → tin đó `failed` với lý do `transform_emptied_text` (Telegram không gửi được tin rỗng); `retry` không giúp, sửa transform rồi chạy lại. Regex quá `0.5 s` trên một tin → tin đó `failed` với `transform_regex_timeout`.
+
 ## Config
 
 Đường dẫn dữ liệu qua `platformdirs`:

@@ -133,6 +133,7 @@ async def retry_flow_for(
         placeholder=target.options.placeholder,
         protected_ack=target.options.protected_ack,
         topic_as_hashtag=target.options.topic_as_hashtag,
+        transform_json=target.options.transform_json,
         from_backup=from_backup if from_backup is not None else target.options.from_backup,
     )
     src, dst = pair_of(target)

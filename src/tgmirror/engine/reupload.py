@@ -36,6 +36,7 @@ from tgmirror.core.gateway import (
 from tgmirror.engine.batcher import Batch
 from tgmirror.engine.runs import RunError
 from tgmirror.engine.strategy import FILELESS
+from tgmirror.engine.transform import Transform
 from tgmirror.store.msgmap import MessageResult
 from tgmirror.store.runs import RunOptions
 
@@ -64,8 +65,14 @@ class Options:
 
     @classmethod
     def of(cls, options: RunOptions) -> "Options":
+        transform = Transform.from_json(options.transform_json)
         return cls(
-            CaptionPolicy(CaptionMode(options.caption), options.caption_text),
+            CaptionPolicy(
+                CaptionMode(options.caption),
+                options.caption_text,
+                ops=transform.caption,
+                text_too=transform.text_too,
+            ),
             options.reset_polls,
             options.ignore_unsupported,
             options.placeholder,

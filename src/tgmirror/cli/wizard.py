@@ -334,4 +334,8 @@ async def _ask_file(prompter: Prompter) -> FilterSpec:
     plain filter file or a selection file (phase 18a, ``tgmirror inspect --save``) — its filter
     is used live; a frozen list in it is ``--exact``'s business, not the wizard's."""
     path = Path((await prompter.path(t("filter.ask_file"))).strip().strip("\"'"))
-    return (await asyncio.to_thread(selection.load, path)).filters
+    loaded = await asyncio.to_thread(selection.load, path)
+    if not loaded.transform.is_empty:
+        # its filter would be used and its transform dropped: say so rather than half-use the file
+        raise selection.SelectionError(t("filter.file_has_transform", path=path))
+    return loaded.filters

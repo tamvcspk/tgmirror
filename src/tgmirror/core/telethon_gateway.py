@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import regex
 from telethon import TelegramClient, errors, helpers, types, utils
 from telethon.errors.common import InvalidBufferError
 from telethon.extensions import html as tl_html
@@ -65,18 +66,24 @@ from tgmirror.core.errors import (
 from tgmirror.core.gateway import (
     ALBUM_MARGIN,
     NO_FILTER,
-    CaptionMode,
+    TRANSFORM_REGEX_TIMEOUT,
+    Append,
     CaptionPolicy,
     ChannelInfo,
     ChatKind,
+    Clear,
     ExportedMedia,
     ExportedMessage,
     FromBackup,
     MediaKind,
     OnTransfer,
     Prepared,
+    RemoveHashtags,
+    RemoveMentions,
+    Replace,
     ServerFilter,
     SrcMessage,
+    StripLinks,
     TopicInfo,
     TransferPhase,
     Unit,
@@ -608,38 +615,58 @@ def _points_at_source(reference: str, names: Collection[str]) -> bool:
     return found is not None and found.group(1) in names
 
 
-def strip_source_links(
-    text: str, entities: Sequence[object], names: Collection[str]
+def _unit_at(units: bytes, index: int) -> str:
+    return units[2 * index : 2 * index + 2].decode("utf-16-le", "ignore")
+
+
+def _tidy_cut(units: bytes, at: int, length: int) -> tuple[int, int]:
+    """Widen a cut by one space so removing a word does not leave a gap: the space after it
+    when it sits at the start of a line or after a space, otherwise the one before it when it is
+    at the end of a line (``"a #b c"`` -> ``"a c"``, ``"a #b"`` -> ``"a"``)."""
+    total = len(units) // 2
+    end = at + length
+    before = _unit_at(units, at - 1) if at > 0 else "\n"
+    after = _unit_at(units, end) if end < total else "\n"
+    if after in " \t" and before in " \t\n":
+        return at, length + 1
+    if after == "\n" and before in " \t":
+        return at - 1, length + 1
+    return at, length
+
+
+_Edit = tuple[int, int, str]  # (offset, length) in UTF-16 units, and what takes their place
+
+
+def _apply_edits(
+    text: str, entities: Sequence[object], edits: Sequence[_Edit]
 ) -> tuple[str, list[object]]:
-    """Drop what points back at the source: a visible link or mention is deleted with its text, a
-    hyperlink keeps its words and loses the link. Everything else stays, offsets moved to fit."""
-    cuts: list[tuple[int, int]] = []
-    kept: list[object] = []
-    for entity in entities:
-        if isinstance(entity, types.MessageEntityUrl | types.MessageEntityMention):
-            visible = _slice16(text, entity.offset, entity.length)
-            if _points_at_source(visible, names):
-                cuts.append((entity.offset, entity.length))
-                continue
-        elif isinstance(entity, types.MessageEntityTextUrl) and _points_at_source(
-            entity.url, names
-        ):
-            continue
-        kept.append(entity)
-    if not cuts:
-        return text, kept
+    """``text`` with non-overlapping ``edits`` made and the entities moved to fit: an entity that
+    lay entirely inside a cut disappears, one that overlaps an edit is clipped to what is left of
+    it (formatting follows the replacement of a span it covered whole). Trailing whitespace the
+    edits leave behind is dropped, as the entities are clipped to the result."""
+    if not edits:
+        return text, list(entities)
+    ordered = sorted(edits)
 
     def moved(position: int) -> int:
-        return position - sum(min(length, max(0, position - at)) for at, length in cuts)
+        shift = 0
+        for at, length, replacement in ordered:
+            new_length = len(_units16(replacement)) // 2
+            if position >= at + length:
+                shift += new_length - length
+            elif position > at:
+                return at + shift + min(position - at, new_length)
+            else:
+                break
+        return position + shift
 
     units = bytearray(_units16(text))
-    for at, length in sorted(cuts, reverse=True):
-        del units[2 * at : 2 * (at + length)]
-    new_text = units.decode("utf-16-le")
-    trimmed = new_text.rstrip()
+    for at, length, replacement in reversed(ordered):
+        units[2 * at : 2 * (at + length)] = _units16(replacement)
+    trimmed = units.decode("utf-16-le").rstrip()
     limit = len(_units16(trimmed)) // 2
     result: list[object] = []
-    for entity in kept:
+    for entity in entities:
         start = moved(entity.offset)
         end = min(moved(entity.offset + entity.length), limit)
         if end > start:
@@ -649,22 +676,135 @@ def strip_source_links(
     return trimmed, result
 
 
+def _op_strip_links(
+    text: str, entities: Sequence[object], names: Collection[str], scope: str
+) -> tuple[str, list[object]]:
+    """``StripLinks``: a visible link is deleted with its text, a hyperlink keeps its words and
+    loses the link; ``scope`` ``"source"`` only touches those that point at the source."""
+    cuts: list[_Edit] = []
+    kept: list[object] = []
+    for entity in entities:
+        if isinstance(entity, types.MessageEntityUrl):
+            visible = _slice16(text, entity.offset, entity.length)
+            if scope == "all" or _points_at_source(visible, names):
+                cuts.append((entity.offset, entity.length, ""))
+                continue
+        elif isinstance(entity, types.MessageEntityTextUrl) and (
+            scope == "all" or _points_at_source(entity.url, names)
+        ):
+            continue
+        kept.append(entity)
+    return _apply_edits(text, kept, cuts)
+
+
+def _op_remove_mentions(
+    text: str, entities: Sequence[object], names: Collection[str], scope: str
+) -> tuple[str, list[object]]:
+    cuts: list[_Edit] = []
+    kept: list[object] = []
+    for entity in entities:
+        if isinstance(entity, types.MessageEntityMention):
+            visible = _slice16(text, entity.offset, entity.length)
+            if scope == "all" or _points_at_source(visible, names):
+                cuts.append((entity.offset, entity.length, ""))
+                continue
+        kept.append(entity)
+    return _apply_edits(text, kept, cuts)
+
+
+def _op_remove_hashtags(
+    text: str, entities: Sequence[object], tags: Collection[str]
+) -> tuple[str, list[object]]:
+    units = _units16(text)
+    cuts: list[_Edit] = []
+    kept: list[object] = []
+    for entity in entities:
+        if isinstance(entity, types.MessageEntityHashtag):
+            visible = _slice16(text, entity.offset, entity.length)
+            if not tags or visible.split("@", 1)[0].casefold() in tags:
+                at, length = _tidy_cut(units, entity.offset, entity.length)
+                cuts.append((at, length, ""))
+                continue
+        kept.append(entity)
+    return _apply_edits(text, kept, _merge_cuts(cuts))
+
+
+def _merge_cuts(cuts: list[_Edit]) -> list[_Edit]:
+    """Cuts widened by ``_tidy_cut`` may touch or overlap (``"#a #b"``): join them."""
+    merged: list[_Edit] = []
+    for at, length, replacement in sorted(cuts):
+        if merged and at <= merged[-1][0] + merged[-1][1]:
+            last_at, last_length, _ = merged[-1]
+            merged[-1] = (last_at, max(last_length, at + length - last_at), replacement)
+        else:
+            merged.append((at, length, replacement))
+    return merged
+
+
+def _op_replace(
+    text: str, entities: Sequence[object], pattern: str, replacement: str
+) -> tuple[str, list[object]]:
+    edits: list[_Edit] = []
+    try:
+        for found in regex.finditer(pattern, text, timeout=TRANSFORM_REGEX_TIMEOUT):
+            if found.end() == found.start():
+                continue  # an empty match replaces nothing
+            at = len(_units16(text[: found.start()])) // 2
+            length = len(_units16(found.group())) // 2
+            edits.append((at, length, replacement))
+    except TimeoutError:
+        raise PerMessage("transform_regex_timeout") from None
+    return _apply_edits(text, entities, edits)
+
+
+def strip_source_links(
+    text: str, entities: Sequence[object], names: Collection[str]
+) -> tuple[str, list[object]]:
+    """Drop what points back at the source: a visible link or mention is deleted with its text, a
+    hyperlink keeps its words and loses the link. Everything else stays, offsets moved to fit."""
+    text, kept = _op_strip_links(text, entities, names, "source")
+    return _op_remove_mentions(text, kept, names, "source")
+
+
 def rewrite_caption(
     text: str, entities: Sequence[object], policy: CaptionPolicy, names: Collection[str]
 ) -> tuple[str, list[object]]:
-    """The caption and its entities after ``policy`` (docs/02-cli-ux.md, "Caption handling")."""
-    match policy.mode:
-        case CaptionMode.NONE:
-            text, kept = "", []
-        case CaptionMode.APPEND:
-            text, kept = (f"{text}\n\n{policy.text}" if text else text), list(entities)
-        case CaptionMode.STRIP_LINKS:
-            text, kept = strip_source_links(text, entities, names)
-        case _:
-            text, kept = text, list(entities)
+    """The caption and its entities after ``policy`` (docs/02-cli-ux.md, "Caption handling"):
+    each operation in order, then the topic hashtag."""
+    kept = list(entities)
+    for op in policy.all_ops:
+        match op:
+            case Clear():
+                text, kept = "", []
+            case Append():
+                text = f"{text}\n\n{op.text}" if text else text
+            case StripLinks():
+                text, kept = _op_strip_links(text, kept, names, op.scope)
+            case RemoveMentions():
+                text, kept = _op_remove_mentions(text, kept, names, op.scope)
+            case RemoveHashtags():
+                text, kept = _op_remove_hashtags(text, kept, op.tags)
+            case Replace():
+                text, kept = _op_replace(text, kept, op.pattern, op.with_)
     if policy.hashtag:  # phase 8: appended last, whatever the mode did; Telegram parses it itself
         text = f"{text}\n{policy.hashtag}" if text else policy.hashtag
     return text, kept
+
+
+def _plain_text(
+    text: str, entities: Sequence[object], policy: CaptionPolicy, names: Collection[str]
+) -> tuple[str, list[object]]:
+    """The text of a message with no file: only a transform with ``text_too`` rewrites it, and
+    the topic hashtag is added either way. A text the operations leave empty is refused (a
+    message cannot be sent with no text), as that unit's own failure."""
+    if policy.text_too and policy.rewrites:
+        new_text, kept = rewrite_caption(text, entities, policy, names)
+        if text.strip() and not new_text.strip():
+            raise PerMessage("transform_emptied_text")
+        return new_text, kept
+    if policy.hashtag:
+        text = f"{text}\n{policy.hashtag}" if text else policy.hashtag
+    return text, list(entities)
 
 
 def _album_captions(
@@ -1703,8 +1843,7 @@ class TelethonGateway:
                 reply_to=topic,
             )
         else:
-            if caption.hashtag:
-                text = f"{text}\n{caption.hashtag}" if text else caption.hashtag
+            text, entities = _plain_text(text, entities, caption, names)
             sent = await self._client.send_message(
                 peer, text, formatting_entities=entities or None, parse_mode=None, reply_to=topic
             )
@@ -1812,11 +1951,10 @@ class TelethonGateway:
                 **extra,
             )
         elif media is None or isinstance(media, types.MessageMediaWebPage):
-            # ``CaptionPolicy.mode`` never touches plain text (it is the content itself), but a
-            # topic hashtag (phase 8) still applies: it is tgmirror's own addition, not part of
-            # the original message.
-            if caption.hashtag:
-                text = f"{text}\n{caption.hashtag}" if text else caption.hashtag
+            # The caption operations never touch plain text (it is the content itself) unless the
+            # transform says ``text_too``, but a topic hashtag (phase 8) always applies: it is
+            # tgmirror's own addition, not part of the original message.
+            text, entities = _plain_text(text, entities, caption, _source_names(message))
             sent = await self._client.send_message(
                 peer,
                 text,

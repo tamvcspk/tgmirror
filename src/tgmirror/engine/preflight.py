@@ -17,6 +17,7 @@ from tgmirror.core.config import Limits
 from tgmirror.core.gateway import CaptionMode, CaptionPolicy, Unit
 from tgmirror.engine.reupload import ActionKind, Options, UnsupportedMedia, plan_unit
 from tgmirror.engine.strategy import Router, Strategy, router
+from tgmirror.engine.transform import Transform
 
 KINDS = ("clone", "backup", "restore")
 
@@ -29,6 +30,7 @@ class PlanOptions:
     mode: str = "auto"
     caption: CaptionMode = CaptionMode.KEEP
     caption_text: str = ""
+    transform: Transform = Transform()  # phase 19
     topic_hashtag: bool = False  # a forum source into a destination without topics
     by_reference: bool = True  # the source lets content be saved (not ``noforwards``)
     reset_polls: bool = False
@@ -82,9 +84,15 @@ class Preflight:
             options.caption,
             by_reference=options.by_reference,
             topic_hashtag=options.topic_hashtag,
+            transform=options.transform,
         )
         self._send = Options(
-            CaptionPolicy(options.caption, options.caption_text),
+            CaptionPolicy(
+                options.caption,
+                options.caption_text,
+                ops=options.transform.caption,
+                text_too=options.transform.text_too,
+            ),
             options.reset_polls,
             options.ignore_unsupported,
             options.placeholder,

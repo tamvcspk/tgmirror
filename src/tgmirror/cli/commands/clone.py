@@ -39,6 +39,8 @@ from tgmirror.cli.filter_options import (
 )
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
 from tgmirror.cli.selection_options import ExactOption, SelectionOption, check_args, for_channel
+from tgmirror.cli.transform_options import TransformOption
+from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.errors import ForwardsRestricted
 from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
 from tgmirror.engine import preview, selection
@@ -59,6 +61,7 @@ from tgmirror.engine.runs import (
     check_runnable,
 )
 from tgmirror.engine.strategy import may_reupload
+from tgmirror.engine.transform import Transform
 from tgmirror.filters.model import FilterSpec
 from tgmirror.store.db import Store, utc_now
 from tgmirror.ui.messages import t
@@ -112,6 +115,7 @@ def clone(
     caption_text: Annotated[
         str | None, typer.Option("--caption-text", help="Text for --caption append.")
     ] = None,
+    transform_file: TransformOption = None,
     reset_polls: Annotated[
         bool,
         typer.Option(
@@ -294,6 +298,7 @@ def clone(
                 raise UsageProblem("err.conflicting_flags", flags="--no-filter / --selection")
             filters = FilterSpec()
         check_args(selection, exact, filters)
+        transform = await resolve_transform(transform_file)  # a bad file is a usage error too
         options = CloneOptions(
             src=src,
             dst=dst,
@@ -302,6 +307,7 @@ def clone(
             mode=mode,
             caption=caption,
             caption_text=caption_text,
+            transform=transform,
             reset_polls=reset_polls,
             ignore_unsupported=ignore_unsupported,
             placeholder=placeholder,
@@ -322,10 +328,21 @@ def clone(
                 typer.echo(t("channels.empty"))
                 raise typer.Exit(1)
             if selection is not None:
-                chosen, named = await asyncio.to_thread(
-                    for_channel, rt.paths, channels, src=src, selection=selection, exact=exact
+                chosen, named, carried = await asyncio.to_thread(
+                    for_channel,
+                    rt.paths,
+                    channels,
+                    src=src,
+                    selection=selection,
+                    exact=exact,
+                    takes_transform=True,
                 )
-                options = replace(options, filters=chosen, src=named)
+                options = replace(
+                    options,
+                    filters=chosen,
+                    src=named,
+                    transform=await resolve_transform(transform_file, carried),
+                )
             async with opened_store(rt) as store:
                 flow = CloneFlow(rt, store, conn.gateway, channels, options)
                 await run_steps(rt.prompter, flow.steps())
@@ -363,6 +380,7 @@ class CloneOptions:
     mode: str | None = None
     caption: str | None = None
     caption_text: str | None = None
+    transform: Transform = Transform()  # phase 19: --transform, or a selection file's
     reset_polls: bool = False
     ignore_unsupported: bool = False
     placeholder: bool = False
@@ -497,7 +515,7 @@ class CloneFlow:
             and destination.kind is not ChatKind.FORUM
         )
         hashtag = o.topic_as_hashtag is not False and loses_topics
-        return may_reupload(o.mode, o.caption or "keep", hashtag)
+        return may_reupload(o.mode, o.caption or "keep", hashtag, o.transform)
 
     async def _confirm_unadministered(self, source: ChannelInfo) -> bool:
         """No CLI flag to type in an interactive flow (menu or classic wizard): typing the flag's
@@ -518,6 +536,7 @@ class CloneFlow:
             o.mode is not None
             or o.caption is not None
             or o.caption_text is not None
+            or not o.transform.is_empty
             or o.reset_polls
             or o.ignore_unsupported
             or o.placeholder
@@ -546,7 +565,7 @@ class CloneFlow:
             # a forum destination keeps the topics themselves: a hashtag would only make ``auto``
             # send every message again for nothing (``--mode copy`` still refuses the flag below)
             topic_hashtag = topic_hashtag and loses_topics
-        downloads = may_reupload(choice.mode, choice.caption, topic_hashtag)
+        downloads = may_reupload(choice.mode, choice.caption, topic_hashtag, o.transform)
         base = RunRequest(
             mode=choice.mode,
             batch_size=o.batch_size or self._rt.config().limits.batch_size,
@@ -558,6 +577,7 @@ class CloneFlow:
             ignore_unsupported=choice.ignore_unsupported,
             placeholder=choice.placeholder,
             topic_as_hashtag=topic_hashtag,
+            transform_json=o.transform.to_json(),
         )
         check_options(base)  # options that contradict each other: exit 2 before any write
         if plan.protected and not downloads:

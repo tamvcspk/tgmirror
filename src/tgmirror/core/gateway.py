@@ -176,21 +176,96 @@ class CaptionMode(StrEnum):
     NONE = "none"  # send the media without its caption
 
 
+TRANSFORM_REGEX_TIMEOUT = 0.5  # seconds for one ``replace`` search; a transform may be shared
+
+
+@dataclass(frozen=True, slots=True)
+class StripLinks:
+    """``strip_links``: drop what points back at the source (``"source"``, what ``--caption
+    strip-links`` does) or every link (``"all"``); a hyperlink keeps its words."""
+
+    scope: str = "source"  # "source" | "all"
+
+
+@dataclass(frozen=True, slots=True)
+class RemoveHashtags:
+    """``remove_hashtags``: the given hashtags (lower-case, with ``#``), or every hashtag when
+    ``tags`` is empty."""
+
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RemoveMentions:
+    """``remove_mentions``: ``@name`` mentions of the source (``"source"``) or all of them."""
+
+    scope: str = "source"  # "source" | "all"
+
+
+@dataclass(frozen=True, slots=True)
+class Replace:
+    """``replace``: every match of ``pattern`` (the ``regex`` library, a search with a timeout)
+    becomes ``with_``, taken literally."""
+
+    pattern: str
+    with_: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Append:
+    """``append``: ``text`` after the caption (a caption that is empty stays empty)."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Clear:
+    """``clear``: send the media without its caption (``--caption none``)."""
+
+
+CaptionOp = StripLinks | RemoveHashtags | RemoveMentions | Replace | Append | Clear
+
+
+def ops_of_mode(mode: CaptionMode, text: str = "") -> tuple[CaptionOp, ...]:
+    """The ``--caption`` flag as the list of operations it is a shorthand for."""
+    match mode:
+        case CaptionMode.STRIP_LINKS:
+            return (StripLinks("source"), RemoveMentions("source"))
+        case CaptionMode.APPEND:
+            return (Append(text),)
+        case CaptionMode.NONE:
+            return (Clear(),)
+        case _:
+            return ()
+
+
 @dataclass(frozen=True, slots=True)
 class CaptionPolicy:
-    """How captions are rewritten while re-sending. ``mode``/``text`` only ever touch captions of
-    media messages: the text of a message that has no media is the content itself and is always
-    sent as it is.
+    """How captions are rewritten while re-sending: ``mode``/``text`` (the ``--caption``
+    shorthand) first, then ``ops`` (a transform's ``caption`` list, in order). They only ever
+    touch captions of media messages — the text of a message that has no media is the content
+    itself and is sent as it is — unless ``text_too`` says the transform wants that text
+    rewritten as well.
 
     ``hashtag`` (phase 8, ``RunOptions.topic_as_hashtag``) is different: it is appended last,
-    after whatever ``mode`` produced, to *any* text that ends up being sent (media caption or
-    plain text alike) — except self-contained media (poll, location, contact, geo, dice) which
-    have no caption slot to append to at all.
+    after whatever the operations produced, to *any* text that ends up being sent (media caption
+    or plain text alike) — except self-contained media (poll, location, contact, geo, dice)
+    which have no caption slot to append to at all.
     """
 
     mode: CaptionMode = CaptionMode.KEEP
     text: str = ""  # what ``APPEND`` adds
     hashtag: str | None = None  # e.g. "#general", appended last regardless of ``mode``
+    ops: tuple[CaptionOp, ...] = ()  # phase 19: the transform's caption operations
+    text_too: bool = False  # phase 19: rewrite the text of a plain text message as well
+
+    @property
+    def all_ops(self) -> tuple[CaptionOp, ...]:
+        return ops_of_mode(self.mode, self.text) + self.ops
+
+    @property
+    def rewrites(self) -> bool:
+        return bool(self.all_ops)
 
 
 @dataclass(frozen=True, slots=True)

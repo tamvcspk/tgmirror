@@ -279,6 +279,15 @@ VI: dict[str, str] = {
     "err.opt_reupload_flags_need_reupload": (
         "--reset-polls, --ignore-unsupported và --placeholder chỉ có nghĩa với --mode reupload."
     ),
+    "err.opt_caption_and_transform": (
+        "--caption là cú pháp tắt của danh sách thao tác caption: dùng nó hoặc --transform "
+        "(thêm thao tác vào file transform thay vì ghép hai cách), không dùng cả hai."
+    ),
+    "err.opt_transform_needs_reupload": (
+        "Transform đổi caption nên phải gửi lại tin, forward không làm được: dùng --mode auto "
+        "(chỉ tin cần sửa đi đường đó) hoặc --mode reupload, không dùng --mode copy."
+    ),
+    "err.transform": "Transform không hợp lệ: {detail}",
     "err.opt_topic_hashtag_needs_rewrite": (
         "--topic-as-hashtag cần gửi lại tin (forward không thêm được hashtag): dùng --mode auto "
         "hoặc --mode reupload, không dùng --mode copy."
@@ -385,6 +394,10 @@ VI: dict[str, str] = {
     "filter.ask_max_size": "Dung lượng tối đa, ví dụ 2GB (để trống = không giới hạn)",
     "filter.ask_topics": "Chỉ lấy các topic sau (phím cách để chọn; không chọn gì = tất cả)",
     "filter.ask_file": "Đường dẫn file YAML",
+    "filter.file_has_transform": (
+        "File {path} mang một transform; bước này chỉ nạp filter. Dùng "
+        "`--selection {path}` để áp cả transform."
+    ),
     "clone.preview": (
         "Xem trước: {matched} trong {scanned} tin đầu tiên của khoảng đã chọn sẽ được sao chép."
     ),
@@ -672,6 +685,10 @@ VI: dict[str, str] = {
     "selection.source_mismatch": (
         "File selection này là của nguồn {theirs}, không phải nguồn của lệnh này: id tin nhắn "
         "chỉ có nghĩa trong đúng nguồn của nó."
+    ),
+    "selection.no_transform": (
+        "File selection {path} mang một transform, nhưng lệnh này không áp transform "
+        "(chỉ clone và restore có): bỏ phần transform khỏi file hoặc dùng lệnh khác."
     ),
     "inspect.saved": "Đã lưu selection vào {path}.",
     "inspect.saved_ids": "Đã lưu selection vào {path} cùng danh sách {count} id ({ids}).",
@@ -989,6 +1006,16 @@ EN: dict[str, str] = {
         "--reset-polls, --ignore-unsupported and --placeholder only mean something with "
         "--mode reupload."
     ),
+    "err.opt_caption_and_transform": (
+        "--caption is a shorthand for the caption operations: use it or --transform (put the "
+        "operation in the transform file instead of mixing the two), not both."
+    ),
+    "err.opt_transform_needs_reupload": (
+        "A transform changes captions, so the messages must be sent again, which a forward "
+        "cannot do: use --mode auto (only the messages that need it take that road) or "
+        "--mode reupload, not copy."
+    ),
+    "err.transform": "Invalid transform: {detail}",
     "err.opt_topic_hashtag_needs_rewrite": (
         "--topic-as-hashtag needs messages sent again (a forward cannot add a hashtag): use "
         "--mode auto or --mode reupload, not --mode copy."
@@ -1098,6 +1125,10 @@ EN: dict[str, str] = {
     "filter.ask_max_size": "Maximum size, e.g. 2GB (empty = no limit)",
     "filter.ask_topics": "Only these topics (space to select; none selected = all)",
     "filter.ask_file": "Path of the YAML file",
+    "filter.file_has_transform": (
+        "{path} carries a transform; this step only loads the filter. Use "
+        "`--selection {path}` to apply the transform too."
+    ),
     "clone.preview": (
         "Preview: {matched} of the first {scanned} messages in the chosen range would be copied."
     ),
@@ -1394,6 +1425,10 @@ EN: dict[str, str] = {
     "selection.source_mismatch": (
         "This selection file is for source {theirs}, not this command's source: message ids only "
         "mean something in their own source."
+    ),
+    "selection.no_transform": (
+        "The selection file {path} carries a transform, but this command does not apply one "
+        "(only clone and restore do): remove its transform section or use another command."
     ),
     "inspect.saved": "Selection saved to {path}.",
     "inspect.saved_ids": "Selection saved to {path} with a list of {count} ids ({ids}).",

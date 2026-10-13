@@ -16,6 +16,7 @@ from tgmirror.core.gateway import CaptionMode, ChannelInfo, TelegramGateway
 from tgmirror.engine import backupdir
 from tgmirror.engine.endpoints import SourceRestricted
 from tgmirror.engine.strategy import MODES, may_reupload
+from tgmirror.engine.transform import Transform
 from tgmirror.store.db import Clock, Store, utc_now
 from tgmirror.store.runs import Run, RunOptions, RunSpec, RunStatus, StartedRun
 
@@ -115,6 +116,8 @@ class RunRequest:
     # Phase 8: keep a forum's topic as a hashtag when the destination cannot hold topics; a forward
     # cannot carry it, so ``--mode copy`` refuses it and ``auto`` sends such units again.
     topic_as_hashtag: bool = False
+    # Phase 19: the canonical form of a ``Transform`` (``Transform.to_json()``, ``""`` = none).
+    transform_json: str = ""
     # Phase 11b (``tgmirror restore``): the backup directory this run reads from instead of a live
     # source, e.g. ``begin_run`` reads its ``backup.json`` instead of asking the gateway.
     from_backup: str | None = None
@@ -138,6 +141,12 @@ def check_options(request: RunRequest) -> None:
         raise InvalidOptions("reupload_flags_need_reupload")
     if request.topic_as_hashtag and request.mode == "copy":
         raise InvalidOptions("topic_hashtag_needs_rewrite")
+    transform = Transform.from_json(request.transform_json)  # TransformError: exit code 2
+    if not transform.is_empty:
+        if request.caption != CaptionMode.KEEP:
+            raise InvalidOptions("caption_and_transform")
+        if request.mode == "copy":
+            raise InvalidOptions("transform_needs_reupload")
 
 
 async def begin_run(
@@ -166,7 +175,12 @@ async def begin_run(
         if manifest.src_id != src.id:
             raise WrongBackupSource(Path(request.from_backup), src.id, manifest.src_id)
     protected = False
-    if may_reupload(request.mode, request.caption, request.topic_as_hashtag):
+    if may_reupload(
+        request.mode,
+        request.caption,
+        request.topic_as_hashtag,
+        Transform.from_json(request.transform_json),
+    ):
         protected = (
             check_source_from_backup(manifest, request)
             if manifest is not None
@@ -203,6 +217,7 @@ async def begin_run(
             placeholder=request.placeholder,
             protected_ack=request.protected_ack,
             topic_as_hashtag=request.topic_as_hashtag,
+            transform_json=request.transform_json,
             src_last_id=head,
             src_protected=protected,
             retry_of=request.retry_of,

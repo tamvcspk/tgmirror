@@ -47,6 +47,8 @@ from tgmirror.cli.filter_options import (
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.refs import SOURCE_HELP
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.cli.transform_options import TransformOption
+from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.config import Limits
 from tgmirror.core.errors import FloodWait
 from tgmirror.core.gateway import CaptionMode, ChatKind, MessageReader, Unit
@@ -60,6 +62,7 @@ from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted
 from tgmirror.engine.preflight import KINDS, PlanOptions, Preflight, plan_to_dict
 from tgmirror.engine.runner import RunControl
 from tgmirror.engine.runs import RunRequest, check_options
+from tgmirror.engine.transform import Transform
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 from tgmirror.ui.messages import t
@@ -210,6 +213,7 @@ def inspect_command(
     caption_text: Annotated[
         str | None, typer.Option("--caption-text", help="Text for --caption append.")
     ] = None,
+    transform_file: TransformOption = None,
     reset_polls: Annotated[
         bool, typer.Option("--reset-polls", help="With --plan: polls are re-created.")
     ] = False,
@@ -264,6 +268,7 @@ def inspect_command(
             has_link=has_link,
             link_domain=link_domain,
         )  # a bad filter is a usage error before anything is read
+        transform = await resolve_transform(transform_file)  # a bad file: usage error, nothing read
         tables = _validated_by(by)
         if freeze and save is None:
             raise UsageProblem("inspect.freeze_needs_save")
@@ -275,6 +280,7 @@ def inspect_command(
             mode=mode,
             caption=caption,
             caption_text=caption_text,
+            transform=transform,
             reset_polls=reset_polls,
             ignore_unsupported=ignore_unsupported,
             placeholder=placeholder,
@@ -359,6 +365,7 @@ def _plan_options(
     mode: str | None,
     caption: str | None,
     caption_text: str | None,
+    transform: Transform,
     reset_polls: bool,
     ignore_unsupported: bool,
     placeholder: bool,
@@ -370,6 +377,7 @@ def _plan_options(
         mode is not None
         or caption is not None
         or caption_text is not None
+        or not transform.is_empty
         or reset_polls
         or ignore_unsupported
         or placeholder
@@ -392,6 +400,7 @@ def _plan_options(
         mode="reupload" if plan == "restore" else (mode or "auto"),
         caption=caption or "keep",
         caption_text=caption_text or "",
+        transform_json=transform.to_json(),
         reset_polls=reset_polls,
         ignore_unsupported=ignore_unsupported,
         placeholder=placeholder,
@@ -403,6 +412,7 @@ def _plan_options(
         mode=request.mode,
         caption=CaptionMode(request.caption),
         caption_text=request.caption_text,
+        transform=transform,
         topic_hashtag=topic_as_hashtag,
         reset_polls=reset_polls,
         ignore_unsupported=ignore_unsupported,
@@ -585,7 +595,8 @@ def _write_selections(
     lines: list[str] = []
     if job.save is not None:
         snapshot = everything if job.freeze else None
-        selection.dump(selection.Selection(spec, origin, snapshot), job.save, now=now)
+        carried = job.plan.transform if job.plan is not None else Transform()
+        selection.dump(selection.Selection(spec, origin, snapshot, carried), job.save, now=now)
         if snapshot is not None and ids:
             lines.append(
                 t(

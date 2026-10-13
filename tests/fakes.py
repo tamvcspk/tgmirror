@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import keyring.backend
+import regex
 
 from tgmirror.core.auth import AccountInfo
 from tgmirror.core.errors import (
@@ -30,17 +31,22 @@ from tgmirror.core.gateway import (
     ALBUM_MARGIN,
     MAX_IDS_PER_CALL,
     NO_FILTER,
-    CaptionMode,
+    Append,
     CaptionPolicy,
     ChannelInfo,
     ChatKind,
+    Clear,
     ExportedMedia,
     ExportedMessage,
     MediaKind,
     OnTransfer,
     Prepared,
+    RemoveHashtags,
+    RemoveMentions,
+    Replace,
     ServerFilter,
     SrcMessage,
+    StripLinks,
     TopicInfo,
     TransferPhase,
     Unit,
@@ -590,20 +596,41 @@ def _rewrite(msg: SrcMessage, policy: CaptionPolicy) -> str:
     text/webpage) but never to self-contained media, which has none."""
     if msg.media in _SELF_CONTAINED:
         return msg.text
-    if msg.media in _NO_FILE:  # plain text/webpage: the mode never touches it, the hashtag still
-        text = msg.text
+    if msg.media in _NO_FILE and not (policy.text_too and policy.rewrites):
+        text = msg.text  # plain text/webpage: the operations never touch it, the hashtag still
     else:
-        match policy.mode:
-            case CaptionMode.NONE:
-                text = ""
-            case CaptionMode.APPEND:
-                text = f"{msg.text}\n\n{policy.text}" if msg.text else msg.text
-            case CaptionMode.STRIP_LINKS:
-                text = " ".join(w for w in msg.text.split(" ") if "t.me/" not in w)
-            case _:
-                text = msg.text
+        text = _apply_ops(msg.text, policy)
     if policy.hashtag:
         text = f"{text}\n{policy.hashtag}" if text else policy.hashtag
+    return text
+
+
+def _apply_ops(text: str, policy: CaptionPolicy) -> str:
+    """``policy``'s operations on plain text: the same operations the real gateway applies to text
+    and entities (``rewrite_caption``), here on whitespace-separated words, which is all the
+    runner-level tests need (the real thing is tested with entities in ``test_transform.py``)."""
+    for op in policy.all_ops:
+        match op:
+            case Clear():
+                text = ""
+            case Append():
+                text = f"{text}\n\n{op.text}" if text else text
+            case StripLinks():
+                text = " ".join(
+                    w
+                    for w in text.split(" ")
+                    if not ("t.me/" in w or (op.scope == "all" and "://" in w))
+                )
+            case RemoveMentions():
+                text = " ".join(w for w in text.split(" ") if not w.startswith("@"))
+            case RemoveHashtags():
+                text = " ".join(
+                    w
+                    for w in text.split(" ")
+                    if not (w.startswith("#") and (not op.tags or w.casefold() in op.tags))
+                )
+            case Replace():
+                text = regex.sub(op.pattern, op.with_, text)
     return text
 
 

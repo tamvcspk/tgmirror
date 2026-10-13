@@ -23,6 +23,7 @@ from tgmirror.core.gateway import ChannelInfo
 from tgmirror.core.paths import Paths
 from tgmirror.engine import selection as sel
 from tgmirror.engine.endpoints import find_channel
+from tgmirror.engine.transform import Transform
 from tgmirror.filters.model import FilterSpec
 
 PANEL = "Filters"
@@ -58,6 +59,16 @@ def check_args(selection: str | None, exact: bool, filters: FilterSpec | None) -
         raise UsageProblem("err.conflicting_flags", flags="--selection / filter flags")
 
 
+def _transform_of(loaded: sel.Selection, takes_transform: bool, path: Path) -> Transform:
+    """The transform a selection file carries, refused where the command cannot apply one
+    (a file must not be half-used)."""
+    if loaded.transform.is_empty:
+        return loaded.transform
+    if not takes_transform:
+        raise UsageProblem("selection.no_transform", path=str(path))
+    return loaded.transform
+
+
 def _describe(source: sel.SelectionSource) -> str:
     if source.backup:
         return source.backup
@@ -71,9 +82,11 @@ def for_channel(
     src: str | None,
     selection: str,
     exact: bool,
-) -> tuple[FilterSpec, str | None]:
-    """The filter to use for a command that reads a channel, and the source to use when the command
-    was not given one. Reads files, so callers run it in a thread."""
+    takes_transform: bool = False,
+) -> tuple[FilterSpec, str | None, Transform]:
+    """The filter to use for a command that reads a channel, the source to use when the command
+    was not given one, and the transform the file carries (empty when it has none; refused when
+    the command does not ``takes_transform``). Reads files, so callers run it in a thread."""
     if selection == sel.LAST:
         if src is None:
             raise UsageProblem("selection.last_needs_src")
@@ -93,12 +106,19 @@ def for_channel(
             if channel.id != origin.id:
                 raise UsageProblem("selection.source_mismatch", theirs=_describe(origin))
             src = src if src is not None else str(origin.id)
-    return (sel.exact(loaded, path=path) if exact else loaded.filters), src
+    chosen = sel.exact(loaded, path=path) if exact else loaded.filters
+    return chosen, src, _transform_of(loaded, takes_transform, path)
 
 
 def for_backup(
-    paths: Paths, directory: Path | None, *, src_id: int | None, selection: str, exact: bool
-) -> tuple[FilterSpec, Path | None]:
+    paths: Paths,
+    directory: Path | None,
+    *,
+    src_id: int | None,
+    selection: str,
+    exact: bool,
+    takes_transform: bool = False,
+) -> tuple[FilterSpec, Path | None, Transform]:
     """As ``for_channel`` for ``restore``, whose source is a backup directory (``src_id`` is the
     original channel's id, what ``@last`` is keyed by)."""
     if selection == sel.LAST:
@@ -121,4 +141,5 @@ def for_backup(
         elif origin is not None and origin.id is not None and src_id is not None:
             if origin.id != src_id:
                 raise UsageProblem("selection.source_mismatch", theirs=_describe(origin))
-    return (sel.exact(loaded, path=path) if exact else loaded.filters), directory
+    chosen = sel.exact(loaded, path=path) if exact else loaded.filters
+    return chosen, directory, _transform_of(loaded, takes_transform, path)

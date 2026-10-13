@@ -33,6 +33,7 @@ from typing import Any
 
 import yaml
 
+from tgmirror.engine.transform import Transform, TransformError
 from tgmirror.filters.model import FilterError, FilterSpec
 from tgmirror.filters.parser import FlagFilters, from_flags
 
@@ -73,6 +74,7 @@ class Selection:
     filters: FilterSpec
     source: SelectionSource | None = None
     snapshot: Snapshot | None = None
+    transform: Transform = Transform()  # phase 19: what the commands that take one also apply
 
 
 def last_path(selections_dir: Path, src_id: int) -> Path:
@@ -119,6 +121,8 @@ def _to_data(selection: Selection, *, ids_file: str | None) -> dict[str, Any]:
             src["backup"] = selection.source.backup
         data["source"] = src
     data["filter"] = yaml.safe_load(selection.filters.to_json()) or {}
+    if not selection.transform.is_empty:
+        data["transform"] = selection.transform.to_data()
     if (snap := selection.snapshot) is not None:
         data["snapshot"] = {
             "taken_at": snap.taken_at.astimezone(UTC).isoformat(timespec="seconds"),
@@ -180,8 +184,10 @@ def load(path: Path, *, with_ids: bool = False) -> Selection:
     """A selection file, or a plain filter file read as a selection with no source/snapshot.
 
     ``with_ids`` also reads the snapshot's ids (they can be many, and only ``--exact`` needs them).
-    Anything this version does not understand is refused (``version`` newer, a ``transform`` —
-    phase 19 — or an unknown key): a file must not be half-used.
+    Anything this version does not understand is refused (``version`` newer, a part of a
+    transform it does not have yet, or an unknown key): a file must not be half-used. A
+    ``transform`` is read here; whether the command taking the file can apply one is that
+    command's to say (``cli/selection_options.py``).
     """
     data = _read_mapping(path)
     if not is_selection_file(data):
@@ -195,14 +201,19 @@ def load(path: Path, *, with_ids: bool = False) -> Selection:
     version = data.get("version", FORMAT_VERSION)
     if version != FORMAT_VERSION:
         raise SelectionError(f"{path}: selection format {version!r} is not supported")
-    if "transform" in data:
-        raise SelectionError(f"{path}: this command does not take a transform")
     try:
         filters = FilterSpec.from_data(data.get("filter"))
     except FilterError as exc:
         raise SelectionError(f"{path}: filter: {exc.detail}") from None
+    try:
+        transform = Transform.from_data(data.get("transform"))
+    except TransformError as exc:
+        raise SelectionError(f"{path}: transform: {exc.detail}") from None
     return Selection(
-        filters, _source_of(path, data.get("source")), _snapshot_of(path, data, with_ids)
+        filters,
+        _source_of(path, data.get("source")),
+        _snapshot_of(path, data, with_ids),
+        transform,
     )
 
 

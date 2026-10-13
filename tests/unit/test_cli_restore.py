@@ -323,3 +323,28 @@ def test_restore_fresh_sends_everything_again(
 
     assert result.exit_code == 0, result.output
     assert [m.text for m in gateway.messages[dst.id]] == ["m1", "m2", "m1", "m2"]
+
+
+def test_restore_applies_a_transform_to_the_backup_it_reads(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    out = tmp_path / "out"
+    src = gateway.add_channel("Source")
+    gateway.add_message(src.id, "news #ads and #keep")
+    rt = make_runtime(gateway=gateway)
+    assert cli.invoke(app, ["backup", "Source", str(out)], obj=rt).exit_code == 0
+    dst = gateway.add_channel("Dest")
+    plan = tmp_path / "t.yaml"
+    plan.write_text(
+        'caption:\n  - remove_hashtags: ["#ads"]\n  - append: "via B"\n  - text_too: true\n',
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(
+        app,
+        ["restore", str(out), "--dst", "Dest", "--yes", "--transform", str(plan)],
+        obj=make_runtime(gateway=gateway),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [m.text for m in gateway.messages[dst.id]] == ["news and #keep\n\nvia B"]

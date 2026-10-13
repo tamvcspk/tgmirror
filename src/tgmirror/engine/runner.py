@@ -79,6 +79,7 @@ from tgmirror.engine.runs import DAILY_CAP
 from tgmirror.engine.strategy import Strategy, may_reupload, router
 from tgmirror.engine.topics import TopicResolver, TopicRoute
 from tgmirror.engine.transfer import Transfer, TransferTracker
+from tgmirror.engine.transform import Transform
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 from tgmirror.filters.pushdown import plan_read
@@ -350,6 +351,7 @@ class Runner:
                         caption,
                         by_reference=not run.options.src_protected,
                         topic_hashtag=_topic_hashtag(run),
+                        transform=Transform.from_json(run.options.transform_json),
                     ),
                 )
             ) as stream,
@@ -374,7 +376,8 @@ class Runner:
         """
         self._pipeline = None
         caption = CaptionMode(run.options.caption)
-        if not may_reupload(run.mode, caption, _topic_hashtag(run)):
+        transform = Transform.from_json(run.options.transform_json)
+        if not may_reupload(run.mode, caption, _topic_hashtag(run), transform):
             async for batch in stream:
                 yield Ready(await self._without_done(run.id, batch))
             return

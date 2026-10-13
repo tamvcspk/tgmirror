@@ -70,6 +70,9 @@ class RunOptions:
     # Phase 8: the source is a forum but the destination cannot hold topics, and the run's mode
     # can rewrite text — append a hashtag for the topic instead of dropping it silently.
     topic_as_hashtag: bool = False
+    # Phase 19: the canonical ``engine.transform.Transform`` (``""`` = none), applied on top of
+    # ``caption``/``caption_text``; remembered with the pair like the filter.
+    transform_json: str = ""
     # The user said they may copy a source that restricts saving content (decision D3); ``run`` and
     # ``retry`` carry it on, so they do not ask again.
     protected_ack: bool = False
@@ -104,6 +107,7 @@ class RunOptions:
             placeholder=self.placeholder,
             protected_ack=self.protected_ack,
             topic_as_hashtag=self.topic_as_hashtag,
+            transform_json=self.transform_json,
         )
 
     def to_json(self) -> str:

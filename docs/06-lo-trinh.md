@@ -28,10 +28,10 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 - [x] Phase 15b — Hardening toàn dự án (Đợt 1–3 xong 2026-09-27; **Đợt 4 xong 2026-10-12**, người dùng xác nhận phần thử thật). Xem "Phase 15b"
 - [x] Phase 16 — Phát hành 0.1.1 chính thức (2026-09-28): GitHub Release + `SHA256SUMS`, Docker Hub `0.1.1`/`latest`, PyPI — kiểm lại trực tiếp 2026-10-12
 
-**0.2.0 — Inspect & Transform (đã duyệt hướng 2026-10-12; Phase 18a xong code 2026-10-12, 19 và 18b chưa bắt đầu; chi tiết `07-inspect-transform.md`)**
+**0.2.0 — Inspect & Transform (đã duyệt hướng 2026-10-12; Phase 18a xong code 2026-10-12, Phase 19 đang làm theo lát cắt, 19a xong code 2026-10-13, 18b chưa bắt đầu; chi tiết `07-inspect-transform.md`)**
 
 - [x] Phase 18a — `tgmirror inspect`, metadata/predicate mới, pre-flight, file selection, `--selection` (2026-10-12; đã thử trên Telegram thật phần lớn, còn vài mục nhỏ ở spike 14, xem "Phase 18a — ghi chú")
-- [ ] Phase 19 — Transform khi sao chép (caption, hashtag ↔ topic, `topic_map`, reply, link nội bộ)
+- [ ] Phase 19 — Transform khi sao chép (caption, hashtag ↔ topic, `topic_map`, reply, link nội bộ). **Làm theo ba lát cắt** (2026-10-13, xem "Phase 19 — ghi chú"): **19a xong code 2026-10-13** (chuỗi thao tác caption, `--transform`, `transform:` trong selection, nhớ theo cặp, pre-flight; **người dùng đã thử trên kênh thật 2026-10-13, mọi bước pass**); 19b (hashtag → topic, `topic_map`) và 19c (giữ reply, `forward_header`, link nội bộ) chưa bắt đầu
 - [ ] Phase 18b — Chỉ mục metadata cục bộ, `inspect --quick`, màn hình "Khám phá"
 
 **0.3.0 — Thao tác tại chỗ (D10)**
@@ -904,6 +904,34 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 - Hành vi đã xác nhận (người dùng, 2026-10-12): `reply_to_id` trong forum, `fwd_from` (cột `forwarded_from`), `file_key` qua forward (`--by duplicate`), tổng `reactions`, thời gian quét 13.000 tin; `file_name`: **ảnh không có tên file, GIF và sticker có** (nên `filename: "*.jpg"` không bao giờ khớp ảnh).
 
 **Test mới** (1992 pass, 3 skip lúc ghi): `test_links.py`, `test_filter_metadata.py`, `test_inspect.py`, `test_preflight.py`, `test_selection.py`, `test_cli_inspect.py` (có "plan khớp lần clone thật" và "clone `@last` sao chép đúng số tin inspect đã báo", tức tiêu chí hoàn thành của 18a trên `FakeGateway`), bổ sung vào `test_telethon_messages.py`, `test_backupdir.py`, `test_backup_reader.py`, `test_architecture.py` và `tests/integration/test_pushdown_equivalence.py` (predicate mới + `message_ids` cùng predicate đẩy xuống được).
+
+### Phase 19 — ghi chú (bắt đầu 2026-10-13; lát 19a xong code và đã thử trên Telegram thật cùng ngày)
+
+**Chia lát cắt** (như 11a/11b, 18a/18b; không đổi D1–D10): `07` mục 5 gồm sáu việc độc lập nhau về đường code, nên làm theo thứ tự phụ thuộc, mỗi lát cắt là một lần commit chạy được:
+
+- **19a — mô hình Transform + thao tác caption** (xong code): nền mà hai lát sau cùng dùng (`engine/transform.py`, `RunOptions.transform_json`, `--transform`, selection mang `transform:`). Không thêm hành vi Telegram mới ngoài viết lại caption phong phú hơn.
+- **19b — định tuyến** (chưa làm): hashtag → topic (`auto`/`map`/`strip`), `topic_map`, chọn định dạng hashtag của topic → hashtag. Đây là tiêu chí hoàn thành của cả Phase 19 ("clone kênh thường sang forum: đúng topic, đúng thứ tự trong từng topic").
+- **19c — tham chiếu** (chưa làm): giữ reply qua `msg_map`, `forward_header: keep` (`drop_author=False`), link nội bộ lùi. Cần spike 5 (mục 9 của `07`).
+
+**Đã làm ở 19a**:
+
+- `core/gateway.py`: `StripLinks`/`RemoveHashtags`/`RemoveMentions`/`Replace`/`Append`/`Clear`, `ops_of_mode` (cờ `--caption` → danh sách), `CaptionPolicy.ops`/`text_too`/`all_ops`/`rewrites`.
+- `core/telethon_gateway.py`: `rewrite_caption` chạy từng thao tác theo thứ tự; `_apply_edits` thay `strip_source_links` làm nơi duy nhất dịch entity (hàm cũ giữ tên, cùng kết quả: các test cũ không đổi); `_plain_text` cho `text_too` ở cả đường gửi sống và đường restore từ backup.
+- `engine/transform.py` (pure), `cli/transform_options.py` (`--transform` dùng chung `clone`/`restore`/`inspect --plan`), `engine/selection.py` đọc/ghi `transform:`, `engine/strategy.py` (`router`/`may_reupload` nhận `transform=`), `engine/runs.py` (`RunRequest.transform_json`, ba luật loại trừ trong `check_options`), `engine/preflight.py`, `run`/`retry` mang theo `transform_json` của cặp.
+- Test mới: `test_transform.py` (model, 16 ca từ chối, từng thao tác với entity UTF-16), `integration/test_runner_transform.py` (đường đi theo unit, `text_too`, D3, nhớ theo cặp), `test_cli_transform.py` (clone, `run`, selection, `backup` từ chối, pre-flight), một ca restore trong `test_cli_restore.py`; `tests/fakes.py` áp các thao tác lên chữ thuần (xấp xỉ theo từ, đủ cho test tầng runner; bản thật được test với entity ở `test_transform.py`).
+
+**Khác với đề xuất ở `07` mục 5.2** (không đụng D1–D10):
+
+1. **`clear: true` thay cho `--caption none`** trong danh sách (07 không đặt tên thao tác này); `text_too` giữ đúng vị trí là một mục của danh sách như 07 đề xuất, nhưng chỉ được một lần và không phải thao tác (`Transform.text_too`).
+2. **`strip_links: source` không tự bỏ `@nguồn`**: `--caption strip-links` là `strip_links: source` **cộng** `remove_mentions: source` (`ops_of_mode`); đúng hành vi cũ, mỗi thao tác đơn lẻ làm một việc.
+3. **`replace.with` là chữ nguyên văn**, không có tham chiếu nhóm (`\1`): 07 không nói, và một mẫu thay có nhóm sai chỉ lộ lúc chạy.
+4. **Chỉ `remove_hashtags` dọn khoảng trắng** quanh chỗ bị cắt (`"a #b c"` → `"a c"`); `strip_links`/`remove_mentions` giữ hành vi cũ của `--caption strip-links` (`"a  b"` hai dấu cách), vì test và tài liệu hiện có đã ghi như vậy.
+5. **Không ghép `--caption` với `--transform`** (hai cách viết cùng một danh sách theo thứ tự không ai viết ra là một sự đoán): lỗi mã 2.
+6. **Router không biết thao tác có đổi gì không**: unit có caption đi đường gửi lại dù không thao tác nào khớp (cùng cách `--caption append` hôm nay). Pre-flight đếm đúng như vậy.
+7. **Không có bước wizard cho transform**: chỉ qua `--transform` / `transform:` trong selection (luật 7 đủ: cờ là tập cha của wizard). Wizard "nạp từ file" từ chối file selection mang transform và chỉ sang `--selection`, thay vì dùng filter mà âm thầm bỏ transform.
+8. **Chưa làm** (còn lại của 07 mục 5.4 cho lát này): cảnh báo "đổi transform giữa chừng, tin đã chép không bị sửa lại" khi clone lại một cặp có transform khác — hiện chỉ ghi trong `02-cli-ux.md`; `scripts/mutation_check.py` chưa có mẫu cho cơ chế mới (người dùng chạy tay, mục nhớ về lệnh dev trên máy này).
+
+**Kiểm trên Telegram thật (người dùng, 2026-10-13)**: đã chạy theo kịch bản gồm pre-flight `inspect --plan --transform`, `clone --transform` sang kênh mới (hashtag, `replace`, `append`, định dạng quanh vùng bị đổi, album), `text_too`, nguồn `noforwards` với lời tuyên bố D3, `restore --transform` từ backup thật và `run` dùng lại transform đã nhớ — **toàn bộ pass**, không có sai lệch nào cần sửa. (Người dùng báo kết quả chung, không ghi từng bước; chưa ghi số liệu riêng.)
 
 ### Đã chốt (người dùng duyệt 2026-09-25)
 

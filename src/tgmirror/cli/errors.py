@@ -64,6 +64,7 @@ from tgmirror.engine.runs import (
     RunWaiting,
     WrongBackupSource,
 )
+from tgmirror.engine.transform import TransformError
 from tgmirror.filters.model import FilterError
 from tgmirror.filters.parser import FilterMix
 from tgmirror.ui.messages import t
@@ -152,6 +153,8 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.run_busy", id=exc.run_id)
         case FilterMix():
             return t("err.filter_mix")
+        case TransformError():
+            return t("err.transform", detail=exc.detail)
         case FilterError():
             return t("err.filter", detail=exc.detail)
         case SchemaTooNew():

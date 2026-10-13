@@ -179,7 +179,7 @@ def backup(
                 typer.echo(t("channels.empty"))
                 raise typer.Exit(1)
             if selection is not None:
-                chosen, named = await asyncio.to_thread(
+                chosen, named, _ = await asyncio.to_thread(
                     for_channel, rt.paths, channels, src=src, selection=selection, exact=exact
                 )
                 options = replace(options, filters=chosen, src=named)

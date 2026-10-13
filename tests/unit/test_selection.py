@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from tgmirror.engine import selection as sel
+from tgmirror.engine.transform import Transform
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 from tgmirror.filters.parser import FilterError, from_file
@@ -90,7 +91,8 @@ def test_filter_file_still_refuses_a_selection_file(tmp_path: Path) -> None:
     ("text", "why"),
     [
         ("version: 2\nfilter: {}\n", "not supported"),
-        ("version: 1\nfilter: {}\ntransform: {}\n", "does not take a transform"),
+        ("version: 1\nfilter: {}\ntransform: {topics: {}}\n", "transform: topics"),
+        ("version: 1\nfilter: {}\ntransform: {caption: [{clear: no}]}\n", "transform: caption"),
         ("version: 1\nfilter: {}\nextra: 1\n", "not a selection key"),
         ("version: 1\nfilter: {include: [{media: [vidoe]}]}\n", "filter:"),
         ("version: 1\nsource: {nope: 1}\nfilter: {}\n", "source takes"),
@@ -106,6 +108,21 @@ def test_what_this_version_does_not_understand_is_refused(
 
     with pytest.raises(sel.SelectionError, match=why):
         sel.load(path)
+
+
+def test_a_transform_travels_with_the_selection(tmp_path: Path) -> None:
+    path = tmp_path / "s.yaml"
+    transform = Transform.from_data({"caption": [{"remove_hashtags": ["#ads"]}, {"append": "x"}]})
+    sel.dump(sel.Selection(spec({}), None, None, transform), path)
+
+    loaded = sel.load(path)
+
+    assert loaded.transform == transform
+    assert "transform:" in path.read_text(encoding="utf-8")
+    plain = tmp_path / "plain.yaml"
+    sel.dump(sel.Selection(spec({})), plain)
+    assert "transform" not in plain.read_text(encoding="utf-8")
+    assert sel.load(plain).transform.is_empty
 
 
 def test_exact_takes_exactly_the_frozen_messages(tmp_path: Path) -> None:
