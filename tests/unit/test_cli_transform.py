@@ -293,6 +293,178 @@ def test_the_flag_fills_in_around_the_names_a_file_gives(
     assert {t.title for t in gateway.topics[sorted_id]} == {"Snake", "Rust"}
 
 
+def dst_topics(gateway: FakeGateway, title: str) -> dict[str, int]:
+    channel = next(c.id for c in gateway.channels.values() if c.title == title)
+    return {t.title: t.id for t in gateway.topics[channel]}
+
+
+def test_default_and_strip_flags_need_no_file(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    """``--topic-default`` and ``--strip-routing-hashtag`` finish what ``--hashtag-to-topic``
+    starts: the flag-only line is enough to route, name the leftovers and clean the caption."""
+    src, _ = tagged(gateway)
+    gateway.add_message(
+        src, "clip #python #keep", media=MediaKind.VIDEO, hashtags=("#python", "#keep")
+    )  # 4
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Source", "--dst-new", "Sorted", "--yes", "--hashtag-to-topic"]
+        + ["--topic-default", "Misc", "--strip-routing-hashtag"],
+        obj=rt,
+    )  # fmt: skip
+
+    assert result.exit_code == 0, result.output
+    topics = dst_topics(gateway, "Sorted")
+    sorted_id = next(c.id for c in gateway.channels.values() if c.title == "Sorted")
+    landed = {m.text: m.topic_id for m in gateway.messages[sorted_id]}
+    assert landed == {
+        "py #python": topics["Python"],  # plain text: forwarded as it is, strip is for captions
+        "rs #rust": topics["Rust"],
+        "other": topics["Misc"],  # no hashtag, in no source topic: the default
+        "clip #keep": topics["Python"],  # sent again with the routing hashtag taken out
+    }
+    (run,) = saved_runs(rt)
+    rules = Transform.from_json(run.options.transform_json).topics
+    assert rules.default == "Misc" and rules.strip and rules.auto_all  # run remembers all three
+
+
+def test_topic_map_flags_rename_source_topics_by_title_or_id(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    forum = gateway.add_channel("Forum", kind=ChatKind.FORUM).id
+    chat = gateway.add_topic(forum, "Chat cu")
+    news = gateway.add_topic(forum, "News")
+    kept = gateway.add_topic(forum, "Keep me")
+    for topic in (chat, news, kept):
+        gateway.add_message(forum, f"in {topic.title}", topic_id=topic.id)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Forum", "--dst-new", "Mirror", "--yes"]
+        + ["--topic-map", "CHAT CU = Chat", "--topic-map", f"{news.id}=Headlines"],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert set(dst_topics(gateway, "Mirror")) == {"Chat", "Headlines", "Keep me"}  # not a filter
+
+
+def test_topic_map_flags_go_on_top_of_the_files_and_win_for_the_same_topic(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    forum = gateway.add_channel("Forum", kind=ChatKind.FORUM).id
+    one = gateway.add_topic(forum, "One")
+    two = gateway.add_topic(forum, "Two")
+    gateway.add_message(forum, "a", topic_id=one.id)
+    gateway.add_message(forum, "b", topic_id=two.id)
+    rt = make_runtime(gateway=gateway)
+    path = transform_file(tmp_path, "topics: {topic_map: {One: First, Two: Second}}\n")
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Forum", "--dst-new", "Mirror", "--yes", "--transform", str(path)]
+        + ["--topic-map", "two=Deuxieme"],
+        obj=rt,
+    )  # fmt: skip
+
+    assert result.exit_code == 0, result.output
+    assert set(dst_topics(gateway, "Mirror")) == {"First", "Deuxieme"}
+
+
+@pytest.mark.parametrize(
+    ("extra", "needle"),
+    [
+        (["--topic-default", "Misc"], "hashtag routing"),
+        (["--strip-routing-hashtag"], "hashtag routing"),
+        (["--hashtag-to-topic", "--topic-default", " "], "name of a topic"),
+        (["--topic-map", "no sign"], "Old name=New name"),
+        (["--topic-map", "=New"], "Old name=New name"),
+        (["--topic-map", "Old="], "Old name=New name"),
+        (["--topic-map", "1=General"], "General has no topic id"),
+        (["--topic-map", "Old=A", "--topic-map", "old=B"], "twice"),
+    ],
+)
+def test_topic_flags_that_cannot_work_are_refused_before_anything_is_created(
+    make_runtime: MakeRuntime, gateway: FakeGateway, extra: list[str], needle: str
+) -> None:
+    tagged(gateway)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(
+        app, ["clone", "--src", "Source", "--dst-new", "Sorted", "--yes", *extra], obj=rt
+    )
+
+    assert result.exit_code == 2 and needle in result.output, result.output
+    assert gateway.calls_to("create_channel") == [] and saved_runs(rt) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "topics:\n  hashtag_to_topic:\n",  # the key with nothing under it
+        "topics:\n",
+        "caption:\n",
+        "version: 1\n",
+    ],
+)
+def test_a_transform_file_that_changes_nothing_is_refused_not_run_as_a_plain_clone(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path, body: str
+) -> None:
+    """The mistake this guards: a half-written file used to be read as an empty transform, and
+    the clone ran without any routing and said nothing."""
+    tagged(gateway)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Source", "--dst-new", "Sorted", "--yes"]
+        + ["--transform", str(transform_file(tmp_path, body))],
+        obj=rt,
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "nothing" in result.output
+    assert gateway.calls_to("create_channel") == [] and saved_runs(rt) == []
+
+
+def test_a_forum_source_routes_by_hashtag_into_topics_of_a_new_forum(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    """Forum to forum: a hashtag wins over the source topic; a message with none keeps the
+    topic its source topic maps to."""
+    forum = gateway.add_channel("Forum", kind=ChatKind.FORUM).id
+    news = gateway.add_topic(forum, "News")
+    chat = gateway.add_topic(forum, "Chat")
+    gateway.add_message(forum, "a #python", topic_id=news.id, hashtags=("#python",))
+    gateway.add_message(forum, "b", topic_id=news.id)
+    gateway.add_message(forum, "c #rust", topic_id=chat.id, hashtags=("#rust",))
+    gateway.add_message(forum, "d", topic_id=chat.id)
+    rt = make_runtime(gateway=gateway)
+    path = transform_file(tmp_path, "topics:\n  hashtag_to_topic:\n    auto: all\n")
+
+    result = runner.invoke(
+        app,
+        ["clone", "--src", "Forum", "--dst-new", "Mirror", "--yes", "--transform", str(path)],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    topics = dst_topics(gateway, "Mirror")
+    assert set(topics) == {"News", "Chat", "Python", "Rust"}
+    mirror = next(c.id for c in gateway.channels.values() if c.title == "Mirror")
+    landed = {m.text: m.topic_id for m in gateway.messages[mirror]}
+    assert landed == {
+        "a #python": topics["Python"],
+        "b": topics["News"],
+        "c #rust": topics["Rust"],
+        "d": topics["Chat"],
+    }
+
+
 def test_an_existing_destination_without_topics_is_refused_before_anything_is_written(
     make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
 ) -> None:

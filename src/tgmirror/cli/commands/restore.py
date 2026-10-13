@@ -47,7 +47,14 @@ from tgmirror.cli.selection_options import (
     for_backup,
     narrowed,
 )
-from tgmirror.cli.transform_options import HashtagToTopicOption, TransformOption
+from tgmirror.cli.transform_options import (
+    HashtagToTopicOption,
+    StripRoutingHashtagOption,
+    TopicDefaultOption,
+    TopicMapOption,
+    TransformOption,
+    topic_flags,
+)
 from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.gateway import ChannelInfo, TelegramGateway, TopicInfo
 from tgmirror.engine import preview, selection
@@ -114,6 +121,9 @@ def restore(
     ] = None,
     transform_file: TransformOption = None,
     hashtag_to_topic: HashtagToTopicOption = False,
+    topic_map: TopicMapOption = None,
+    topic_default: TopicDefaultOption = None,
+    strip_routing_hashtag: StripRoutingHashtagOption = False,
     ignore_unsupported: Annotated[
         bool,
         typer.Option(
@@ -250,7 +260,14 @@ def restore(
         else:
             directory_named = directory
         transform = await resolve_transform(
-            transform_file, carried, hashtag_to_topic=hashtag_to_topic
+            transform_file,
+            carried,
+            topics=topic_flags(
+                hashtag_to_topic=hashtag_to_topic,
+                topic_map=topic_map,
+                topic_default=topic_default,
+                strip_routing_hashtag=strip_routing_hashtag,
+            ),
         )
         options = RestoreOptions(
             dir=directory_named,

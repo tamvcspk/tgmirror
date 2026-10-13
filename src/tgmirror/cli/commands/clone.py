@@ -45,7 +45,14 @@ from tgmirror.cli.selection_options import (
     for_channel,
     narrowed,
 )
-from tgmirror.cli.transform_options import HashtagToTopicOption, TransformOption
+from tgmirror.cli.transform_options import (
+    HashtagToTopicOption,
+    StripRoutingHashtagOption,
+    TopicDefaultOption,
+    TopicMapOption,
+    TransformOption,
+    topic_flags,
+)
 from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.errors import ForwardsRestricted
 from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
@@ -123,6 +130,9 @@ def clone(
     ] = None,
     transform_file: TransformOption = None,
     hashtag_to_topic: HashtagToTopicOption = False,
+    topic_map: TopicMapOption = None,
+    topic_default: TopicDefaultOption = None,
+    strip_routing_hashtag: StripRoutingHashtagOption = False,
     reset_polls: Annotated[
         bool,
         typer.Option(
@@ -305,8 +315,14 @@ def clone(
                 raise UsageProblem("err.conflicting_flags", flags="--no-filter / --selection")
             filters = FilterSpec()
         check_args(selection, exact, filter_file)
+        topic_opts = topic_flags(
+            hashtag_to_topic=hashtag_to_topic,
+            topic_map=topic_map,
+            topic_default=topic_default,
+            strip_routing_hashtag=strip_routing_hashtag,
+        )
         transform = await resolve_transform(  # a bad file is a usage error too
-            transform_file, hashtag_to_topic=hashtag_to_topic
+            transform_file, topics=topic_opts
         )
         options = CloneOptions(
             src=src,
@@ -350,9 +366,7 @@ def clone(
                     options,
                     filters=narrowed(chosen, options.filters),
                     src=named,
-                    transform=await resolve_transform(
-                        transform_file, carried, hashtag_to_topic=hashtag_to_topic
-                    ),
+                    transform=await resolve_transform(transform_file, carried, topics=topic_opts),
                 )
             async with opened_store(rt) as store:
                 flow = CloneFlow(rt, store, conn.gateway, channels, options)

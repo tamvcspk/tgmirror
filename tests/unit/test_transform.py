@@ -210,6 +210,9 @@ def test_topic_map_renames_by_id_then_by_title_and_names_the_hashtag() -> None:
         ("topics: [x]", "a mapping"),
         ("topics: {colour: red}", "not a topics key"),
         ("topics: {hashtag_to_topic: [x]}", "a mapping"),
+        ("topics:\n  hashtag_to_topic:\n", "nothing under it"),  # a key left empty
+        ("topics:\n  topic_map:\n", "nothing under it"),
+        ("topics: {hashtag_format: ~}", "nothing under it"),
         ("topics: {hashtag_to_topic: {}}", "give `map` or `auto`"),
         ("topics: {hashtag_to_topic: {map: {}}}", "give `map` or `auto`"),
         ('topics: {hashtag_to_topic: {default: "A"}}', "give `map` or `auto`"),
@@ -267,6 +270,56 @@ def test_auto_all_with_its_limit_and_skip_round_trips() -> None:
     assert Transform.from_json(transform.to_json()) == transform
     assert transform.routes_to_topics and transform.rewrites  # strip: sent again
     assert parse("topics: {hashtag_to_topic: {auto: true}}").topics.auto_all  # YAML `true` too
+
+
+def test_flags_layered_on_a_file_replace_a_single_value_and_add_to_the_renames() -> None:
+    base = parse(TOPICS).topics  # default "Misc", strip on, renames ((12, Merged), (old name, ...))
+
+    rules = base.layered(
+        renames=[(12, "Twelve"), ("Chat", "Talk"), ("OLD name", "Newer")], default="Else"
+    )
+
+    assert rules.default == "Else"  # the flag's, not the file's
+    # the file's and the flag's together; a topic both name takes the flag's; sorted (canonical)
+    assert rules.renames == ((12, "Twelve"), ("chat", "Talk"), ("old name", "Newer"))
+    assert rules.routes == base.routes and rules.strip == base.strip  # untouched
+    assert Transform.from_data(Transform(topics=rules).to_data()) == Transform(topics=rules)
+
+
+def test_strip_is_only_ever_turned_on_by_a_flag_and_needs_routing() -> None:
+    routing = parse('topics: {hashtag_to_topic: {map: {"#a": "A"}}}').topics
+
+    assert not routing.strip
+    assert routing.layered(strip=True).strip
+    assert routing.layered().strip is False  # no flag, no change
+    assert routing.layered() == routing
+
+
+@pytest.mark.parametrize(
+    ("flags", "fragment"),
+    [
+        ({"default": "Else"}, "only mean something with hashtag routing"),
+        ({"strip": True}, "only mean something with hashtag routing"),
+        ({"renames": [(1, "Home")]}, "General has no topic id"),
+        ({"renames": [("Old", "A"), ("old", "B")]}, "twice"),
+        ({"renames": [("Old", "")]}, "name of a topic"),
+    ],
+)
+def test_flags_with_nothing_to_act_on_or_a_bad_value_are_refused(
+    flags: dict[str, object], fragment: str
+) -> None:
+    only_names = parse('topics: {topic_map: {"Old": "New"}}').topics  # no routing in the file
+
+    with pytest.raises(TransformError, match=fragment):
+        only_names.layered(**flags)  # type: ignore[arg-type]
+
+
+def test_a_flag_default_is_checked_like_the_files() -> None:
+    routing = parse('topics: {hashtag_to_topic: {map: {"#a": "A"}}}').topics
+
+    with pytest.raises(TransformError, match="--topic-default: the name of a topic"):
+        routing.layered(default="two\nlines")
+    assert routing.layered(default="  Else ").default == "Else"
 
 
 def test_a_title_longer_than_telegram_takes_is_refused() -> None:

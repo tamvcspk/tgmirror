@@ -41,7 +41,8 @@ than half used.
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,11 @@ _SCOPES = ("source", "all")
 _RESERVED = frozenset({"reply", "forward_header", "links"})
 _KEYS = frozenset({"version", "caption", "topics"})
 _TOPICS_KEYS = frozenset({"hashtag_to_topic", "topic_map", "hashtag_format"})
+_TOPICS_KEY_HINTS = {  # what a key needs under it (a present key with no value is an error)
+    "hashtag_to_topic": 'give `auto: all` (a topic per hashtag), `auto: ["#a"]` or `map:`',
+    "topic_map": 'give `"Old name": "New name"` lines',
+    "hashtag_format": 'give a format like "#t_{slug}"',
+}
 _ROUTING_KEYS = frozenset({"map", "auto", "default", "strip", "limit", "skip"})
 MAX_TOPIC_TITLE = 128  # Telegram's limit for a forum topic's title
 MAX_TOPIC_RULES = 200
@@ -176,6 +182,41 @@ class TopicRules:
         slug = re.sub(r"\W+", "_", title, flags=re.UNICODE).strip("_").casefold() or "topic"
         return (self.hashtag_format or "#{slug}").format(slug=slug)
 
+    # ---- flags on top of a file -----------------------------------------------------------------
+
+    def layered(
+        self,
+        *,
+        renames: Sequence[tuple[int | str, str]] = (),
+        default: str | None = None,
+        strip: bool = False,
+    ) -> "TopicRules":
+        """``self`` (what a transform file says) with the command-line flags put on top, the same
+        way ``--hashtag-to-topic`` is: a single value replaces the file's (``default``), a switch
+        only turns on (``strip``), and ``renames`` (``--topic-map``: a source topic id or title and
+        the name it gets) add to the file's, winning for a topic both name. Raises
+        ``TransformError`` when a flag has nothing to act on."""
+        rules = self
+        if default is not None or strip:
+            if not self.routing:
+                raise TransformError(
+                    "--topic-default / --strip-routing-hashtag: only mean something with hashtag "
+                    "routing (--hashtag-to-topic, or `hashtag_to_topic` in the transform file)"
+                )
+            if default is not None:
+                rules = replace(rules, default=_topic_title("--topic-default", default))
+            if strip:
+                rules = replace(rules, strip=True)
+        if renames:
+            entries = [
+                {"id": key, "to": name} if isinstance(key, int) else {"title": key, "to": name}
+                for key, name in renames
+            ]
+            merged = dict(rules.renames)
+            merged.update(_renames(entries))
+            rules = replace(rules, renames=_in_canonical_order(merged))
+        return rules
+
     # ---- the canonical form ---------------------------------------------------------------------
 
     def to_data(self) -> dict[str, Any]:
@@ -213,6 +254,12 @@ class TopicRules:
         if unknown:
             names = ", ".join(sorted(map(str, unknown)))
             raise TransformError(f"topics: not a topics key: {names}")
+        for key, hint in _TOPICS_KEY_HINTS.items():
+            if key in data and data[key] is None:  # `hashtag_to_topic:` with nothing under it
+                raise TransformError(
+                    f"topics.{key}: nothing under it, so it would do nothing — {hint}, "
+                    "or remove the key"
+                )
         found = _Routing()
         if (raw := data.get("hashtag_to_topic")) is not None:
             found = _routing(raw)
@@ -490,8 +537,12 @@ def _renames(raw: Any) -> tuple[tuple[int | str, str], ...]:
             raise TransformError(f"{where}: {key!r} appears twice")
         seen.add(folded)
         renames.append((folded, title))
-    # a topic_map has no order: sorted, so equal maps are equal and one canonical JSON
-    return tuple(sorted(renames, key=lambda r: (isinstance(r[0], str), r[0])))
+    return _in_canonical_order(dict(renames))
+
+
+def _in_canonical_order(renames: Mapping[int | str, str]) -> tuple[tuple[int | str, str], ...]:
+    """A topic_map has no order: sorted, so equal maps are equal and one canonical JSON."""
+    return tuple(sorted(renames.items(), key=lambda r: (isinstance(r[0], str), r[0])))
 
 
 def _hashtag_format(raw: Any) -> str | None:

@@ -220,7 +220,7 @@ caption:
 
 ### 5.4 Nơi đặt transform
 
-Trong file selection (`transform:`), hoặc file riêng `--transform t.yaml`; cờ tắt cho ca phổ biến (`--hashtag-to-topic auto`, `--topic-map "Cũ=Mới"`, `--keep-replies`, `--rewrite-links`). Transform được nhớ theo cặp (`mirrors.options_json`), giống filter: `run` dùng lại, đổi transform giữa chừng thì cảnh báo rằng tin đã sao chép không bị sửa lại (không quét lại như đổi filter).
+Trong file selection (`transform:`), hoặc file riêng `--transform t.yaml`; cờ tắt cho ca phổ biến (`--hashtag-to-topic`, `--topic-map "Cũ=Mới"`, `--topic-default`, `--strip-routing-hashtag` — có từ 19b/19b1; `--keep-replies`, `--rewrite-links` — 19c). Transform được nhớ theo cặp (`mirrors.options_json`), giống filter: `run` dùng lại, đổi transform giữa chừng thì cảnh báo rằng tin đã sao chép không bị sửa lại (không quét lại như đổi filter).
 
 ## 6. Thao tác hàng loạt trên chính một kênh (Phase 20)
 

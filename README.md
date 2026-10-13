@@ -2,7 +2,7 @@
 
 CLI tool that clones a Telegram channel, group or forum you have joined into another one (existing or newly created; forum topics are mapped topic to topic), using your own Telegram API credentials (MTProto, via [Telethon](https://github.com/LonamiWebs/Telethon)).
 
-> Status: **`v0.1.1` released** (2026-09-28: PyPI, Docker Hub `tamvo1808/tgmirror`, GitHub Release with a Windows PyInstaller zip; winget submission pending review). Phases 0-13, 15 and 16 are done (see `docs/06-lo-trinh.md`): server-side copy and download-then-reupload, filters with server-side narrowing, the rate limiter (AIMD delay, FloodWait auto-wait, daily cap), `retry`/`status`, group/supergroup/forum sources with topic mapping, OS keyring for `api_id`/`api_hash`, `tgmirror appdata export`/`import`, `tgmirror backup`/`restore` (restore confirmed against real Telegram), a Docker image, and a full-screen keyboard-driven app when you type bare `tgmirror`. Still **not run end to end with a real account**: a real multi-topic forum, a real keyring, a real cross-machine export/import (see the roadmap for exactly what has and has not been tried live). Next, toward 0.2.0 (unreleased): `inspect`/report with reusable selections is implemented on `main` and was tried on a real account (reply/forward/reactions/duplicates, a 13,000-message scan in 2 min 22 s), transforms such as hashtag ↔ topic while copying come after it; then 0.3.0 (bulk delete/edit/repost in place, always behind a confirmed plan) — see `docs/07-inspect-transform.md`. `clone` copies at once, Ctrl+C or `docker stop` stops it and saves progress; running the same pair again is a **delta** (only new messages). `tgmirror doctor` checks the session, `cryptg`, destination permissions and prints the safety notes below. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
+> Status: **`v0.1.1` released** (2026-09-28: PyPI, Docker Hub `tamvo1808/tgmirror`, GitHub Release with a Windows PyInstaller zip; winget submission pending review). Phases 0-13, 15 and 16 are done (see `docs/06-lo-trinh.md`): server-side copy and download-then-reupload, filters with server-side narrowing, the rate limiter (AIMD delay, FloodWait auto-wait, daily cap), `retry`/`status`, group/supergroup/forum sources with topic mapping, OS keyring for `api_id`/`api_hash`, `tgmirror appdata export`/`import`, `tgmirror backup`/`restore` (restore confirmed against real Telegram), a Docker image, and a full-screen keyboard-driven app when you type bare `tgmirror`. Still **not run end to end with a real account**: a real multi-topic forum, a real keyring, a real cross-machine export/import (see the roadmap for exactly what has and has not been tried live). Next, toward 0.2.0 (unreleased): `inspect`/report with reusable selections is implemented on `main` and was tried on a real account (reply/forward/reactions/duplicates, a 13,000-message scan in 2 min 22 s), transforms (caption operations, and routing messages into forum topics by hashtag) are implemented on `main` too — caption operations were tried on a real account, topic routing not yet; then 0.3.0 (bulk delete/edit/repost in place, always behind a confirmed plan) — see `docs/07-inspect-transform.md`. `clone` copies at once, Ctrl+C or `docker stop` stops it and saves progress; running the same pair again is a **delta** (only new messages). `tgmirror doctor` checks the session, `cryptg`, destination permissions and prints the safety notes below. See [docs/](docs/) for the design and [.claude/skills/](.claude/skills/) for the project skills.
 
 ## Goals
 
@@ -12,6 +12,7 @@ CLI tool that clones a Telegram channel, group or forum you have joined into ano
 - Pause / stop / resume with checkpoints (keys `p` / `r` / `q`), then run the same clone again for a **delta** that only copies new messages.
 - Fast (server-side copy, batching) and gentle (adaptive rate limiting, FLOOD_WAIT handling, anti-spam hygiene).
 - Back up a source to a directory on disk (`backup`) and rebuild it on a channel later (`restore`) — same filters, pause/stop/resume and "Restrict saving content" handling as a clone.
+- Change what is copied on the way: caption operations (strip links, remove hashtags, replace, append) and, for a forum destination, routing messages into topics by hashtag — from a YAML file or plain flags (`--transform`, `--hashtag-to-topic`, ...).
 - See what a source holds and what a filter selects before copying (`inspect`: counts by media, month, hashtag, forward origin, link domain, ...; a pre-flight of what a clone/backup/restore would do), and reuse that selection for the real command (`--selection @last`, `--save`/`--freeze`, `--exact`). Read-only: it never writes to Telegram.
 
 ## Install
@@ -72,6 +73,8 @@ tgmirror clone --src "@my_channel" --dst "Copy" --yes   # the same pair again: o
 tgmirror clone --src "@my_channel" --dst "Copy" --media photo --yes   # another filter: read again, nothing copied twice
 tgmirror clone --src "@my_channel" --dst "Copy" --fresh   # start the pair over: forget what it copied, copy everything again (asks first)
 tgmirror clone --src "@protected_channel" --dst "Copy" --mode reupload --yes-i-administer-this-channel   # "Restrict saving content" source: your own statement, your own responsibility (see "Responsible use")
+tgmirror clone --src "@my_channel" --dst-new "Sorted" --hashtag-to-topic --yes   # a new forum: each message into a topic named after its first hashtag
+tgmirror clone --src "@my_channel" --dst "Copy" --transform t.yaml --yes   # caption operations / topic rules from a YAML file (see "YAML files")
 tgmirror run [n]              # the latest run's clone again (or run n of `history`); Ctrl+C stops it, saving progress
 tgmirror run --fresh [--yes]   # the same, for the latest run's pair
 tgmirror run --wait           # sit out FloodWaits of any length (default: end the run after [limits] max_auto_wait)
@@ -118,7 +121,7 @@ The same flags on `clone`, `backup`, `restore` and `inspect` (the wizard asks fo
 | `--exclude-regex "pat"` | **leaves out** matches | repeat; each one is its own exclusion |
 | `--exclude-media sticker` | **leaves out** these types | |
 | `--album any\|all\|first` | how an album is judged | default `any`: one matching member takes the whole album. An album is never split |
-| `--filter-file f.yaml` | a YAML filter | not together with the flags above |
+| `--filter-file f.yaml` | a YAML filter | the flags above go on top of it and only narrow it; not together with `--selection` |
 
 How they combine: the "keeps" flags describe **one** rule that every message must satisfy together (`--media video --hashtag "#a"` = video **and** `#a`); repeating one flag is any-of; every `--exclude-*` is a separate exclusion that wins. Anything richer goes in YAML:
 
@@ -134,6 +137,18 @@ album: any
 ```
 
 YAML also has predicates with no flag: `mime` (`video/*`), `duration` (`5m`, `1h30m`), `views`, `forwards`, `reactions` (`{min, max}`), `filename` (`"*.pdf"`), `is_reply`, `edited`, `has_caption`. Hashtags need quotes in YAML (`"#news"`: a bare `#` starts a comment). A message lacking what a predicate looks at (the `size` of a text, the `views` of a group post) never matches it, `max` included.
+
+#### YAML files
+
+Three kinds of file, each checked before anything is read or written (a bad one exits with code 2 and names the key). A file is the **base**; the flags of the same command go on top of it, so the command line shows what was changed without opening the file.
+
+| File | Given with | Holds | Flags on top of it |
+|---|---|---|---|
+| filter | `--filter-file f.yaml` | `include` / `exclude` / `date` / `id` / `album` (see [Filters](#filters)) | filter flags **narrow** it (AND-ed into every rule; a predicate named in both takes the flag's value) |
+| selection | `--selection f.yaml` or `@last` | a filter + the source it was made for, optionally the frozen ids and a `transform:` section | filter flags narrow it; `--caption` and the topic flags go on top of its `transform:` |
+| transform | `--transform t.yaml` | `caption:` operations and `topics:` routing/renames (see [Transform](#transform-captions-and-topics)) | `--caption`, `--hashtag-to-topic`, `--topic-map`, `--topic-default`, `--strip-routing-hashtag` |
+
+Refused with exit code 2, because there would be two bases: `--filter-file` together with `--selection`, and `--transform` together with a `--selection` that already carries a `transform:`. In every file hashtags need quotes (`"#news"`: a bare `#` starts a YAML comment), and an unknown key is an error, not ignored.
 
 #### Look first, then copy: `inspect` and selections
 
@@ -157,6 +172,70 @@ tgmirror clone --src "@my_channel" --dst-new "Videos" --selection @last --yes   
 
 `inspect` is read-only (it never writes to Telegram or downloads media, so it needs no "Restrict saving content" statement); it reads the **whole** source (about 11 s per 1,000 messages measured) and prints the commands to continue with at the end. A backup directory works as the source (`tgmirror inspect ./backups/my_channel`), offline. A selection names its source: using it on another one is refused.
 
+#### Transform: captions and topics
+
+A transform changes what is copied on the way. It is available on `clone` and `restore` (same code path) and on `inspect --plan clone|restore`, which counts what it would do. `backup` refuses a selection that carries one: a backup saves the source as it is.
+
+```yaml
+# t.yaml — every part is optional
+version: 1
+caption:                              # applied in this order, to the captions of media messages
+  - strip_links: source               # links pointing at the source (`all`: every link)
+  - remove_mentions: source           # @source_channel (`all`: every @mention)
+  - remove_hashtags: ["#ads", "#promo"]   # or: all
+  - replace: {regex: "(?i)contact @\\w+", with: ""}   # `with` is literal text, no \1
+  - append: "— Channel B"             # after two blank lines
+  # - clear: true                     # drop the caption (= --caption none)
+  - text_too: true                    # also rewrite plain text messages (default: media captions only)
+topics:
+  hashtag_to_topic:                   # the destination must be a forum
+    map:                              # in priority order: the first rule a message's hashtag matches
+      "#python": "Python"
+      "#rust": "Rust lang"
+    auto: ["#go", "#machine_learning"]   # topic named after the hashtag: "Go", "Machine learning"
+    # auto: all                       # or: every hashtag gets its own topic, as it is met ...
+    # limit: 30                       #   ... at most 30 new topics per run (then General); 30 is the default
+    # skip: ["#ads"]                  #   ... except these
+    default: "Other"                  # no rule matched and the message sits in no source topic
+    strip: true                       # take the hashtag that routed a message out of its caption
+  topic_map:                          # forum source: rename / merge topics (by title, any case, or id)
+    "Old chat": "Chat"
+    12: "Chat"                        # several into one name = merged
+  hashtag_format: "#t_{slug}"         # destination without topics + --topic-as-hashtag: how a topic is written
+```
+
+- **A transform never picks messages — a filter does.** `hashtag_to_topic` only says where a message goes; a message no rule matches is still cloned (into `default`, into the topic its source topic maps to, or into General). To take only some hashtags, filter them: `--hashtag "#python" --hashtag "#rust"`. Likewise `topic_map` only renames; to take some topics use `--topic`.
+- **Routing:** a message goes to the topic of the first *rule* (file order, not the order in the message) one of its hashtags matches. An album is judged as a whole and never split. Order *inside* each topic is the source order. Destination topics are looked up by title before one is created, so running the pair again — or two sources into one forum — shares them.
+- **The destination must be a forum** when routing: `--dst-new` creates one (even from a plain channel); an existing destination that is not a forum is refused before anything is written.
+- **Cost:** routing alone is a plain server-side forward into a topic. What changes a caption (`caption:` operations, `strip`) sends those messages again — by file id when the source allows saving content, downloaded and re-uploaded otherwise (then the "Restrict saving content" statement applies, as for `--mode reupload`). So `--mode copy` together with those is an error; routing alone works with it. `inspect --plan` shows how many units go each way and how many land in each topic.
+- **A file that does nothing is an error**, not a plain clone: a key left with nothing under it (`hashtag_to_topic:` and no lines below — write `auto: all` for a topic per hashtag), or a `--transform` file with no operation and no rule, exits with code 2.
+- **Remembered with the pair:** `run` and `retry` reuse it. Changing the transform later does not rewrite messages already copied.
+
+Without a file, the same things as flags (on `clone`, `restore` and `inspect --plan`):
+
+| Flag | Same as in the file | On top of a file |
+|---|---|---|
+| `--hashtag-to-topic` | `hashtag_to_topic: {auto: all}` | adds `auto: all` to the file's rules (its `map` names still win) |
+| `--topic-map "Old=New"` (repeat) | one `topic_map` entry | added to the file's; wins for the same topic. Left of `=`: a topic title (any case) or, when all digits, its id; split at the first `=` |
+| `--topic-default NAME` | `default:` | replaces the file's |
+| `--strip-routing-hashtag` | `strip: true` | switches it on |
+| `--caption …` / `--caption-text` | `caption:` operations | run **after** the file's operations |
+
+`--topic-default` and `--strip-routing-hashtag` only mean something with routing (`--hashtag-to-topic`, or `hashtag_to_topic:` in the file): without it they are a usage error, not silently ignored. `limit`, `skip` and `hashtag_format` have no flag; put them in the file.
+
+```bash
+# a new forum, one topic per first hashtag; the rest into "Other"; the routing hashtag leaves the caption
+tgmirror clone --src "@my_channel" --dst-new "Sorted" --hashtag-to-topic --topic-default "Other" --strip-routing-hashtag --yes
+# only #python and #rust messages, into the topics the file names
+tgmirror clone --src "@my_channel" --dst-new "Sorted" --transform t.yaml --hashtag "#python" --hashtag "#rust" --yes
+# forum to forum: rename one topic by title, merge another one (by id) into it
+tgmirror clone --src "@my_forum" --dst-new "Mirror" --topic-map "Old chat=Chat" --topic-map "12=Chat" --yes
+# look first: units per destination topic and how they travel; nothing is written
+tgmirror inspect "@my_channel" --plan clone --hashtag-to-topic --json
+```
+
+Forum to forum with a transform file has been run against real Telegram. Not yet confirmed there: whether a forward into a topic lands in the right one when the *source* is not a forum, whether an album forwarded into a topic keeps its group, and what General is called on an account with a localised interface. Try a small channel first.
+
 #### Copy options (`clone`; `backup`/`restore` take the ones that apply)
 
 | Flag | Meaning |
@@ -164,6 +243,8 @@ tgmirror clone --src "@my_channel" --dst-new "Videos" --selection @last --yes   
 | `--src`, `--dst` \| `--dst-new "Title"` (+ `--about`) | source, existing destination or a new one |
 | `--mode auto\|copy\|reupload` | `auto` (default): server-side copy, and what needs a new caption/topic hashtag is sent again by file id; `copy`: forward only; `reupload`: download and upload everything (the only way to copy a "Restrict saving content" source) |
 | `--caption keep\|strip-links\|append\|none` (+ `--caption-text`) | what happens to the captions of media messages |
+| `--transform FILE` | a YAML transform: caption operations and topic rules (see "Transform") |
+| `--hashtag-to-topic`, `--topic-map "Old=New"`, `--topic-default NAME`, `--strip-routing-hashtag` | route messages into forum topics by hashtag / rename or merge topics / topic for the rest / take the routing hashtag out of the caption (see "Transform") |
 | `--topic-as-hashtag` / `--no-topic-as-hashtag` | forum source into a destination without topics: keep each topic's name as a hashtag |
 | `--reset-polls`, `--ignore-unsupported`, `--placeholder` | with `reupload`: re-create polls (votes are lost) / leave out what cannot be copied / and post a note where it was |
 | `--yes-i-administer-this-channel` | your own statement for a "Restrict saving content" source (see "Responsible use"); `--yes` never stands in for it |
@@ -204,6 +285,7 @@ uv run tgmirror --version
 | [docs/04-state-checkpoint.md](docs/04-state-checkpoint.md) | SQLite schema (runs and mirrors), checkpoint, delta |
 | [docs/05-chong-flood.md](docs/05-chong-flood.md) | Rate limiting, FLOOD_WAIT, anti-spam |
 | [docs/06-lo-trinh.md](docs/06-lo-trinh.md) | Roadmap, open questions |
+| [docs/07-inspect-transform.md](docs/07-inspect-transform.md) | `inspect`, selections and transforms (design) |
 
 ## Responsible use
 
