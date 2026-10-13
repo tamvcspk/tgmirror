@@ -279,15 +279,19 @@ VI: dict[str, str] = {
     "err.opt_reupload_flags_need_reupload": (
         "--reset-polls, --ignore-unsupported và --placeholder chỉ có nghĩa với --mode reupload."
     ),
-    "err.opt_caption_and_transform": (
-        "--caption là cú pháp tắt của danh sách thao tác caption: dùng nó hoặc --transform "
-        "(thêm thao tác vào file transform thay vì ghép hai cách), không dùng cả hai."
-    ),
     "err.opt_transform_needs_reupload": (
         "Transform đổi caption nên phải gửi lại tin, forward không làm được: dùng --mode auto "
         "(chỉ tin cần sửa đi đường đó) hoặc --mode reupload, không dùng --mode copy."
     ),
     "err.transform": "Transform không hợp lệ: {detail}",
+    "err.opt_topics_need_forum": (
+        "Transform chuyển tin vào topic theo hashtag (`topics.hashtag_to_topic`) nên đích phải là "
+        "một forum (nhóm bật topic): chọn đích forum, hoặc dùng --dst-new để tạo đích mới."
+    ),
+    "err.dest_not_forum": (
+        "«{title}» không phải forum nên không có topic: transform chuyển tin vào topic theo "
+        "hashtag cần đích là forum. Chọn đích khác, hoặc dùng --dst-new để tạo đích mới."
+    ),
     "err.opt_topic_hashtag_needs_rewrite": (
         "--topic-as-hashtag cần gửi lại tin (forward không thêm được hashtag): dùng --mode auto "
         "hoặc --mode reupload, không dùng --mode copy."
@@ -375,9 +379,6 @@ VI: dict[str, str] = {
     ),
     "err.not_a_backup": "{dir} không phải một thư mục backup hợp lệ (không có backup.json).",
     "err.filter": "Filter không hợp lệ: {detail}",
-    "err.filter_mix": (
-        "Không dùng --filter-file cùng các cờ lọc khác (--media, --hashtag, --since, ...)."
-    ),
     # filters (wizard step 3, preview, refilter)
     "filter.pick": "Lọc nội dung sao chép?",
     "filter.keep": "Giữ filter của lần chạy trước",
@@ -554,6 +555,10 @@ VI: dict[str, str] = {
     "run.reference_fallback": (
         "Tin {id}: Telegram không cho gửi lại bằng mã file, tải xuống rồi tải lên lại."
     ),
+    "run.topics_limit": (
+        "Đã tạo {limit} topic mới theo hashtag (giới hạn của `auto: all`): tin có hashtag mới "
+        "hơn vào General. Tăng `limit` trong transform, hoặc liệt kê hashtag cần có."
+    ),
     "run.transfer_download": "Tải xuống tin {id}: {percent}% ({done} / {total}{speed}).",
     "run.transfer_upload": "Tải lên tin {id}: {percent}% ({done} / {total}{speed}).",
     "run.retry_continue_hint": "Chạy tiếp việc thử lại: tgmirror retry {of}",
@@ -720,6 +725,8 @@ VI: dict[str, str] = {
         "reupload) để bỏ qua chúng."
     ),
     "inspect.plan_left_out": "Sẽ bỏ qua: {what}.",
+    "inspect.plan_topics": "Vào topic (theo hashtag): {what}.",
+    "inspect.plan_topics_rest": "không rule nào khớp (theo topic nguồn, hoặc General)",
     "inspect.plan_protected": (
         "Nguồn bật «Restrict saving content»: phần tải xuống cần lời tuyên bố "
         "--yes-i-administer-this-channel (quyết định D3)."
@@ -1006,16 +1013,21 @@ EN: dict[str, str] = {
         "--reset-polls, --ignore-unsupported and --placeholder only mean something with "
         "--mode reupload."
     ),
-    "err.opt_caption_and_transform": (
-        "--caption is a shorthand for the caption operations: use it or --transform (put the "
-        "operation in the transform file instead of mixing the two), not both."
-    ),
     "err.opt_transform_needs_reupload": (
         "A transform changes captions, so the messages must be sent again, which a forward "
         "cannot do: use --mode auto (only the messages that need it take that road) or "
         "--mode reupload, not copy."
     ),
     "err.transform": "Invalid transform: {detail}",
+    "err.opt_topics_need_forum": (
+        "The transform sends messages to topics by hashtag (`topics.hashtag_to_topic`), so the "
+        "destination must be a forum (a group with topics): pick a forum, or use --dst-new to "
+        "create one."
+    ),
+    "err.dest_not_forum": (
+        "'{title}' is not a forum, so it has no topics: a transform that sends messages to topics "
+        "by hashtag needs a forum destination. Pick another one, or use --dst-new to create one."
+    ),
     "err.opt_topic_hashtag_needs_rewrite": (
         "--topic-as-hashtag needs messages sent again (a forward cannot add a hashtag): use "
         "--mode auto or --mode reupload, not --mode copy."
@@ -1107,9 +1119,6 @@ EN: dict[str, str] = {
     ),
     "err.not_a_backup": "{dir} is not a valid backup directory (no backup.json).",
     "err.filter": "Invalid filter: {detail}",
-    "err.filter_mix": (
-        "Do not combine --filter-file with the other filter flags (--media, --hashtag, ...)."
-    ),
     "filter.pick": "Filter what gets copied?",
     "filter.keep": "Keep the filter of the previous run",
     "filter.use_last": "Use the latest inspect result for this source ({count} messages, {when})",
@@ -1289,6 +1298,11 @@ EN: dict[str, str] = {
     "run.reference_fallback": (
         "Message {id}: Telegram would not send it again by file id, downloading and uploading it."
     ),
+    "run.topics_limit": (
+        "Created {limit} new topics from hashtags (the limit of `auto: all`): messages with "
+        "newer hashtags go to General. Raise `limit` in the transform, or list the hashtags "
+        "you want."
+    ),
     "run.transfer_download": "Downloading message {id}: {percent}% ({done} / {total}{speed}).",
     "run.transfer_upload": "Uploading message {id}: {percent}% ({done} / {total}{speed}).",
     "run.retry_continue_hint": "Carry on retrying with: tgmirror retry {of}",
@@ -1460,6 +1474,8 @@ EN: dict[str, str] = {
         "--mode reupload) to leave them out."
     ),
     "inspect.plan_left_out": "It would leave out: {what}.",
+    "inspect.plan_topics": "Into topics (by hashtag): {what}.",
+    "inspect.plan_topics_rest": "no rule matched (the source topic's own, or General)",
     "inspect.plan_protected": (
         "The source restricts saving content: the downloaded part needs your statement, "
         "--yes-i-administer-this-channel (decision D3)."

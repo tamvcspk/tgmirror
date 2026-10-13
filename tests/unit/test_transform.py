@@ -1,5 +1,6 @@
 """Transform (phase 19): the model of a ``--transform`` file and the caption operations."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,9 @@ from tgmirror.core.gateway import (
     RemoveHashtags,
     RemoveMentions,
     Replace,
+    SrcMessage,
     StripLinks,
+    Unit,
     ops_of_mode,
 )
 from tgmirror.core.telethon_gateway import _slice16, rewrite_caption
@@ -79,8 +82,9 @@ def test_the_canonical_form_round_trips_and_an_empty_transform_is_empty_text() -
         ("caption: [{clear: true}, {text_too: true}]", "would empty every text message"),
         ("caption: {strip_links: all}", "list"),
         ("version: 2", "not supported"),
-        ("topics: {}", "not available yet"),
+        ("reply: keep", "not available yet"),
         ("forward_header: keep", "not available yet"),
+        ("links: rewrite", "not available yet"),
         ("colour: red", "not a transform key"),
     ],
 )
@@ -103,6 +107,175 @@ def test_load_names_the_file_and_explains_a_yaml_slip(tmp_path: Path) -> None:
         tf.load(bad)
 
 
+# ---- topics (phase 19b) -----------------------------------------------------------------------
+
+TOPICS = """
+topics:
+  hashtag_to_topic:
+    map:
+      "#Python": "Python"
+      "#rust": "Rust lang"
+    auto: ["#machine_learning", "#go"]
+    default: "Misc"
+    strip: true
+  topic_map:
+    "Old name": "New name"
+    12: "Merged"
+  hashtag_format: "#t_{slug}"
+"""
+
+
+def unit(*texts_tags: tuple[str, ...], topic_id: int | None = None, album: bool = False) -> Unit:
+    """A unit whose messages carry the given hashtags (one tuple of tags per message)."""
+    when = datetime(2026, 1, 1, tzinfo=UTC)
+    gid = 7 if album or len(texts_tags) > 1 else None
+    return Unit(
+        tuple(
+            SrcMessage(i + 1, when, hashtags=tags, grouped_id=gid, topic_id=topic_id)
+            for i, tags in enumerate(texts_tags)
+        )
+    )
+
+
+def test_topics_are_read_normalised_and_keep_their_priority_order() -> None:
+    rules = parse(TOPICS).topics
+
+    assert [(r.tag, r.topic) for r in rules.routes] == [
+        ("#python", "Python"),
+        ("#rust", "Rust lang"),
+        ("#machine_learning", "Machine learning"),  # ``auto`` names the topic after the tag
+        ("#go", "Go"),
+    ]
+    assert rules.default == "Misc" and rules.strip and rules.strips
+    assert rules.renames == ((12, "Merged"), ("old name", "New name"))
+    assert rules.hashtag_format == "#t_{slug}"
+
+
+def test_a_transform_with_topics_round_trips_and_is_not_empty() -> None:
+    transform = parse(TOPICS)
+
+    assert Transform.from_json(transform.to_json()) == transform
+    assert Transform.from_data(transform.to_data()) == transform  # the canonical form is valid
+    assert not transform.is_empty and transform.routes_to_topics
+    # only ``strip`` makes the transform rewrite anything: routing alone is a forward
+    assert transform.rewrites
+    routing = parse('topics: {hashtag_to_topic: {map: {"#a": "A"}}}')
+    assert not routing.is_empty and routing.routes_to_topics and not routing.rewrites
+    names = parse('topics: {topic_map: {"Old": "New"}}')
+    assert not names.is_empty and not names.routes_to_topics and not names.rewrites
+    assert parse("topics: {}").is_empty and parse("topics:").is_empty
+
+
+def test_the_first_rule_a_unit_matches_decides_not_the_order_of_its_hashtags() -> None:
+    rules = parse(TOPICS).topics
+
+    both = unit(("#rust", "#python"))
+    assert rules.destination(both) == "Python"
+    assert rules.strip_tag(both) == "#python"
+    # an album is judged as a whole: the caption (and its tags) is on one of its messages
+    album = unit((), ("#Rust",), ())
+    assert rules.destination(album) == "Rust lang"
+    assert rules.strip_tag(album) == "#rust"
+
+
+def test_default_takes_only_a_message_that_sits_in_no_source_topic() -> None:
+    rules = parse(TOPICS).topics
+
+    assert rules.destination(unit(("#other",))) == "Misc"
+    assert rules.destination(unit(())) == "Misc"
+    # in a topic of a forum source it keeps that topic's own mapping
+    assert rules.destination(unit(("#other",), topic_id=5)) is None
+    # a matching hashtag still wins over the source topic
+    assert rules.destination(unit(("#go",), topic_id=5)) == "Go"
+    # without ``strip`` nothing is taken out of a caption
+    no_strip = parse('topics: {hashtag_to_topic: {map: {"#a": "A"}}}').topics
+    assert no_strip.strip_tag(unit(("#a",))) is None
+
+
+def test_topic_map_renames_by_id_then_by_title_and_names_the_hashtag() -> None:
+    rules = parse(TOPICS).topics
+
+    assert rules.rename(12, "Anything") == "Merged"
+    assert rules.rename(3, "OLD NAME") == "New name"  # a title matches without case
+    assert rules.rename(4, "Untouched") == "Untouched"
+    assert rules.hashtag_of("New name") == "#t_new_name"
+    assert rules.hashtag_of("Bàn luận chung!") == "#t_bàn_luận_chung"
+    assert rules.hashtag_of("!!!") == "#t_topic"
+    assert Transform().topics.hashtag_of("Off-topic") == "#off_topic"
+
+
+@pytest.mark.parametrize(
+    ("text", "fragment"),
+    [
+        ("topics: [x]", "a mapping"),
+        ("topics: {colour: red}", "not a topics key"),
+        ("topics: {hashtag_to_topic: [x]}", "a mapping"),
+        ("topics: {hashtag_to_topic: {}}", "give `map` or `auto`"),
+        ("topics: {hashtag_to_topic: {map: {}}}", "give `map` or `auto`"),
+        ('topics: {hashtag_to_topic: {default: "A"}}', "give `map` or `auto`"),
+        ('topics: {hashtag_to_topic: {map: {"#a": "A"}, rule: 1}}', "not a key"),
+        ('topics: {hashtag_to_topic: {map: {"two words": "A"}}}', "hashtag"),
+        ('topics: {hashtag_to_topic: {map: {"#a": ""}}}', "name of a topic"),
+        ('topics: {hashtag_to_topic: {map: {"#a": "x\\ny"}}}', "one line"),
+        ('topics: {hashtag_to_topic: {map: {"#a": "A", "#A": "B"}}}', "twice"),
+        ('topics: {hashtag_to_topic: {map: {"#a": "A"}, auto: ["#a"]}}', "twice"),
+        ('topics: {hashtag_to_topic: {map: {"#a": "A"}, strip: yes please}}', "true or false"),
+        ('topics: {hashtag_to_topic: {map: {"#a": "A"}, default: 5}}', "name of a topic"),
+        ('topics: {topic_map: {"Old": null}}', "exclude it with a filter"),
+        ("topics: {topic_map: {1: General}}", "General has no topic id"),
+        ('topics: {topic_map: {"Old": "A", "old": "B"}}', "twice"),
+        ("topics: {topic_map: [{id: 5}]}", "id or title"),
+        ('topics: {hashtag_to_topic: {map: {"#a": "A"}, limit: 5}}', "only means something"),
+        ("topics: {hashtag_to_topic: {auto: all, limit: 0}}", "from 1 to"),
+        ("topics: {hashtag_to_topic: {auto: all, limit: many}}", "from 1 to"),
+        ('topics: {hashtag_to_topic: {auto: ["#a"], skip: ["#b"]}}', "only means something"),
+        ("topics: {hashtag_to_topic: {auto: all, skip: []}}", "a list of hashtags"),
+        ("topics: {hashtag_to_topic: {auto: 5}}", "`all`, or a list"),
+        ('topics: {hashtag_format: "#topic"}', "{slug}"),
+        ('topics: {hashtag_format: "#{slug}{other}"}', "placeholder"),
+        ('topics: {hashtag_format: "t {slug}"}', "one hashtag"),
+    ],
+)
+def test_topics_that_cannot_be_used_are_refused(text: str, fragment: str) -> None:
+    with pytest.raises(TransformError, match=fragment):
+        parse(text)
+
+
+def test_auto_all_names_a_topic_after_the_first_hashtag_written_in_the_message() -> None:
+    rules = parse(
+        "topics: {hashtag_to_topic: {map: {'#python': 'Python'}, auto: all, skip: ['#ads']}}"
+    ).topics
+
+    assert rules.routing and rules.auto_all and rules.auto_limit == tf.DEFAULT_AUTO_LIMIT
+    # an explicit rule first, whatever the order in the message
+    assert rules.destination(unit(("#go", "#python"))) == "Python"
+    # no rule: the first hashtag that is not skipped, named after itself
+    assert rules.destination(unit(("#machine_learning", "#go"))) == "Machine learning"
+    assert rules.destination(unit(("#ads", "#Go"))) == "Go"
+    assert rules.strip_tag(unit(("#ads", "#Go"))) is None  # ``strip`` is off
+    # only skipped tags, or none: no topic of its own
+    assert rules.destination(unit(("#ads",))) is None
+    assert rules.destination(unit(())) is None
+
+
+def test_auto_all_with_its_limit_and_skip_round_trips() -> None:
+    transform = parse(
+        "topics: {hashtag_to_topic: {auto: all, limit: 5, skip: ['#ads', '#News'], strip: true}}"
+    )
+
+    assert transform.topics.auto_limit == 5 and transform.topics.auto_skip == ("#ads", "#news")
+    assert Transform.from_json(transform.to_json()) == transform
+    assert transform.routes_to_topics and transform.rewrites  # strip: sent again
+    assert parse("topics: {hashtag_to_topic: {auto: true}}").topics.auto_all  # YAML `true` too
+
+
+def test_a_title_longer_than_telegram_takes_is_refused() -> None:
+    long = "x" * (tf.MAX_TOPIC_TITLE + 1)
+
+    with pytest.raises(TransformError, match="at most 128"):
+        parse(f'topics: {{topic_map: {{"Old": "{long}"}}}}')
+
+
 # ---- the operations ---------------------------------------------------------------------------
 
 
@@ -121,7 +294,7 @@ def test_the_caption_flag_is_a_shorthand_for_operations() -> None:
     assert ops_of_mode(CaptionMode.APPEND, "x") == (Append("x"),)
     assert ops_of_mode(CaptionMode.STRIP_LINKS) == (StripLinks("source"), RemoveMentions("source"))
     both = CaptionPolicy(CaptionMode.APPEND, "x", ops=(Replace("a", "b"),))
-    assert both.all_ops == (Append("x"), Replace("a", "b"))  # the flag first, then the list
+    assert both.all_ops == (Replace("a", "b"), Append("x"))  # the file's list, then the flag
 
 
 def test_remove_named_hashtags_keeps_the_others_and_closes_the_gap() -> None:

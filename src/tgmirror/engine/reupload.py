@@ -30,6 +30,7 @@ from tgmirror.core.gateway import (
     MessageReader,
     OnTransfer,
     Prepared,
+    RemoveHashtags,
     TelegramGateway,
     Unit,
 )
@@ -149,19 +150,21 @@ async def send_unit(
     *,
     topic: int | None = None,
     hashtag: str | None = None,
+    strip: str | None = None,
 ) -> list[MessageResult]:
     """Post the unit (or its placeholder) and say what became of each message.
 
     Errors from the gateway propagate; the runner decides what they mean for the run. ``topic``
     targets a destination topic; ``hashtag`` (phase 8, ``RunOptions.topic_as_hashtag``) stands in
     for a topic the destination cannot hold — appended to the placeholder directly here, and to
-    every caption/text ``gateway.send_prepared`` sends (``CaptionPolicy.hashtag``).
+    every caption/text ``gateway.send_prepared`` sends (``CaptionPolicy.hashtag``). ``strip``
+    (phase 19b) is the hashtag a rule routed the unit by, taken out of its caption first.
     """
     if action.kind is ActionKind.PLACEHOLDER:
         text = f"{action.text}\n{hashtag}" if hashtag else action.text
         return left_out(unit, action, await gateway.send_text(dst, text, topic=topic))
     assert action.kind is ActionKind.SEND and prepared is not None
-    caption = replace(options.caption, hashtag=hashtag) if hashtag else options.caption
+    caption = _caption_of(options, hashtag, strip)
     sent = await gateway.send_prepared(dst, prepared, caption, on_transfer, topic=topic)
     return results_of(unit, sent)
 
@@ -180,6 +183,7 @@ async def send_unit_by_reference(
     on_fallback: Callable[[], None] = lambda: None,
     topic: int | None = None,
     hashtag: str | None = None,
+    strip: str | None = None,
 ) -> list[MessageResult]:
     """Send ``unit`` by the ids of its files: nothing is downloaded or uploaded.
 
@@ -187,9 +191,9 @@ async def send_unit_by_reference(
     Telegram still will not send the media this way, the unit goes the long way, exactly as
     ``--mode reupload`` would send it, and ``on_fallback`` is told. Telegram created nothing
     before this returns, whichever way it went, so the caller's batch stays ``pending`` meanwhile
-    and the write-ahead rule holds. ``topic``/``hashtag``: phase 8, as ``send_unit``.
+    and the write-ahead rule holds. ``topic``/``hashtag``/``strip``: as ``send_unit``.
     """
-    caption = replace(options.caption, hashtag=hashtag) if hashtag else options.caption
+    caption = _caption_of(options, hashtag, strip)
     for attempt in range(2):
         try:
             return results_of(
@@ -202,11 +206,32 @@ async def send_unit_by_reference(
     full = await reader.prepare(src, unit, tmp, on_transfer)
     try:
         return await send_unit(
-            gateway, dst, unit, full, SEND, options, on_transfer, topic=topic, hashtag=hashtag
+            gateway,
+            dst,
+            unit,
+            full,
+            SEND,
+            options,
+            on_transfer,
+            topic=topic,
+            hashtag=hashtag,
+            strip=strip,
         )
     finally:
         for path in full.files:
             path.unlink(missing_ok=True)
+
+
+def _caption_of(options: Options, hashtag: str | None, strip: str | None) -> CaptionPolicy:
+    """The run's caption policy with this unit's own additions: the hashtag its routing rule
+    matched comes out first (before the operations, which may add text of their own), the topic
+    hashtag goes last."""
+    caption = options.caption
+    if strip:
+        caption = replace(caption, ops=(RemoveHashtags((strip,)), *caption.ops))
+    if hashtag:
+        caption = replace(caption, hashtag=hashtag)
+    return caption
 
 
 def results_of(unit: Unit, sent: list[int]) -> list[MessageResult]:

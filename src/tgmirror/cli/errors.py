@@ -47,6 +47,7 @@ from tgmirror.engine.backupdir import CorruptMessagesFile
 from tgmirror.engine.endpoints import (
     AmbiguousChannel,
     ChannelNotFound,
+    DestinationNotForum,
     DestinationNotWritable,
     EndpointError,
     InvalidChannelTitle,
@@ -66,7 +67,6 @@ from tgmirror.engine.runs import (
 )
 from tgmirror.engine.transform import TransformError
 from tgmirror.filters.model import FilterError
-from tgmirror.filters.parser import FilterMix
 from tgmirror.ui.messages import t
 from tgmirror.ui.tables import channel_label
 
@@ -114,6 +114,8 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.source_restricted", title=exc.src.title)
         case DestinationNotWritable():
             return t("err.dest_not_writable", title=exc.dst.title)
+        case DestinationNotForum():
+            return t("err.dest_not_forum", title=exc.dst.title)
         case ForwardsRestricted():
             return t("err.forwards_restricted")
         case NoPermission():
@@ -151,8 +153,6 @@ def describe(exc: TgMirrorError) -> str:
             return t(f"err.run_waiting_{exc.reason}", until=until)
         case RunBusy():
             return t("err.run_busy", id=exc.run_id)
-        case FilterMix():
-            return t("err.filter_mix")
         case TransformError():
             return t("err.transform", detail=exc.detail)
         case FilterError():

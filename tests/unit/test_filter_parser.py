@@ -8,10 +8,10 @@ from tgmirror.core.gateway import MediaKind
 from tgmirror.filters.model import FilterError, FilterSpec
 from tgmirror.filters.parser import (
     FilterFileError,
-    FilterMix,
     FlagFilters,
     from_file,
     from_flags,
+    layer,
     resolve,
 )
 
@@ -182,6 +182,56 @@ def test_flags_or_a_file_resolve_to_a_spec(tmp_path: Path) -> None:
     assert isinstance(resolve(FlagFilters(), write(tmp_path, DOC_YAML)), FilterSpec)
 
 
-def test_a_file_together_with_flags_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(FilterMix):
-        resolve(FlagFilters(media="video"), write(tmp_path, DOC_YAML))
+# ---- a file with flags on top ---------------------------------------------------------------
+
+
+def test_flags_given_with_a_file_narrow_it_and_the_file_stays_the_base(tmp_path: Path) -> None:
+    base = write(tmp_path, DOC_YAML)  # two include rules, one exclude, a date, an id range
+
+    spec = resolve(FlagFilters(min_size="10MB", exclude_regex=["spam"], until="2024-06-01"), base)
+
+    assert spec is not None
+    # the flag rule is ANDed into each alternative of the file
+    assert [r.hashtag for r in spec.include] == [("#news",), None]
+    assert all(r.size is not None for r in spec.include)
+    assert len(spec.exclude) == 2  # the file's and the flag's both apply
+    assert spec.when is not None and spec.when.to.month == 6  # --until replaces that end only
+    assert spec.when.from_ is not None and spec.when.from_.year == 2024
+    assert spec.ids is not None and spec.album == "all"  # untouched
+
+
+def test_a_flag_for_a_predicate_the_file_names_replaces_its_value() -> None:
+    base = FilterSpec.from_data({"include": [{"hashtag": ["#a"], "media": ["video"]}]})
+
+    spec = layer(base, from_flags(FlagFilters(hashtag=["#b"])))
+
+    (rule,) = spec.include
+    assert rule.hashtag == ("#b",) and rule.media == (MediaKind.VIDEO,)
+
+
+def test_a_flag_rule_stands_alone_when_the_file_has_no_include_rule() -> None:
+    base = FilterSpec.from_data({"date": {"from": "2024-01-01"}})
+
+    spec = layer(base, from_flags(FlagFilters(media="video")))
+
+    assert len(spec.include) == 1 and spec.when is not None
+
+
+def test_an_album_flag_given_explicitly_wins_even_when_it_is_the_default() -> None:
+    base = FilterSpec.from_data({"include": [{"media": ["video"]}], "album": "all"})
+
+    assert layer(base, from_flags(FlagFilters(album="any"))).album == "any"
+    assert layer(base, from_flags(FlagFilters(media="photo"))).album == "all"  # not given: kept
+
+
+def test_layering_nothing_is_the_file_itself(tmp_path: Path) -> None:
+    base = from_file(write(tmp_path, DOC_YAML))
+
+    assert layer(base, FilterSpec()) is base
+
+
+def test_flags_that_make_a_file_contradict_itself_are_a_filter_error() -> None:
+    base = FilterSpec.from_data({"date": {"from": "2024-06-01"}})
+
+    with pytest.raises(FilterError, match="before"):
+        layer(base, from_flags(FlagFilters(until="2024-01-01")))

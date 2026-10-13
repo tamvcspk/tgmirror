@@ -241,10 +241,10 @@ def ops_of_mode(mode: CaptionMode, text: str = "") -> tuple[CaptionOp, ...]:
 
 @dataclass(frozen=True, slots=True)
 class CaptionPolicy:
-    """How captions are rewritten while re-sending: ``mode``/``text`` (the ``--caption``
-    shorthand) first, then ``ops`` (a transform's ``caption`` list, in order). They only ever
-    touch captions of media messages — the text of a message that has no media is the content
-    itself and is sent as it is — unless ``text_too`` says the transform wants that text
+    """How captions are rewritten while re-sending: ``ops`` (a transform's ``caption`` list, in
+    order), then ``mode``/``text`` (the ``--caption`` shorthand, a flag layered on top). They
+    only ever touch captions of media messages — the text of a message that has no media is the
+    content itself and is sent as it is — unless ``text_too`` says the transform wants that text
     rewritten as well.
 
     ``hashtag`` (phase 8, ``RunOptions.topic_as_hashtag``) is different: it is appended last,
@@ -261,7 +261,9 @@ class CaptionPolicy:
 
     @property
     def all_ops(self) -> tuple[CaptionOp, ...]:
-        return ops_of_mode(self.mode, self.text) + self.ops
+        # a transform file is the base and ``--caption`` is a flag put on top of it: the file's
+        # operations run first, the flag's after them (docs/02-cli-ux.md, "Cờ chồng lên file")
+        return self.ops + ops_of_mode(self.mode, self.text)
 
     @property
     def rewrites(self) -> bool:

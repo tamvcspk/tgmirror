@@ -43,7 +43,13 @@ from tgmirror.cli.filter_options import (
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.refs import SOURCE_HELP
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
-from tgmirror.cli.selection_options import ExactOption, SelectionOption, check_args, for_channel
+from tgmirror.cli.selection_options import (
+    ExactOption,
+    SelectionOption,
+    check_args,
+    for_channel,
+    narrowed,
+)
 from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
 from tgmirror.engine import preview, selection
 from tgmirror.engine.backup import BackupWriter, WrongSource, begin_backup
@@ -162,7 +168,7 @@ def backup(
             has_link=has_link,
             link_domain=link_domain,
         )  # a bad filter is a usage error before anything is asked or written
-        check_args(selection, exact, filters)
+        check_args(selection, exact, filter_file)
         options = BackupOptions(
             src=src,
             dir=directory,
@@ -182,7 +188,7 @@ def backup(
                 chosen, named, _ = await asyncio.to_thread(
                     for_channel, rt.paths, channels, src=src, selection=selection, exact=exact
                 )
-                options = replace(options, filters=chosen, src=named)
+                options = replace(options, filters=narrowed(chosen, filters), src=named)
             async with opened_store(rt) as store:
                 flow = BackupFlow(rt, store, conn.gateway, channels, options)
                 await run_steps(rt.prompter, flow.steps())

@@ -91,7 +91,11 @@ def test_filter_file_still_refuses_a_selection_file(tmp_path: Path) -> None:
     ("text", "why"),
     [
         ("version: 2\nfilter: {}\n", "not supported"),
-        ("version: 1\nfilter: {}\ntransform: {topics: {}}\n", "transform: topics"),
+        ("version: 1\nfilter: {}\ntransform: {reply: keep}\n", "transform: reply"),
+        (
+            "version: 1\nfilter: {}\ntransform: {topics: {hashtag_to_topic: {}}}\n",
+            "transform: topics.hashtag_to_topic",
+        ),
         ("version: 1\nfilter: {}\ntransform: {caption: [{clear: no}]}\n", "transform: caption"),
         ("version: 1\nfilter: {}\nextra: 1\n", "not a selection key"),
         ("version: 1\nfilter: {include: [{media: [vidoe]}]}\n", "filter:"),
@@ -123,6 +127,32 @@ def test_a_transform_travels_with_the_selection(tmp_path: Path) -> None:
     sel.dump(sel.Selection(spec({})), plain)
     assert "transform" not in plain.read_text(encoding="utf-8")
     assert sel.load(plain).transform.is_empty
+
+
+def test_topic_rules_travel_with_the_selection_in_their_priority_order(tmp_path: Path) -> None:
+    """Phase 19b: the order of the hashtag rules (a priority) and an id key of ``topic_map``
+    (a number, not a title) must both survive the YAML file."""
+    path = tmp_path / "s.yaml"
+    transform = Transform.from_data(
+        {
+            "topics": {
+                "hashtag_to_topic": {
+                    "map": {"#zeta": "Z", "#alpha": "A"},
+                    "default": "Misc",
+                    "strip": True,
+                },
+                "topic_map": {12: "Merged", "Old": "New"},
+                "hashtag_format": "#t_{slug}",
+            }
+        }
+    )
+    sel.dump(sel.Selection(spec({}), None, None, transform), path)
+
+    loaded = sel.load(path).transform
+
+    assert loaded == transform
+    assert [r.tag for r in loaded.topics.routes] == ["#zeta", "#alpha"]
+    assert (12, "Merged") in loaded.topics.renames
 
 
 def test_exact_takes_exactly_the_frozen_messages(tmp_path: Path) -> None:

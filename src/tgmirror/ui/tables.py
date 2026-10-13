@@ -203,6 +203,10 @@ def print_plan(
                 size(way.bytes) if way.bytes else "",
             )
         console.print(grid)
+    if plan.topics:
+        rest = t("inspect.plan_topics_rest")
+        named = [(topic if topic is not None else rest, units) for topic, units in plan.topics]
+        console.print(Text(t("inspect.plan_topics", what=_kinds(named))))
     if plan.blocked:
         console.print(t("inspect.plan_blocked", what=_kinds(plan.blocked)))
     if plan.left_out:

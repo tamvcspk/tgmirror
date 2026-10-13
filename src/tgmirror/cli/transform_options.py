@@ -8,6 +8,7 @@ a guess.
 """
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
 
@@ -30,17 +31,41 @@ TransformOption = Annotated[
 ]
 
 
-async def resolve(flag: Path | None, from_selection: Transform | None = None) -> Transform:
-    """The transform to use: the ``--transform`` file, or the one a selection file carried.
-    Reads a file, so it is awaited like the other flag parsing steps that touch the disk."""
+HashtagToTopicOption = Annotated[
+    bool,
+    typer.Option(
+        "--hashtag-to-topic",
+        help="Send each message to a forum topic named after its first hashtag (created as it is "
+        "met, at most 30 new ones per run; a message without a hashtag goes to General). The "
+        "destination must be a forum: --dst-new makes one. Add rules, names and limits with "
+        "`topics:` in a --transform file; the flag then fills in the hashtags the file leaves "
+        "out.",
+        rich_help_panel="Transform",
+    ),
+]
+
+
+async def resolve(
+    flag: Path | None,
+    from_selection: Transform | None = None,
+    *,
+    hashtag_to_topic: bool = False,
+) -> Transform:
+    """The transform to use: the ``--transform`` file, or the one a selection file carried,
+    plus ``--hashtag-to-topic`` (``auto: all``) on top of either. Reads a file, so it is awaited
+    like the other flag parsing steps that touch the disk."""
     given = from_selection is not None and not from_selection.is_empty
     if flag is None:
-        return from_selection if from_selection is not None else Transform()
-    if given:
+        loaded = from_selection if from_selection is not None else Transform()
+    elif given:
         raise UsageProblem(
             "err.conflicting_flags", flags="--transform / --selection (its transform)"
         )
-    return await asyncio.to_thread(_load, flag)
+    else:
+        loaded = await asyncio.to_thread(_load, flag)
+    if hashtag_to_topic and not loaded.topics.auto_all:
+        loaded = replace(loaded, topics=replace(loaded.topics, auto_all=True))
+    return loaded
 
 
 def _load(path: Path) -> Transform:

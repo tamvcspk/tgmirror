@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from tgmirror.core.errors import TgMirrorError
-from tgmirror.core.gateway import CaptionMode, ChannelInfo, TelegramGateway
+from tgmirror.core.gateway import CaptionMode, ChannelInfo, ChatKind, TelegramGateway
 from tgmirror.engine import backupdir
 from tgmirror.engine.endpoints import SourceRestricted
 from tgmirror.engine.strategy import MODES, may_reupload
@@ -142,11 +142,8 @@ def check_options(request: RunRequest) -> None:
     if request.topic_as_hashtag and request.mode == "copy":
         raise InvalidOptions("topic_hashtag_needs_rewrite")
     transform = Transform.from_json(request.transform_json)  # TransformError: exit code 2
-    if not transform.is_empty:
-        if request.caption != CaptionMode.KEEP:
-            raise InvalidOptions("caption_and_transform")
-        if request.mode == "copy":
-            raise InvalidOptions("transform_needs_reupload")
+    if transform.rewrites and request.mode == "copy":  # (routing alone is a forward: allowed)
+        raise InvalidOptions("transform_needs_reupload")
 
 
 async def begin_run(
@@ -165,6 +162,10 @@ async def begin_run(
     """
     request = request or RunRequest()
     check_options(request)
+    if Transform.from_json(request.transform_json).routes_to_topics and dst.kind is not (
+        ChatKind.FORUM
+    ):  # a hashtag cannot be sent to a topic a destination without topics does not have
+        raise InvalidOptions("topics_need_forum")
     manifest = backupdir.read_manifest(Path(request.from_backup)) if request.from_backup else None
     if request.from_backup is not None:
         # N6, Phase 15b: never fall back to a live re-check just because the directory this pair

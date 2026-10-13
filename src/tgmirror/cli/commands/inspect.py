@@ -47,7 +47,7 @@ from tgmirror.cli.filter_options import (
 from tgmirror.cli.interrupt import stop_on_interrupt
 from tgmirror.cli.refs import SOURCE_HELP
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
-from tgmirror.cli.transform_options import TransformOption
+from tgmirror.cli.transform_options import HashtagToTopicOption, TransformOption
 from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.config import Limits
 from tgmirror.core.errors import FloodWait
@@ -214,6 +214,7 @@ def inspect_command(
         str | None, typer.Option("--caption-text", help="Text for --caption append.")
     ] = None,
     transform_file: TransformOption = None,
+    hashtag_to_topic: HashtagToTopicOption = False,
     reset_polls: Annotated[
         bool, typer.Option("--reset-polls", help="With --plan: polls are re-created.")
     ] = False,
@@ -268,7 +269,9 @@ def inspect_command(
             has_link=has_link,
             link_domain=link_domain,
         )  # a bad filter is a usage error before anything is read
-        transform = await resolve_transform(transform_file)  # a bad file: usage error, nothing read
+        transform = await resolve_transform(  # a bad file: usage error, nothing read
+            transform_file, hashtag_to_topic=hashtag_to_topic
+        )
         tables = _validated_by(by)
         if freeze and save is None:
             raise UsageProblem("inspect.freeze_needs_save")

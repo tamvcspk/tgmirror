@@ -94,7 +94,7 @@ class Reporter(Protocol):
     def notice(self, code: str, **params: object) -> None:
         """Something worth a line: ``analyzed``, ``cap_days``, ``reconciled``, ``reconcile_resend``,
         ``reconcile_ambiguous``, ``flood_waiting``, ``flood_stopped``, ``throttled``, ``paused``,
-        ``resumed``. Codes map to ``run.<code>`` in ``ui/messages.py``."""
+        ``resumed``, ``topics_limit``. Codes map to ``run.<code>`` in ``ui/messages.py``."""
         ...
 
     def progress(self, run: Run) -> None:
@@ -340,6 +340,7 @@ class Runner:
                 complete_albums=plan.complete_albums,
             )
         caption = CaptionMode(run.options.caption)
+        transform = Transform.from_json(run.options.transform_json)
         async with (
             aclosing(read) as units,
             aclosing(
@@ -351,8 +352,9 @@ class Runner:
                         caption,
                         by_reference=not run.options.src_protected,
                         topic_hashtag=_topic_hashtag(run),
-                        transform=Transform.from_json(run.options.transform_json),
+                        transform=transform,
                     ),
+                    topic_of=transform.topics.destination if transform.routes_to_topics else None,
                 )
             ) as stream,
             aclosing(self._ready(run, stream)) as ready_stream,
@@ -512,7 +514,7 @@ class Runner:
         non-forum source and for a forum's General topic alike (Telethon carries no ``reply_to``
         for a General message, unverified on a real account, docs/06-lo-trinh.md open question
         9) — Telegram is left to default a topic-less post to General on its own."""
-        if batch.topic_id is None:
+        if batch.topic_id is None and batch.dst_topic is None:
             return TopicRoute()
         assert self._guard is not None and self._reader is not None
         guard = self._guard
@@ -523,8 +525,15 @@ class Runner:
                     "create_topic", 1, lambda: self._gateway.create_topic(run.dst_id, title)
                 )
 
-            self._topics = TopicResolver(self._reader, self._store, run, create)
-        return await self._topics.resolve(batch.topic_id)
+            self._topics = TopicResolver(
+                self._reader,
+                self._store,
+                run,
+                create,
+                dst_reader=self._dst_reader,
+                on_limit=lambda limit: self._reporter.notice("topics_limit", limit=limit),
+            )
+        return await self._topics.resolve(batch.topic_id, batch.dst_topic)
 
     async def _send(self, run: Run, batch: Batch, ready: Ready | None = None) -> None:
         assert self._guard is not None and self._limiter is not None
@@ -540,6 +549,9 @@ class Runner:
                 and batch.strategy is Strategy.REFERENCE
             ):  # strategy B, by the files' ids: one unit
                 options = Options.of(run.options)
+                strip = Transform.from_json(run.options.transform_json).topics.strip_tag(
+                    batch.units[0]
+                )
                 results = await self._guard.write(
                     "send_by_reference",
                     batch.size,
@@ -558,10 +570,14 @@ class Runner:
                         ),
                         topic=route.dst_topic_id,
                         hashtag=route.hashtag,
+                        strip=strip,
                     ),
                 )
             elif ready is not None and ready.action is not None:  # strategy B: one unit
                 action, options = ready.action, Options.of(run.options)
+                strip = Transform.from_json(run.options.transform_json).topics.strip_tag(
+                    batch.units[0]
+                )
                 method = "send_text" if action.kind is ActionKind.PLACEHOLDER else "send_prepared"
                 results = await self._guard.write(
                     method,
@@ -576,6 +592,7 @@ class Runner:
                         self._tracker.update,
                         topic=route.dst_topic_id,
                         hashtag=route.hashtag,
+                        strip=strip,
                     ),
                 )
             else:
@@ -621,7 +638,7 @@ class Runner:
             alone = (
                 replace(batch, units=(unit,))
                 if i == last
-                else Batch((unit,), topic_id=unit.topic_id)
+                else Batch((unit,), topic_id=batch.topic_id, dst_topic=batch.dst_topic)
             )
             await self._send(run, alone)
 

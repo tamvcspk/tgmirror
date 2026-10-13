@@ -18,7 +18,7 @@ Inside a rule, predicates are ANDed; rules are ORed. Service messages are always
 | File | Job |
 |---|---|
 | `filters/model.py` | pydantic models: `FilterSpec`, `Rule`, ranges, `FilterError`. Validation + normalisation (lowercase hashtags, parse `2GB`, parse dates); `to_json`/`from_json` is the stored form and must round-trip |
-| `filters/parser.py` | `FlagFilters` (what the flags and the wizard collect) → `from_flags`, `from_file` (YAML), `resolve` (mixing `--filter-file` with flags is `FilterMix`) |
+| `filters/parser.py` | `FlagFilters` (what the flags and the wizard collect) → `from_flags`, `from_file` (YAML), `resolve` (the file is the base, flags are put on top with `layer`: they only narrow — Phase 19b; `--filter-file` with `--selection` is the one refused pair, two files) |
 | `filters/pushdown.py` | `plan_read(spec, cursor, pushdown=, content=) → ReadPlan(min_id, ServerFilter, complete_albums)` |
 | `filters/matcher.py` | `Matcher(spec).matches(unit) -> bool`; no I/O (regex has a timeout → `FilterError`) |
 | `engine/selection.py` | Phase 18a: selection files (`filter` + optional `source`/`snapshot`), `@last`, `to_flags` (filter → CLI flags, always verified by building the spec back); `--selection`/`--exact` wiring is `cli/selection_options.py` |

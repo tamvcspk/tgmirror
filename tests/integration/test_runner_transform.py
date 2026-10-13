@@ -120,17 +120,15 @@ async def test_a_transform_on_a_protected_source_needs_the_users_word(rig: Rig) 
     assert rig.dst_texts == ["", ""]
 
 
-def test_options_that_contradict_a_transform_are_refused() -> None:
+def test_options_that_contradict_a_transform_are_refused_and_a_caption_flag_is_not() -> None:
     ops = transform({"clear": True})
 
-    with pytest.raises(InvalidOptions) as mixed:
-        check_options(RunRequest(caption="none", transform_json=ops))
+    check_options(RunRequest(caption="none", transform_json=ops))  # a flag on top of a file: fine
     with pytest.raises(InvalidOptions) as forward_only:
         check_options(RunRequest(mode="copy", transform_json=ops))
     with pytest.raises(TransformError):
         check_options(RunRequest(transform_json='{"caption": [{"nope": 1}]}'))
 
-    assert mixed.value.key == "caption_and_transform"
     assert forward_only.value.key == "transform_needs_reupload"
 
 

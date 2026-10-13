@@ -6,8 +6,9 @@ rules:
 
 - ``--selection FILE`` is a selection file (or a plain filter file); ``--selection @last`` is what
   ``inspect`` last made of the command's source.
-- It replaces the filter flags and ``--filter-file`` (mixing them would be a guess), and fills in
-  the source when the command was given none.
+- It is the base: filter flags given as well narrow it (``filters.parser.layer``). Together with
+  ``--filter-file`` it is two files, and which is the base would be a guess. It fills in the
+  source when the command was given none.
 - A selection made for another source is refused, not used: it would select by ids that mean
   something else there.
 - ``--exact`` takes exactly the messages the selection froze, instead of judging the filter again.
@@ -25,6 +26,7 @@ from tgmirror.engine import selection as sel
 from tgmirror.engine.endpoints import find_channel
 from tgmirror.engine.transform import Transform
 from tgmirror.filters.model import FilterSpec
+from tgmirror.filters.parser import layer
 
 PANEL = "Filters"
 
@@ -33,7 +35,8 @@ SelectionOption = Annotated[
     typer.Option(
         "--selection",
         help="Use the filter of a selection file `tgmirror inspect --save` wrote, or @last for "
-        "what inspect last made of this source. Not with other filter flags.",
+        "what inspect last made of this source. Filter flags given as well narrow it; not with "
+        "--filter-file.",
         rich_help_panel=PANEL,
     ),
 ]
@@ -48,15 +51,20 @@ ExactOption = Annotated[
 ]
 
 
-def check_args(selection: str | None, exact: bool, filters: FilterSpec | None) -> None:
-    """The mistakes that need no file read: ``--exact`` alone, or a selection next to filter flags
-    (``filters`` is what those flags, or ``--filter-file``, parsed to, ``None`` when none)."""
+def check_args(selection: str | None, exact: bool, filter_file: Path | None) -> None:
+    """The mistakes that need no file read: ``--exact`` alone, or a selection next to a
+    ``--filter-file`` (two files, no base)."""
     if selection is None:
         if exact:
             raise UsageProblem("selection.exact_needs_selection")
         return
-    if filters is not None:
-        raise UsageProblem("err.conflicting_flags", flags="--selection / filter flags")
+    if filter_file is not None:
+        raise UsageProblem("err.conflicting_flags", flags="--selection / --filter-file")
+
+
+def narrowed(chosen: FilterSpec, flags: FilterSpec | None) -> FilterSpec:
+    """The selection's filter with the filter flags of the same command put on top."""
+    return chosen if flags is None else layer(chosen, flags)
 
 
 def _transform_of(loaded: sel.Selection, takes_transform: bool, path: Path) -> Transform:

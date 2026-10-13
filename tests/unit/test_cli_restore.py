@@ -348,3 +348,44 @@ def test_restore_applies_a_transform_to_the_backup_it_reads(
 
     assert result.exit_code == 0, result.output
     assert [m.text for m in gateway.messages[dst.id]] == ["news and #keep\n\nvia B"]
+
+
+def test_restore_routes_by_hashtag_into_a_forum_it_creates(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    """Phase 19b on the restore road: the hashtags are read from the backup's own text, the new
+    destination is a forum, and each message lands in the topic its hashtag names."""
+    out = tmp_path / "out"
+    src = gateway.add_channel("Source")
+    gateway.add_message(src.id, "py #python")
+    gateway.add_message(src.id, "rs #rust")
+    gateway.add_message(src.id, "nothing")
+    rt = make_runtime(gateway=gateway)
+    rt.paths.config_dir.mkdir(parents=True, exist_ok=True)
+    rt.paths.config_file.write_text(  # no real waiting between sends
+        "[limits]\nmin_delay = 0.01\nmax_delay = 0.02\nread_delay = 0.01\n"
+        "long_pause_range = [0, 0]\n",
+        encoding="utf-8",
+    )
+    assert cli.invoke(app, ["backup", "Source", str(out)], obj=rt).exit_code == 0
+    plan = tmp_path / "t.yaml"
+    plan.write_text(
+        "topics:\n  hashtag_to_topic:\n    map:\n      '#python': Python\n      '#rust': Rust\n",
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(
+        app,
+        ["restore", str(out), "--dst-new", "--yes", "--transform", str(plan)],
+        obj=make_runtime(gateway=gateway),
+    )
+
+    assert result.exit_code == 0, result.output
+    new = next(c for c in gateway.channels.values() if c.title == "Source" and c.id != src.id)
+    topics = {t.title: t.id for t in gateway.topics[new.id]}
+    assert set(topics) == {"Python", "Rust"}
+    assert {m.text: m.topic_id for m in gateway.messages[new.id]} == {
+        "py #python": topics["Python"],
+        "rs #rust": topics["Rust"],
+        "nothing": None,
+    }

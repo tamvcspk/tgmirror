@@ -38,8 +38,14 @@ from tgmirror.cli.filter_options import (
     collect,
 )
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
-from tgmirror.cli.selection_options import ExactOption, SelectionOption, check_args, for_channel
-from tgmirror.cli.transform_options import TransformOption
+from tgmirror.cli.selection_options import (
+    ExactOption,
+    SelectionOption,
+    check_args,
+    for_channel,
+    narrowed,
+)
+from tgmirror.cli.transform_options import HashtagToTopicOption, TransformOption
 from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.errors import ForwardsRestricted
 from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
@@ -116,6 +122,7 @@ def clone(
         str | None, typer.Option("--caption-text", help="Text for --caption append.")
     ] = None,
     transform_file: TransformOption = None,
+    hashtag_to_topic: HashtagToTopicOption = False,
     reset_polls: Annotated[
         bool,
         typer.Option(
@@ -297,8 +304,10 @@ def clone(
             if selection is not None:
                 raise UsageProblem("err.conflicting_flags", flags="--no-filter / --selection")
             filters = FilterSpec()
-        check_args(selection, exact, filters)
-        transform = await resolve_transform(transform_file)  # a bad file is a usage error too
+        check_args(selection, exact, filter_file)
+        transform = await resolve_transform(  # a bad file is a usage error too
+            transform_file, hashtag_to_topic=hashtag_to_topic
+        )
         options = CloneOptions(
             src=src,
             dst=dst,
@@ -339,9 +348,11 @@ def clone(
                 )
                 options = replace(
                     options,
-                    filters=chosen,
+                    filters=narrowed(chosen, options.filters),
                     src=named,
-                    transform=await resolve_transform(transform_file, carried),
+                    transform=await resolve_transform(
+                        transform_file, carried, hashtag_to_topic=hashtag_to_topic
+                    ),
                 )
             async with opened_store(rt) as store:
                 flow = CloneFlow(rt, store, conn.gateway, channels, options)
@@ -499,7 +510,12 @@ class CloneFlow:
             # plan_endpoints below raises SourceRestricted exactly as before).
             take_responsibility = await self._confirm_unadministered(source)
         # every refusal happens before any write
-        self._plan = plan_endpoints(source, destination, take_responsibility=take_responsibility)
+        self._plan = plan_endpoints(
+            source,
+            destination,
+            take_responsibility=take_responsibility,
+            forum=o.transform.routes_to_topics,
+        )
 
     def _may_download(self, source: ChannelInfo, destination: ChannelInfo | NewChannelSpec) -> bool:
         """Whether the mode given as a flag leaves a way to download and send again, which is the

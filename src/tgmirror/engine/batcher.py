@@ -35,6 +35,9 @@ class Batch:
     # forward/send call targets exactly one destination topic (docs/01-kien-truc.md, "Ánh xạ
     # topic").
     topic_id: int | None = None
+    # Title of the destination topic a hashtag rule chose (phase 19b ``hashtag_to_topic``); when
+    # set it decides where the batch goes and the source topic no longer does.
+    dst_topic: str | None = None
 
     @property
     def ids(self) -> list[int]:
@@ -57,6 +60,7 @@ async def batches(
     *,
     flush_after: int = FLUSH_AFTER,
     route: Router | None = None,
+    topic_of: Callable[[Unit], str | None] | None = None,
 ) -> AsyncIterator[Batch]:
     """Fill batches up to ``batch_size`` messages, never splitting a unit.
 
@@ -73,14 +77,23 @@ async def batches(
     a re-uploaded unit is emitted at once, alone. A change of source topic also ends the batch
     (phase 8: one call targets one destination topic); non-forum units all have ``topic_id is
     None``, so this never affects them.
+
+    ``topic_of`` (phase 19b) names the destination topic a hashtag rule gives a unit. Where it
+    does, that title is the unit's place and the source topic is not looked at; a batch ends
+    whenever the place changes, so the order within each destination topic is the source order.
     """
     current: list[Unit] = []
     count = skipped = upto = 0
     strategy = Strategy.COPY
     topic: int | None = None
+    dst_topic: str | None = None
 
     def emit() -> Batch:
-        return Batch(tuple(current), skipped, upto, strategy, topic_id=topic)
+        return Batch(tuple(current), skipped, upto, strategy, topic_id=topic, dst_topic=dst_topic)
+
+    def place(unit: Unit) -> tuple[int | None, str | None]:
+        title = topic_of(unit) if topic_of is not None else None
+        return (None, title) if title is not None else (unit.topic_id, None)
 
     async for item in stream:
         if isinstance(item, Skip):
@@ -91,12 +104,16 @@ async def batches(
             continue
         limit = batch_size() if callable(batch_size) else batch_size
         wanted = route(item) if route is not None else Strategy.COPY
+        where = place(item)
         if current and (
-            wanted is not strategy or item.topic_id != topic or count + len(item.messages) > limit
+            wanted is not strategy
+            or where != (topic, dst_topic)
+            or count + len(item.messages) > limit
         ):
             yield emit()
             current, count, skipped, upto = [], 0, 0, 0
-        strategy, topic = wanted, item.topic_id
+        strategy = wanted
+        topic, dst_topic = where
         current.append(item)
         count += len(item.messages)
         if strategy is not Strategy.COPY:  # nothing can join it

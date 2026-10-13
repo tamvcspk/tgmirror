@@ -28,10 +28,10 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 - [x] Phase 15b — Hardening toàn dự án (Đợt 1–3 xong 2026-09-27; **Đợt 4 xong 2026-10-12**, người dùng xác nhận phần thử thật). Xem "Phase 15b"
 - [x] Phase 16 — Phát hành 0.1.1 chính thức (2026-09-28): GitHub Release + `SHA256SUMS`, Docker Hub `0.1.1`/`latest`, PyPI — kiểm lại trực tiếp 2026-10-12
 
-**0.2.0 — Inspect & Transform (đã duyệt hướng 2026-10-12; Phase 18a xong code 2026-10-12, Phase 19 đang làm theo lát cắt, 19a xong code 2026-10-13, 18b chưa bắt đầu; chi tiết `07-inspect-transform.md`)**
+**0.2.0 — Inspect & Transform (đã duyệt hướng 2026-10-12; Phase 18a xong code 2026-10-12, Phase 19 đang làm theo lát cắt, 19a và 19b xong code 2026-10-13, 18b chưa bắt đầu; chi tiết `07-inspect-transform.md`)**
 
 - [x] Phase 18a — `tgmirror inspect`, metadata/predicate mới, pre-flight, file selection, `--selection` (2026-10-12; đã thử trên Telegram thật phần lớn, còn vài mục nhỏ ở spike 14, xem "Phase 18a — ghi chú")
-- [ ] Phase 19 — Transform khi sao chép (caption, hashtag ↔ topic, `topic_map`, reply, link nội bộ). **Làm theo ba lát cắt** (2026-10-13, xem "Phase 19 — ghi chú"): **19a xong code 2026-10-13** (chuỗi thao tác caption, `--transform`, `transform:` trong selection, nhớ theo cặp, pre-flight; **người dùng đã thử trên kênh thật 2026-10-13, mọi bước pass**); 19b (hashtag → topic, `topic_map`) và 19c (giữ reply, `forward_header`, link nội bộ) chưa bắt đầu
+- [ ] Phase 19 — Transform khi sao chép (caption, hashtag ↔ topic, `topic_map`, reply, link nội bộ). **Làm theo ba lát cắt** (2026-10-13, xem "Phase 19 — ghi chú"): **19a xong code 2026-10-13** (chuỗi thao tác caption, `--transform`, `transform:` trong selection, nhớ theo cặp, pre-flight; **người dùng đã thử trên kênh thật 2026-10-13, mọi bước pass**); **19b xong code 2026-10-13** (hashtag → topic, `topic_map`, `hashtag_format`, `strip`; chưa thử trên Telegram thật); 19c (giữ reply, `forward_header`, link nội bộ) chưa bắt đầu
 - [ ] Phase 18b — Chỉ mục metadata cục bộ, `inspect --quick`, màn hình "Khám phá"
 
 **0.3.0 — Thao tác tại chỗ (D10)**
@@ -905,12 +905,12 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 
 **Test mới** (1992 pass, 3 skip lúc ghi): `test_links.py`, `test_filter_metadata.py`, `test_inspect.py`, `test_preflight.py`, `test_selection.py`, `test_cli_inspect.py` (có "plan khớp lần clone thật" và "clone `@last` sao chép đúng số tin inspect đã báo", tức tiêu chí hoàn thành của 18a trên `FakeGateway`), bổ sung vào `test_telethon_messages.py`, `test_backupdir.py`, `test_backup_reader.py`, `test_architecture.py` và `tests/integration/test_pushdown_equivalence.py` (predicate mới + `message_ids` cùng predicate đẩy xuống được).
 
-### Phase 19 — ghi chú (bắt đầu 2026-10-13; lát 19a xong code và đã thử trên Telegram thật cùng ngày)
+### Phase 19 — ghi chú (bắt đầu 2026-10-13; lát 19a xong code và đã thử trên Telegram thật cùng ngày; 19b xong code cùng ngày)
 
 **Chia lát cắt** (như 11a/11b, 18a/18b; không đổi D1–D10): `07` mục 5 gồm sáu việc độc lập nhau về đường code, nên làm theo thứ tự phụ thuộc, mỗi lát cắt là một lần commit chạy được:
 
 - **19a — mô hình Transform + thao tác caption** (xong code): nền mà hai lát sau cùng dùng (`engine/transform.py`, `RunOptions.transform_json`, `--transform`, selection mang `transform:`). Không thêm hành vi Telegram mới ngoài viết lại caption phong phú hơn.
-- **19b — định tuyến** (chưa làm): hashtag → topic (`auto`/`map`/`strip`), `topic_map`, chọn định dạng hashtag của topic → hashtag. Đây là tiêu chí hoàn thành của cả Phase 19 ("clone kênh thường sang forum: đúng topic, đúng thứ tự trong từng topic").
+- **19b — định tuyến** (xong code, xem "Đã làm ở 19b"): hashtag → topic (`auto`/`map`/`default`/`strip`), `topic_map`, chọn định dạng hashtag của topic → hashtag. Đây là tiêu chí hoàn thành của cả Phase 19 ("clone kênh thường sang forum: đúng topic, đúng thứ tự trong từng topic").
 - **19c — tham chiếu** (chưa làm): giữ reply qua `msg_map`, `forward_header: keep` (`drop_author=False`), link nội bộ lùi. Cần spike 5 (mục 9 của `07`).
 
 **Đã làm ở 19a**:
@@ -932,6 +932,29 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 8. **Chưa làm** (còn lại của 07 mục 5.4 cho lát này): cảnh báo "đổi transform giữa chừng, tin đã chép không bị sửa lại" khi clone lại một cặp có transform khác — hiện chỉ ghi trong `02-cli-ux.md`; `scripts/mutation_check.py` chưa có mẫu cho cơ chế mới (người dùng chạy tay, mục nhớ về lệnh dev trên máy này).
 
 **Kiểm trên Telegram thật (người dùng, 2026-10-13)**: đã chạy theo kịch bản gồm pre-flight `inspect --plan --transform`, `clone --transform` sang kênh mới (hashtag, `replace`, `append`, định dạng quanh vùng bị đổi, album), `text_too`, nguồn `noforwards` với lời tuyên bố D3, `restore --transform` từ backup thật và `run` dùng lại transform đã nhớ — **toàn bộ pass**, không có sai lệch nào cần sửa. (Người dùng báo kết quả chung, không ghi từng bước; chưa ghi số liệu riêng.)
+
+**Đã làm ở 19b**:
+
+- `engine/transform.py`: `Transform.topics: TopicRules` (`routes` theo thứ tự ưu tiên, `auto_all`/`auto_limit`/`auto_skip`, `default`, `strip`, `renames`, `hashtag_format`), `is_empty`/`rewrites`/`routes_to_topics`; khóa `topics` hết bị đặt trước, còn `reply`/`forward_header`/`links` cho 19c. Dạng chuẩn JSON dùng danh sách mục một khóa (thứ tự là ưu tiên, `sort_keys` không phá) và `{id|title, to}` cho `topic_map` (JSON không giữ id là số khi làm khóa).
+- `engine/batcher.py` (`Batch.dst_topic`, `topic_of=`), `engine/runner.py` (truyền `transform.topics.destination`, `strip=` khi gửi), `engine/topics.py` (`TopicResolver.resolve(src_topic_id, dst_title)`; tìm topic đích theo tên trước khi tạo), `engine/reupload.py` (`strip=`, `_caption_of`), `engine/strategy.py` (`router`/`may_reupload` dùng `Transform.rewrites`; `strip` chỉ đẩy đúng unit có hashtag đã định tuyến sang gửi lại).
+- `engine/endpoints.py` (`plan_endpoints(forum=...)`, `Plan.forum`, `DestinationNotForum`), `engine/runs.py` (`check_options` và kiểm đích trong `begin_run`), `cli/commands/clone.py`/`restore.py` (truyền `forum=`), `cli/errors.py`, `ui/messages.py`.
+- `engine/preflight.py` + `ui/tables.py`: `Plan.topics` (unit theo topic đích) và số lần forward tính theo từng đoạn cùng nơi đến (trước đây `ceil(unit / batch)` bỏ qua việc topic đổi thì batch cắt).
+- Test mới: `tests/integration/test_runner_topic_rules.py` (định tuyến, thứ tự trong topic, album, `default`, topic có sẵn dùng lại, `strip` với/không `text_too`, `topic_map` gộp, hashtag thay topic, đích không phải forum), phần `topics` trong `tests/unit/test_transform.py`, `tests/unit/test_cli_transform.py` (đích mới là forum, đích thường bị từ chối, `run` tiếp, pre-flight), `tests/unit/test_preflight.py`, một ca restore trong `tests/unit/test_cli_restore.py`, một ca khứ hồi file selection trong `tests/unit/test_selection.py`; `auto: all` (giới hạn, `skip`, kết hợp `map`, `strip`) ở `test_runner_topic_rules.py`/`test_transform.py` và cờ `--hashtag-to-topic` ở `test_cli_transform.py`. Cả bộ: 2119 pass, 3 skip (trước 19b: 2049).
+
+**Khác với đề xuất ở `07` mục 5.1/5.4** (không đụng D1–D10):
+
+1. **Cờ tắt chỉ có `--hashtag-to-topic`** (= `auto: all`); không có `--topic-map` và không có bước wizard: phần còn lại qua `--transform` / `transform:` trong selection, như 19a (luật 7: cờ là tập cha của wizard).
+2. **`auto: all` thay cho "top N từ inspect"**: không quét cả nguồn để đếm (hàng nghìn lời gọi đọc không nên ẩn sau một khóa); thay vào đó mọi hashtag tự thành topic khi gặp, và một **giới hạn an toàn** (`limit`, mặc định 30 topic mới mỗi lần chạy, quá thì vào General kèm thông báo) chặn việc tạo hàng trăm topic ngoài ý muốn. Bản đầu của 19b chỉ có `auto: [danh sách]` và bắt liệt kê từng hashtag; người dùng phản hồi cùng ngày rằng phải tự động được, nên thêm `auto: all`. Mỗi tin chỉ vào **một** topic: hashtag đầu tiên viết trong tin (rule `map` thắng nếu có).
+3. **`default` chỉ cho tin không nằm trong topic nguồn nào**: forum nguồn → forum đích, tin trong topic "Tin tức" không có hashtag nào khớp vẫn về topic ánh xạ của nó, không bị gom vào `default`.
+4. **`topic_map` không có `drop`** (07 đề xuất): bỏ một topic là việc của filter `exclude: topic` — một cách duy nhất, và tin bị bỏ vẫn được đếm đúng ở `skipped_filter`.
+5. **Topic đích tìm theo tên, không thêm bảng**: không migration (`topic_map` giữ nguyên là id nguồn → id đích). Đổi nhỏ ở đường Phase 8: topic đích trùng tên được dùng lại thay vì tạo thêm; mất `topic_map` (hay crash giữa `create_topic` và lưu) không còn tạo topic trùng. Đánh đổi: user đổi tên topic ở đích giữa hai lần chạy thì lần sau tạo lại topic tên cũ.
+6. **`topic_map` cũng đặt tên hashtag** khi đích không phải forum (cùng với `hashtag_format`), nên không có lỗi "topic_map cần đích forum"; chỉ `hashtag_to_topic` buộc đích là forum.
+7. **Transform không chọn tin; chọn là việc của filter** (người dùng chốt 2026-10-13, sau khi thấy một danh sách hashtag "danh sách trắng" nằm trong transform là bộ lọc thứ hai làm `inspect` đếm sai, phá `--exact`, mất pushdown và không quét lại khi đổi): một danh sách `map`/`auto` chỉ nói tin đi đâu, tin còn lại vẫn clone (vào `default` hay General); muốn chỉ lấy vài hashtag thì `--hashtag`. `topic_map` chỉ đổi tên, chọn topic bằng `--topic`.
+8. **Cờ chồng lên file** (cùng quyết định): file là nền, cờ thêm/thay/làm hẹp theo từng loại trường (`03-filters.md`, "Cờ chồng lên file"; `02-cli-ux.md`, "Transform"). Đảo quyết định "không ghép" của 19a và `FilterMix`. `--caption` chạy **sau** các thao tác của file (`CaptionPolicy.all_ops` đổi thứ tự: trước 19b là cờ trước, nhưng hai thứ không đi cùng nhau được nên không lệnh cũ nào đổi nghĩa). Chỉ làm hẹp: hai danh sách "bất kỳ trong" của cùng một predicate không AND được trong một rule, nên cờ thay giá trị của file cho predicate đó (đã nói với người dùng).
+9. **Phase 19b1** (chưa làm, người dùng chốt tách 2026-10-13): cờ cho phần còn lại của `topics` — `--topic-map "Cũ=Mới"`, `--topic-default TÊN`, `--strip-routing-hashtag` — theo cùng phép ghép; hiện chỉ có `--hashtag-to-topic` (+ `--caption`).
+10. **`--mode copy` vẫn dùng được với định tuyến một mình** (forward vào topic); chỉ `strip` cần gửi lại.
+
+**Chưa kiểm trên Telegram thật** (người dùng chạy; cùng câu hỏi mở số 9 ở "Việc cần xác minh sớm"): `ForwardMessagesRequest(top_msg_id=...)` và `reply_to=<id topic>` có đưa tin vào đúng topic không khi nguồn **không phải** forum; một album forward vào topic có giữ nhóm không; tên `General` của topic 1 theo ngôn ngữ giao diện của tài khoản (nếu bản địa hóa thì `General` trong file không khớp, tin vào topic mới tên "General"); `create_topic` của một kênh broadcast vừa chuyển thành forum (`--dst-new` từ nguồn kênh thường).
 
 ### Đã chốt (người dùng duyệt 2026-09-25)
 

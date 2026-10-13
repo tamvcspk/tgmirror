@@ -89,7 +89,7 @@ Nhiều rule OR hoặc `regex`/`contains` → không đẩy phần đó (quét �
 --forwarded | --not-forwarded               --forwarded-from -1001234567890 (lặp được = OR, id đã đánh dấu)
 --has-link                                  --link-domain example.com (lặp được = OR)
 --album any|all|first
---filter-file filters.yaml  (không trộn với các flag lọc trên; nếu trộn thì báo lỗi rõ ràng, mã 2; chỉ nhận file filter thuần)
+--filter-file filters.yaml  (file là nền, các flag lọc trên chồng lên và chỉ làm hẹp thêm, xem "Cờ chồng lên file"; chỉ nhận file filter thuần)
 --selection FILE | @last    --exact   (Phase 18a, `clone`/`backup`/`restore`; không trộn với cờ lọc; xem "Selection" dưới)
 --pushdown / --no-pushdown  --preview / --no-preview   (không phải filter, chỉ của `new`)
 ```
@@ -111,6 +111,21 @@ Filter được **nhớ** theo cặp nguồn/đích (`mirrors.filters_json`). Ch
 - **`--no-filter`** → bỏ filter đã nhớ (cũng là quét lại từ đầu, không sao chép trùng). Không dùng chung với cờ lọc (mã 2).
 
 Wizard: với cặp đã từng clone, bước filter có thêm lựa chọn đầu tiên "Giữ filter của lần chạy trước" (tương đương không đưa cờ lọc). Chỉ có logic này ở `Store.start_run`; đây là chỗ **duy nhất** con trỏ được lùi (xem `04-state-checkpoint.md`). Nếu tiến trình khác đang chạy cặp đó (heartbeat còn mới) thì từ chối, không đổi gì.
+
+## Cờ chồng lên file (Phase 19b)
+
+`--filter-file` và `--selection` là **nền**; các cờ lọc đi cùng (`--media`, `--hashtag`, `--since`, ...) đặt lên trên và **chỉ làm hẹp** — đọc dòng lệnh là biết cờ thêm gì, không cần mở file. (Trước 19b, trộn file với cờ là lỗi `FilterMix`; `--filter-file` cùng `--selection` vẫn là lỗi: hai file, không có nền.)
+
+| Phần của filter | Cờ làm gì với giá trị trong file |
+|---|---|
+| rule `include` | cờ tạo **một** rule, cộng (AND) vào **từng** rule của file (các rule của file là phương án thay thế, cờ đúng với mọi phương án); file không có rule thì rule của cờ là rule duy nhất |
+| cùng một predicate ở cả hai (vd. `hashtag`) | giá trị của cờ **thay** giá trị của file (hai danh sách "bất kỳ trong" không AND được trong một rule) |
+| `exclude` | cả hai cùng áp |
+| `date` | `--since`/`--until` thay đúng đầu đó, đầu kia giữ của file; kết quả `from >= to` là lỗi filter |
+| `album` | giá trị cờ, nếu có nêu |
+| `id`, `message_ids` (`--exact`) | giữ của file (không có cờ) |
+
+Kết quả đã ghép là filter của lần chạy: được lưu theo cặp (`filters_json`) và `inspect --save` ghi đúng nó, nên cờ → file → cờ khứ hồi được.
 
 ## Selection — mang một filter từ `inspect` sang lệnh thật (Phase 18a)
 
@@ -134,6 +149,6 @@ snapshot:                                        # chỉ có khi --freeze (và l
 - **`@last`**: mỗi lần `inspect` quét **xong** một nguồn, nó ghi đè `<data_dir>/selections/last-<id nguồn>.yaml` (+ `.ids`, luôn có danh sách để `--exact` chạy được trên nó). Quét dở (Ctrl+C, FloodWait quá dài) không ghi — một danh sách dở không phải kết quả. Chỉ là file: không nằm trong `tgmirror.db`, không đi theo `appdata export`, không liệt kê hay quản lý. `--selection @last` cần biết nguồn (`--src`/`<src>`/thư mục backup) vì file được đặt tên theo id nguồn.
 - **Nguồn**: `source` điền cho `--src`/`<src>`/`<dir>` khi lệnh không có; có cả hai mà khác nhau thì mã 2 ("id tin nhắn chỉ có nghĩa trong đúng nguồn của nó"). Selection làm từ một thư mục backup (`source.backup`) điền cho `restore`.
 - **Sống hay đóng băng**: mặc định filter của selection được **đánh giá lại lúc chạy** (delta: lần sau lấy cả tin mới khớp; phần `snapshot` bị bỏ qua). `--exact` chỉ lấy đúng các id đã đóng băng — dựng thành predicate `message_ids` của filter (nên resume/delta/lưu `filters_json` không đổi gì), filter gốc không đánh giá lại. Không có `snapshot` thì `--exact` bị từ chối (mã 2).
-- **Kiểm tra** như filter: sai thì mã 2 trước khi hỏi hay ghi gì. Khóa lạ, `version` mới hơn, hoặc một phần của `transform` chưa có (Phase 19b/c) bị từ chối thay vì dùng một nửa. Phase 19a: `transform:` là một mục của file selection (cùng ngôn ngữ với `--transform`, `02-cli-ux.md`, "Transform"); `clone`/`restore` áp nó, `backup` từ chối file có transform; `--transform` cùng `--selection` có transform là lỗi mã 2 (không ghép hai danh sách).
+- **Kiểm tra** như filter: sai thì mã 2 trước khi hỏi hay ghi gì. Khóa lạ, `version` mới hơn, hoặc một phần của `transform` chưa có (Phase 19c: `reply`, `forward_header`, `links`) bị từ chối thay vì dùng một nửa; `transform:` mang cả `caption` (19a) lẫn `topics` (19b). Phase 19a: `transform:` là một mục của file selection (cùng ngôn ngữ với `--transform`, `02-cli-ux.md`, "Transform"); `clone`/`restore` áp nó, `backup` từ chối file có transform; `--transform` cùng `--selection` có transform là lỗi mã 2 (hai file, không biết file nào là nền; cờ thì chồng lên file được).
 - **Wizard** của `clone`/`backup`/`restore`: bước filter có thêm lựa chọn "Dùng kết quả khám phá gần nhất của nguồn này (N tin, giờ)" khi `@last` của nguồn đó tồn tại (dùng filter của nó, đánh giá sống); lựa chọn "file YAML" nhận cả file filter lẫn file selection.
 - **`inspect` in sẵn lệnh kế tiếp** ("Dùng tiếp với đúng filter này"): `engine/selection.py::to_flags` dựng lại cờ từ `FilterSpec`, và **luôn kiểm bằng cách dựng ngược cờ thành filter** — chỉ in khi đúng nguyên (nhiều rule include, `mime`, `duration`, `id`, ... không có cờ → in `--selection @last` hoặc đường dẫn `--save`).

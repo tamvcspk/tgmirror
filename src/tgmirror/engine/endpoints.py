@@ -47,6 +47,15 @@ class DestinationNotWritable(EndpointError):
         self.dst = dst
 
 
+class DestinationNotForum(EndpointError):
+    """A transform sends messages to topics (``hashtag_to_topic``, phase 19b) and the destination
+    chosen has none."""
+
+    def __init__(self, dst: ChannelInfo) -> None:
+        super().__init__(f"{dst.title!r} is not a forum, so it has no topics to send messages to")
+        self.dst = dst
+
+
 class SameChannel(EndpointError):
     def __init__(self) -> None:
         super().__init__("source and destination are the same chat")
@@ -85,6 +94,7 @@ class Plan:
     dst: ChannelInfo | NewChannelSpec
     warnings: tuple[str, ...] = ()
     protected: bool = False
+    forum: bool = False  # a destination created for it has topics, whatever the source's kind
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,13 +156,21 @@ def validate_new_channel(spec: NewChannelSpec) -> NewChannelSpec:
 
 
 def plan_endpoints(
-    src: ChannelInfo, dst: ChannelInfo | NewChannelSpec, *, take_responsibility: bool = False
+    src: ChannelInfo,
+    dst: ChannelInfo | NewChannelSpec,
+    *,
+    take_responsibility: bool = False,
+    forum: bool = False,
 ) -> Plan:
     """Check the pair without touching Telegram. Raises an ``EndpointError``.
 
     ``take_responsibility`` is ``--yes-i-administer-this-channel``: the user says the source is
     theirs to copy. It is the only way past a protected source this account does not administer
     (decision D3); tgmirror cannot check the claim, and the responsibility is entirely theirs.
+
+    ``forum`` (phase 19b, a transform that sends messages to topics by hashtag) needs a
+    destination with topics: a new one is created as a forum, whatever the source is, and an
+    existing one that is not raises ``DestinationNotForum``.
     """
     warnings: list[str] = []
     protected = False
@@ -166,21 +184,23 @@ def plan_endpoints(
         protected = True
 
     if isinstance(dst, NewChannelSpec):
-        return Plan(src, validate_new_channel(dst), tuple(warnings), protected)
+        return Plan(src, validate_new_channel(dst), tuple(warnings), protected, forum)
 
     if dst.id == src.id:
         raise SameChannel
     if not (dst.is_admin and dst.can_post):
         raise DestinationNotWritable(dst)
+    if forum and dst.kind is not ChatKind.FORUM:
+        raise DestinationNotForum(dst)
     if src.kind is ChatKind.FORUM and dst.kind is not ChatKind.FORUM:
         warnings.append("topic_loss")
-    return Plan(src, dst, tuple(warnings), protected)
+    return Plan(src, dst, tuple(warnings), protected, forum)
 
 
 async def materialize(gateway: TelegramGateway, plan: Plan) -> Endpoints:
     """Create the destination if the plan asks for one."""
     if isinstance(plan.dst, NewChannelSpec):
-        kind = _dst_kind_for(plan.src.kind)
+        kind = ChatKind.FORUM if plan.forum else _dst_kind_for(plan.src.kind)
         dst = await gateway.create_channel(plan.dst.title, plan.dst.about, kind=kind)
         return Endpoints(plan.src, dst, created=True, warnings=plan.warnings)
     return Endpoints(plan.src, plan.dst, created=False, warnings=plan.warnings)

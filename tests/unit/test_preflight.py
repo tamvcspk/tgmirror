@@ -6,7 +6,8 @@ import pytest
 
 from tgmirror.core.config import Limits
 from tgmirror.core.gateway import CaptionMode, MediaKind, SrcMessage, Unit
-from tgmirror.engine.preflight import PlanOptions, Preflight
+from tgmirror.engine.preflight import PlanOptions, Preflight, plan_to_dict
+from tgmirror.engine.transform import Transform
 
 NOW = datetime(2024, 1, 1, tzinfo=UTC)
 MB = 1024**2
@@ -121,3 +122,45 @@ def test_pacing_is_the_limiters_floor_for_the_calls() -> None:
 
     assert result.write_calls == 4
     assert result.pacing_seconds == pytest.approx(4 * 2.0 + 2 * 20.0)
+
+
+def routing(**options: object) -> Transform:
+    return Transform.from_data({"topics": {"hashtag_to_topic": options}})
+
+
+def test_hashtag_routing_counts_units_by_topic_and_cuts_batches_where_it_changes() -> None:
+    tagged = lambda tag: unit(msg(tag, hashtags=(tag,)))  # noqa: E731
+    units = [
+        tagged("#py"), tagged("#py"), tagged("#rs"), tagged("#py"),  # three stretches
+        unit(msg("none")),
+    ]  # fmt: skip
+
+    result = plan(
+        units,
+        Limits(batch_size=20),
+        transform=routing(map={"#py": "Python", "#rs": "Rust"}),
+    )
+
+    assert dict(result.topics) == {"Python": 3, "Rust": 1, None: 1}
+    # one forward per stretch of units for the same place, not ceil(5 / 20) = 1
+    assert result.write_calls == 4
+    assert plan_to_dict(result)["topics"] == [
+        {"topic": "Python", "units": 3},
+        {"topic": "Rust", "units": 1},
+        {"topic": None, "units": 1},
+    ]
+
+
+def test_a_default_or_auto_names_where_the_rest_goes() -> None:
+    units = [unit(msg("a", hashtags=("#py",))), unit(msg("none"))]
+
+    result = plan(units, transform=routing(map={"#py": "Python"}, default="Misc"))
+    assert dict(result.topics) == {"Python": 1, "Misc": 1}
+    result = plan(units, transform=routing(map={"#py": "Python"}, auto="all"))
+    assert dict(result.topics) == {"Python": 1, None: 1}
+
+
+def test_without_routing_there_is_no_topic_breakdown() -> None:
+    result = plan([unit(msg("a", hashtags=("#py",)))], transform=Transform())
+
+    assert result.topics == ()

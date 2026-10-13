@@ -97,33 +97,26 @@ def test_a_yaml_file_gives_the_same_stored_filter_as_the_flags(
     assert filters_of(rt) == NEWS_SINCE_2024
 
 
-def test_a_yaml_file_together_with_flags_is_a_usage_error(
+def test_a_yaml_file_with_flags_on_top_is_narrowed_by_them(
     make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
 ) -> None:
-    source_and_target(gateway)
+    _, dst = tagged_source(gateway)  # m1..m6, the odd ones carry #k
     path = tmp_path / "filters.yaml"
-    path.write_text("include: [{media: [video]}]\n", encoding="utf-8")
+    path.write_text('include: [{hashtag: ["#k"]}]\n', encoding="utf-8")
     rt = make_runtime(gateway=gateway)
 
     result = runner.invoke(
         app,
-        [
-            "clone",
-            "--src",
-            "Source",
-            "--dst",
-            "Copy",
-            "--yes",
-            "--filter-file",
-            str(path),
-            "--media",
-            "photo",
-        ],
+        ["clone", "--src", "Source", "--dst", "Copy", "--yes"]
+        + ["--filter-file", str(path), "--contains", "m3"],
         obj=rt,
     )
 
-    assert result.exit_code == 2 and "--filter-file" in result.output
-    assert saved_runs(rt) == []
+    assert result.exit_code == 0, result.output
+    assert [m.text for m in gateway.messages[dst]] == [
+        "m3 #k"
+    ]  # #k from the file, m3 from the flag
+    assert filters_of(rt)["include"] == [{"contains": ["m3"], "hashtag": ["#k"]}]
 
 
 def test_a_bad_filter_is_refused_before_anything_is_created(

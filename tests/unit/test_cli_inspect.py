@@ -555,10 +555,13 @@ def test_selection_mistakes_are_usage_errors(
     chosen = tmp_path / "s.yaml"
     cli.invoke(app, ["inspect", "Source", "--save", str(chosen)], obj=rt)
     base = ["clone", "--dst-new", "D", "--yes"]
+    other_file = tmp_path / "f.yaml"
+    other_file.write_text("include: [{media: [video]}]\n", encoding="utf-8")
 
     cases = [
         [*base, "--src", "Source", "--exact"],  # --exact alone
-        [*base, "--src", "Source", "--selection", str(chosen), "--media", "video"],  # + flags
+        # two files, no base
+        [*base, "--src", "Source", "--selection", str(chosen), "--filter-file", str(other_file)],
         [*base, "--selection", "@last"],  # which source?
         [*base, "--src", "Other", "--selection", "@last"],  # nothing inspected there yet
         [*base, "--src", "Other", "--selection", str(chosen)],  # made for another source
@@ -569,6 +572,25 @@ def test_selection_mistakes_are_usage_errors(
         result = cli.invoke(app, argv, obj=rt)
         assert result.exit_code == 2, (argv, result.exit_code, result.output)
     assert copied_ids(gateway) == []
+
+
+def test_filter_flags_narrow_the_selection_they_are_given_with(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    mixed_source(gateway)  # m0..m5, the even ones are videos (ids 1, 3, 5)
+    rt = make_runtime(gateway=gateway)
+    chosen = tmp_path / "s.yaml"
+    cli.invoke(app, ["inspect", "Source", "--media", "video", "--save", str(chosen)], obj=rt)
+
+    result = cli.invoke(
+        app,
+        ["clone", "--src", "Source", "--dst-new", "D", "--yes"]
+        + ["--selection", str(chosen), "--contains", "m2"],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert copied_ids(gateway) == [3]  # a video (the selection) that also says m2 (the flag)
 
 
 def test_a_partial_scan_is_not_kept_as_a_selection(

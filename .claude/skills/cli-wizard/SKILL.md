@@ -45,7 +45,9 @@ Every wizard outcome must be expressible with flags/YAML, and both paths call th
 - [ ] Never prints secrets (`api_hash`, session, phone, login code). Phone/code prompts use hidden input where applicable.
 - [ ] Tests with Typer's `CliRunner` and `FakeGateway`.
 
-## Transform (Phase 19a)
+## Transform (Phase 19a, 19b)
+
+- Phase 19b adds one switch, `--hashtag-to-topic` (`transform_options.HashtagToTopicOption`, declared by `clone`, `restore`, `inspect`; `resolve(..., hashtag_to_topic=)` sets `topics.auto_all` on top of the file's or selection's transform); everything else is `topics:` in the same file. What it changes for a flow is the destination: a transform that routes by hashtag (`Transform.routes_to_topics`) makes `plan_endpoints(..., forum=True)` create a new destination as a **forum** whatever the source is, and refuse an existing one that is not (`DestinationNotForum`, exit 2) — `CloneFlow._pick_destination` and `RestoreFlow._pick_destination` both pass it; `begin_run` re-checks (`InvalidOptions("topics_need_forum")`) because `run`/`retry` never go through `plan_endpoints`.
 
 - `--transform FILE` lives in `cli/transform_options.py` (`TransformOption`, `resolve`) and is declared by `clone`, `restore` and `inspect` (`--plan` only). The file is parsed in `command()` before anything is asked or created, so a bad transform is exit 2; `Transform` (pure, `engine/transform.py`) is then carried as `CloneOptions.transform`/`RestoreOptions.transform` and ends in `RunRequest.transform_json`. A selection's `transform:` arrives through `for_channel`/`for_backup(takes_transform=True)`; `backup` leaves it `False`, so a selection with a transform is refused there. Any command that builds a `RunRequest` from a remembered pair must copy `transform_json` (`run.py`, `retry.py`).
 - It is not a wizard step (the flag is a superset of the wizard, rule 7): giving one counts as having answered the strategy questions (`CloneFlow._pick_strategy`'s `given`). `wizard._ask_file` refuses a selection file that carries one rather than use its filter and silently drop the rest.

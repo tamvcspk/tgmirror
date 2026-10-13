@@ -45,8 +45,9 @@ from tgmirror.cli.selection_options import (
     SelectionOption,
     check_args,
     for_backup,
+    narrowed,
 )
-from tgmirror.cli.transform_options import TransformOption
+from tgmirror.cli.transform_options import HashtagToTopicOption, TransformOption
 from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.gateway import ChannelInfo, TelegramGateway, TopicInfo
 from tgmirror.engine import preview, selection
@@ -112,6 +113,7 @@ def restore(
         str | None, typer.Option("--caption-text", help="Text for --caption append.")
     ] = None,
     transform_file: TransformOption = None,
+    hashtag_to_topic: HashtagToTopicOption = False,
     ignore_unsupported: Annotated[
         bool,
         typer.Option(
@@ -238,15 +240,18 @@ def restore(
             has_link=has_link,
             link_domain=link_domain,
         )  # a bad filter is a usage error before anything is asked or written
-        check_args(selection, exact, filters)
+        check_args(selection, exact, filter_file)
         carried: Transform | None = None
         if selection is not None:
-            filters, directory_named, carried = await asyncio.to_thread(
+            chosen, directory_named, carried = await asyncio.to_thread(
                 _selection_for, rt, directory, selection, exact
             )
+            filters = narrowed(chosen, filters)
         else:
             directory_named = directory
-        transform = await resolve_transform(transform_file, carried)
+        transform = await resolve_transform(
+            transform_file, carried, hashtag_to_topic=hashtag_to_topic
+        )
         options = RestoreOptions(
             dir=directory_named,
             dst=dst,
@@ -443,7 +448,9 @@ class RestoreFlow:
             destination = await self._ask_destination(source)
         else:
             raise UsageProblem("err.missing_flag", flag="--dst or --dst-new")
-        self._plan = plan_endpoints(source, destination, take_responsibility=True)
+        self._plan = plan_endpoints(
+            source, destination, take_responsibility=True, forum=o.transform.routes_to_topics
+        )
         if (
             isinstance(self._plan.dst, ChannelInfo)
             and (last := await self._store.latest_run(source.id, self._plan.dst.id)) is not None

@@ -59,6 +59,9 @@ class Plan:
     days: int  # at the daily cap
     transfer_bytes: int  # what is downloaded (and uploaded again, for a reupload)
     largest_file: int
+    # phase 19b: units by the destination topic a hashtag rule gives them (``None`` = no rule did:
+    # the source topic's own mapping, or General); empty without ``hashtag_to_topic``
+    topics: tuple[tuple[str | None, int], ...] = ()
 
 
 @dataclass(slots=True)
@@ -98,6 +101,11 @@ class Preflight:
             options.placeholder,
         )
         self._by: dict[str, _Counts] = {}
+        self._topics: dict[str | None, int] = {}
+        # forwards go out one batch per stretch of units for the same place: a topic that changes
+        # ends a batch (``engine/batcher.py``)
+        self._segments: list[int] = []
+        self._place: tuple[int | None, str | None] | None = None
         self._blocked: dict[str, int] = {}
         self._left_out: dict[str, int] = {}
         self._largest = 0
@@ -106,6 +114,18 @@ class Preflight:
         self._largest = max([self._largest, *(m.size or 0 for m in unit.messages)])
         way = self._way(unit)
         self._by.setdefault(way, _Counts()).add(unit)
+        title = self._title(unit)
+        if self.options.transform.routes_to_topics and way != "left_out":
+            self._topics[title] = self._topics.get(title, 0) + 1
+        if way == Strategy.COPY.value:
+            place = (None, title) if title is not None else (unit.topic_id, None)
+            if place != self._place or not self._segments:
+                self._segments.append(0)
+            self._place = place
+            self._segments[-1] += 1
+
+    def _title(self, unit: Unit) -> str | None:
+        return self.options.transform.topics.destination(unit)
 
     def _way(self, unit: Unit) -> str:
         if self.options.kind == "backup":
@@ -148,12 +168,13 @@ class Preflight:
             else math.ceil(messages / self._limits.daily_cap),
             transfer_bytes=transfer,
             largest_file=self._largest,
+            topics=tuple(sorted(self._topics.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))),
         )
 
     def _write_calls(self) -> int:
         """A forward call carries up to ``batch_size`` units; any other way is a call per unit."""
-        copy = self._by.get(Strategy.COPY.value)
-        calls = math.ceil(copy.units / self._limits.batch_size) if copy else 0
+        batch = self._limits.batch_size
+        calls = sum(math.ceil(units / batch) for units in self._segments)
         for name in (Strategy.REFERENCE.value, Strategy.REUPLOAD.value):
             if name in self._by:
                 calls += self._by[name].units
@@ -180,4 +201,5 @@ def plan_to_dict(plan: Plan) -> dict[str, object]:
         "days": plan.days,
         "transfer_bytes": plan.transfer_bytes,
         "largest_file": plan.largest_file,
+        "topics": [{"topic": topic, "units": units} for topic, units in plan.topics],
     }

@@ -13,7 +13,7 @@ from collections.abc import Callable
 from enum import StrEnum
 
 from tgmirror.core.gateway import CaptionMode, MediaKind, Unit
-from tgmirror.engine.transform import Transform
+from tgmirror.engine.transform import TopicRules, Transform
 
 MODES = ("auto", "copy", "reupload")
 
@@ -39,7 +39,7 @@ def may_reupload(
     rewrites = (
         caption != CaptionMode.KEEP
         or topic_hashtag
-        or (transform is not None and not transform.is_empty)
+        or (transform is not None and transform.rewrites)
     )
     return mode == "reupload" or (mode == "auto" and rewrites)
 
@@ -112,16 +112,17 @@ def router(
     (phase 19) rewrites captions (and, with ``text_too``, plain text) the same way."""
     if mode == "reupload":
         return lambda unit: Strategy.REUPLOAD
-    transformed = transform is not None and not transform.is_empty
-    rewrites_text = transform is not None and transform.rewrites_text
-    caption_rewrites = caption is not CaptionMode.KEEP or transformed
-    if mode == "copy" or (not caption_rewrites and not topic_hashtag):
+    topics = transform.topics if transform is not None else TopicRules()
+    caption_ops = caption is not CaptionMode.KEEP or (transform is not None and transform.caption)
+    text_too = transform is not None and transform.text_too
+    if mode == "copy" or not (caption_ops or topics.strips or topic_hashtag):
         return lambda unit: Strategy.COPY
 
     def auto(unit: Unit) -> Strategy:
-        rewritten = (caption_rewrites and has_caption(unit)) or (
-            rewrites_text and has_plain_text(unit)
-        )
+        # caption operations change every unit; ``strip`` (phase 19b) only the ones a rule routed
+        # by a hashtag, whose caption must lose it, which no forward does
+        changed = bool(caption_ops) or (topics.strips and topics.strip_tag(unit) is not None)
+        rewritten = changed and (has_caption(unit) or (text_too and has_plain_text(unit)))
         if not (rewritten or (topic_hashtag and takes_hashtag(unit))):
             return Strategy.COPY
         return Strategy.REFERENCE if by_reference and has_files(unit) else Strategy.REUPLOAD
