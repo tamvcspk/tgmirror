@@ -15,7 +15,7 @@ from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import run_steps
 
 
-def backup_screen(app: AppContext) -> WizardScreen:
+def backup_screen(app: AppContext, options: BackupOptions | None = None) -> WizardScreen:
     async def flow(prompter: MenuPrompter) -> ScreenResult:
         gateway = app.gateway
         channels = await gateway.list_channels()
@@ -26,7 +26,7 @@ def backup_screen(app: AppContext) -> WizardScreen:
             app.store,
             gateway,
             channels,
-            BackupOptions(),
+            options or BackupOptions(),
             prompter=prompter,
             interactive=True,
             echo=prompter.echo,

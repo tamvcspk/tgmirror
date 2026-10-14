@@ -30,6 +30,7 @@ from tgmirror.core.errors import (
     PeerFlood,
     RunBusy,
     SchemaTooNew,
+    ServerFailed,
     SessionBusy,
     StoreError,
     TgMirrorError,
@@ -124,6 +125,8 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.too_many_channels")
         case SessionBusy():
             return t("err.session_busy")
+        case ServerFailed():
+            return t("err.server_failed")
         case Transient():
             return t("err.transient")
         case ChannelNotFound():

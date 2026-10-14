@@ -268,14 +268,22 @@ Chi tiết lệnh ở `02-cli-ux.md` ("Khám phá nguồn"), file selection ở 
 - **`engine/selection.py`**: đọc/ghi file selection (YAML + `.ids`, ghi qua file tạm rồi đổi tên, `.ids` trước), `to_flags` (filter → cờ, có kiểm ngược), `last_discovery` cho wizard. `cli/selection_options.py` là phần CLI của `--selection`/`--exact` (so nguồn, điền `--src`/`<dir>`). `--exact` được cài bằng predicate `message_ids` của `FilterSpec` — không đổi `Runner`, nên delta/resume/`filters_json` chạy như một filter bình thường.
 - **Luật 1**: `inspect` đi qua `FloodGuard` (`FloodOwner.of_inspect`); chỉ `list_channels`/`list_topics` đầu lệnh là bước chuẩn bị một lần. Test kiến trúc giữ điều đó (`test_inspect_reads_a_channel_only_through_the_flood_guard`).
 
+## Chỉ mục và màn hình Khám phá (Phase 18b)
+
+- **`store/index.py`** (`MetadataIndex`): một file SQLite mỗi nguồn (`<data_dir>/index/<src id>.db`), bảng `messages(id, data JSON)` và `meta` (JSON theo khóa). Chỉ biết SQL, không biết tin nhắn là gì; `INDEX_VERSION` khác (hay file hỏng) thì **dựng lại**, vì đây là cache. `put` là một giao dịch di chuyển `last_id` cùng với dòng đã lưu; `begin_refresh`/`finish_refresh` bỏ tin không còn sau khi một lần đọc lại đi hết nguồn.
+- **`engine/index.py`**: `encode`/`decode` một `SrcMessage` (mọi trường; trường đã bỏ về sau thì rơi, không lỗi), `IndexedSource` (nguồn mô tả đủ để báo cáo không cần Telegram), `update` (đọc phần mới hơn `last_id` qua bất kỳ `MessageReader` — luật 1: gateway sống đi qua `FloodGuard`; giữ phần đã đọc kể cả khi dừng hay có FloodWait), `IndexReader` (một `MessageReader` chỉ cho đọc cả nguồn: `fetch`/`prepare`/`export_unit` ném lỗi, để không đường nào ghi hay tải dựa vào chỉ mục), `find` (tìm chỉ mục theo id/`@username`/tên cho `--offline`).
+- **`engine/explore.py`** (thuần): `Explorer` giữ các unit của một nguồn và các bước lọc (`Step`: include/exclude, bảng, khóa dòng); `spec_of` dựng `FilterSpec` từ các bước (include = một rule AND, mỗi exclude một rule, tháng = `date`), `predicate_of` đổi một dòng thành vị từ hoặc báo `NotFilterable` kèm lý do. Báo cáo của mỗi tiền tố các bước được giữ nên Backspace tức thì.
+- **`ui/menu/screens/explore.py`**: `ExploreScreen` (dựng chỉ mục trong một task, vẽ bốn bảng, phím), `ListScreen`, `explore_screen` (chọn nguồn bằng `wizard.pick_source`). Các hành động mở `clone_screen`/`backup_screen` với `CloneOptions`/`BackupOptions` đã điền `src` và `filters`.
+- **`engine/flood.py::inspect_guard`** dựng `FloodGuard` (`FloodOwner.of_inspect`) cho mọi cái nhìn chỉ đọc; `TelegramGateway.media_counters` (một request `getSearchCounters`, `COUNTER_KEYS`) đi qua `_GuardedReader` như các lần đọc khác.
+
 ## Cấu trúc gói
 
 ```
 src/tgmirror/
   core/     gateway.py  auth.py  telethon_gateway.py  limiter.py  errors.py  config.py  paths.py  links.py
-  engine/   endpoints.py  runs.py  planner.py  batcher.py  strategy.py  copy.py  reupload.py  flood.py  reconcile.py  preview.py  runner.py  status.py  topics.py  backup.py  backupdir.py  backup_reader.py  inspect.py  preflight.py  selection.py
+  engine/   endpoints.py  runs.py  planner.py  batcher.py  strategy.py  copy.py  reupload.py  flood.py  reconcile.py  preview.py  runner.py  status.py  topics.py  backup.py  backupdir.py  backup_reader.py  inspect.py  preflight.py  selection.py  index.py  explore.py
   filters/  model.py  parser.py  pushdown.py  matcher.py
-  store/    schema.sql  db.py  runs.py  msgmap.py  floodlog.py  limiterstate.py  topicmap.py  backups.py
+  store/    schema.sql  db.py  runs.py  msgmap.py  floodlog.py  limiterstate.py  topicmap.py  backups.py  index.py
   cli/      app.py  wizard.py  filter_options.py  selection_options.py  runtime.py  errors.py  interrupt.py  keys.py  commands/ (auth.py channels.py topics.py clone.py run.py retry.py status.py control.py history.py config.py backup.py restore.py inspect.py ...)
   ui/       messages.py  prompts.py  tables.py  progress.py  tui.py
             menu/  (app full-screen: app, screen, prompter, widgets, run_screen, screens/)

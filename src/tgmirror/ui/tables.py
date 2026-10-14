@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from tgmirror.core.gateway import ChannelInfo, TopicInfo
+from tgmirror.core.gateway import COUNTER_KEYS, ChannelInfo, MediaCounters, TopicInfo
 from tgmirror.engine import inspect
 from tgmirror.engine.inspect import Report as InspectReport
 from tgmirror.engine.inspect import Row as InspectRow
@@ -82,7 +82,7 @@ def print_topics(console: Console, topics: Sequence[TopicInfo]) -> None:
 # ---- inspect (phase 18a) ----------------------------------------------------------------------
 
 
-def _row_label(by: str, row: InspectRow) -> str:
+def row_label(by: str, row: InspectRow) -> str:
     """A table row's words: the sentinel key says "none", a name rides along with its id."""
     if row.key == inspect.NONE:
         return t("inspect.none_forward" if by == "forward" else "inspect.none_sender")
@@ -141,7 +141,7 @@ def print_report(console: Console, report: InspectReport, *, source: str, forum:
         grid.add_column(t("inspect.col.size"), justify="right")
         for row in tab.rows:
             grid.add_row(
-                Text(_row_label(tab.by, row)),
+                Text(row_label(tab.by, row)),
                 f"{row.messages:,}",
                 size(row.bytes) if row.bytes else "",
             )
@@ -153,6 +153,33 @@ def print_report(console: Console, report: InspectReport, *, source: str, forum:
                 size(tab.other.bytes) if tab.other.bytes else "",
             )
         console.print(grid)
+
+
+# the kinds the counters list, in order; the last three Telegram does not answer for at all
+_QUICK_ROWS = (*COUNTER_KEYS, "contact", "poll", "pinned")
+
+
+def quick_rows(counters: MediaCounters) -> list[tuple[str, int | None]]:
+    """``(kind, number)`` for every row of the quick table; ``None`` when Telegram gave none."""
+    return [(key, counters.counts.get(key)) for key in _QUICK_ROWS]
+
+
+def print_quick(console: Console, counters: MediaCounters, *, source: str) -> None:
+    """``tgmirror inspect --quick``: Telegram's own counters, one row per kind."""
+    console.print(t("inspect.source", src=Text(source).plain))
+    scope = (
+        t("inspect.quick_scope_topic", topic=counters.topic_id)
+        if counters.topic_id is not None
+        else t("inspect.quick_scope_all")
+    )
+    console.print(t("inspect.quick_title", scope=scope))
+    grid = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    grid.add_column(t("inspect.col.value"))
+    grid.add_column(t("inspect.col.messages"), justify="right")
+    for key, number in quick_rows(counters):
+        grid.add_row(t(f"inspect.kind.{key}"), "—" if number is None else f"{number:,}")
+    console.print(grid)
+    console.print(t("inspect.quick_note"))
 
 
 def print_listing(console: Console, rows: Sequence[Mapping[str, object]], *, more: int = 0) -> None:

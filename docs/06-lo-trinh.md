@@ -28,11 +28,11 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 - [x] Phase 15b — Hardening toàn dự án (Đợt 1–3 xong 2026-09-27; **Đợt 4 xong 2026-10-12**, người dùng xác nhận phần thử thật). Xem "Phase 15b"
 - [x] Phase 16 — Phát hành 0.1.1 chính thức (2026-09-28): GitHub Release + `SHA256SUMS`, Docker Hub `0.1.1`/`latest`, PyPI — kiểm lại trực tiếp 2026-10-12
 
-**0.2.0 — Inspect & Transform (đã duyệt hướng 2026-10-12; Phase 18a xong code 2026-10-12, Phase 19 đang làm theo lát cắt, 19a và 19b xong code 2026-10-13, 18b chưa bắt đầu; chi tiết `07-inspect-transform.md`)**
+**0.2.0 — Inspect & Transform (đã duyệt hướng 2026-10-12; Phase 18a xong code 2026-10-12, Phase 19 đang làm theo lát cắt, 19a, 19b và 19b1 xong code 2026-10-13, 18b xong code 2026-10-14 (chưa thử trên Telegram thật); chi tiết `07-inspect-transform.md`)**
 
 - [x] Phase 18a — `tgmirror inspect`, metadata/predicate mới, pre-flight, file selection, `--selection` (2026-10-12; đã thử trên Telegram thật phần lớn, còn vài mục nhỏ ở spike 14, xem "Phase 18a — ghi chú")
 - [ ] Phase 19 — Transform khi sao chép (caption, hashtag ↔ topic, `topic_map`, reply, link nội bộ). **Làm theo ba lát cắt** (2026-10-13, xem "Phase 19 — ghi chú"): **19a xong code 2026-10-13** (chuỗi thao tác caption, `--transform`, `transform:` trong selection, nhớ theo cặp, pre-flight; **người dùng đã thử trên kênh thật 2026-10-13, mọi bước pass**); **19b và 19b1 xong code 2026-10-13** (hashtag → topic, `topic_map`, `hashtag_format`, `strip`, cờ `--topic-map`/`--topic-default`/`--strip-routing-hashtag`; **người dùng thử forum → forum bằng file transform 2026-10-13: chạy được** sau khi sửa lỗi khóa `topics` để trống bị lờ đi; các trường hợp còn lại chưa thử, xem "Phase 19 — ghi chú"); 19c (giữ reply, `forward_header`, link nội bộ) chưa bắt đầu
-- [ ] Phase 18b — Chỉ mục metadata cục bộ, `inspect --quick`, màn hình "Khám phá"
+- [x] Phase 18b — Chỉ mục metadata cục bộ, `inspect --quick`, màn hình "Khám phá" (xong code 2026-10-14, sau spike 1 và một sửa phân loại media; **chưa thử trên Telegram thật**, xem "Phase 18b — ghi chú")
 
 **0.3.0 — Thao tác tại chỗ (D10)**
 
@@ -41,7 +41,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 
 ## Lộ trình
 
-Thứ tự làm tiếp (18a đã xong): **18a ✓ → 19 → 18b → 20 → 17** (giữ số phase cũ để các tham chiếu không lệch). Phase 14 (các kênh phân phối còn lại) làm xen khi cần, không chặn release nào.
+Thứ tự làm tiếp (18a, 18b đã xong; 19c còn lại của 19): **18a ✓ → 19 (19a, 19b, 19b1 ✓; 19c) → 18b ✓ → 20 → 17** (giữ số phase cũ để các tham chiếu không lệch). Phase 14 (các kênh phân phối còn lại) làm xen khi cần, không chặn release nào.
 
 | Phase | Nội dung | Hoàn thành khi |
 |---|---|---|
@@ -972,6 +972,34 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 **Kiểm trên Telegram thật (người dùng, 2026-10-13)**: forum → forum bằng file `--transform` (sau lần sửa ở trên) **chạy được**: hashtag thành topic ở đích. Người dùng báo ngắn gọn, không ghi từng bước hay số liệu; các cờ `--topic-map`/`--topic-default`/`--strip-routing-hashtag` chưa nghe báo riêng.
 
 **Còn chưa kiểm trên Telegram thật** (người dùng chạy; cùng câu hỏi mở số 9 ở "Việc cần xác minh sớm"): `ForwardMessagesRequest(top_msg_id=...)` và `reply_to=<id topic>` có đưa tin vào đúng topic không khi nguồn **không phải** forum; một album forward vào topic có giữ nhóm không; tên `General` của topic 1 theo ngôn ngữ giao diện của tài khoản (nếu bản địa hóa thì `General` trong file không khớp, tin vào topic mới tên "General"); `create_topic` của một kênh broadcast vừa chuyển thành forum (`--dst-new` từ nguồn kênh thường).
+
+### Phase 18b — ghi chú (2026-10-14; xong code, chưa thử trên Telegram thật)
+
+**Làm theo thứ tự** (mỗi lát chạy được): sửa phân loại media → chỉ mục (`inspect` dùng nó mặc định) → `inspect --quick` → màn hình "Khám phá". Spike 1 (`scripts/spike_counters.py`, kết quả ở `07` mục 9) quyết định hình dạng của `--quick`.
+
+**Đã làm**:
+
+- **Sửa phân loại** (tìm ra nhờ spike 1, người dùng chọn làm trước 18b): `MediaKind.OTHER` (`--media other`) cho đính kèm không có tệp và không dựng lại được — `MessageMediaToDo` (checklist), `PaidMedia`, `Story`, `Giveaway`, `GiveawayResults`, `VideoStream`, `Unsupported` — trước đây rơi vào `document`. Chiến lược B coi `other` như `game`/`invoice` (`--ignore-unsupported`/`--placeholder`), backup ghi một bản ghi (`ExportedMedia(kind=other, title=...)`) thay vì một tin chữ rỗng, không đẩy xuống server, không có `NO_CAPTION`/`FILELESS` rắc rối: forward vẫn mang được. Dice vẫn là `document` (dựng lại được từ chính media của tin).
+- **Chỉ mục** (`store/index.py` SQL, `engine/index.py`: `update`, `IndexReader`, `find`; `Paths.index_dir`): một file SQLite mỗi nguồn, mỗi tin một dòng JSON của `SrcMessage` (mọi trường, đọc lại đủ), cộng `meta` (`last_id`, `updated_at`, `complete`, mô tả nguồn: id, tên, username, loại, `noforwards`, tiêu đề topic). Là một **tiền tố** theo id: dừng giữa chừng để lại một chỉ mục ngắn nhưng đúng, lần sau đọc tiếp từ `last_id` (tin dịch vụ không được lưu nhưng đẩy `last_id`). `inspect` đọc nguồn **qua chỉ mục theo mặc định** (cập nhật phần mới rồi báo cáo từ nó): lần đầu cùng chi phí quét cũ, các lần sau chỉ đọc tin mới. `IndexReader` là một `MessageReader`, nên `engine/inspect.scan` và `Matcher` không đổi — một nơi định nghĩa ngữ nghĩa lọc.
+- **Cờ của `inspect`**: `--refresh` (đọc lại cả nguồn, xong mới bỏ tin không còn — bắt tin đã sửa/xoá, lượt xem, reaction), `--offline` (dùng chỉ mục như đang có: không tài khoản, không Telegram; nhận id/`@username`/tên đúng của một nguồn đã xem), `--no-index` (quét sống như 18a, không lưu gì). Đầu ra ghi **chỉ mục cập nhật lúc nào** (một dòng ở báo cáo; `index{messages,last_id,updated_at,complete,offline}` ở `--json`).
+- **`inspect --quick`** (`MediaCounters`, `TelegramGateway.media_counters`, `FloodGuard` qua `_GuardedReader`): một request `messages.getSearchCounters` cho ảnh/video/tài liệu/nhạc/voice/video tròn/gif/link/vị trí, cả nguồn hoặc một topic (`--topic ID`, kể cả General = 1: spike 1 đã kiểm). Không đi cùng bộ lọc nào khác (số này không có khoảng id/ngày), không đi với thư mục backup. Loại Telegram không trả (danh bạ, poll, ghim) in "—". Nhãn nói rõ đây là cách phân loại của Telegram, lệch vài % so với quét (tin bị ẩn vì vi phạm điều khoản vẫn là "video" ở đó).
+- **Màn hình "Khám phá"** (`engine/explore.py` thuần, `ui/menu/screens/explore.py`, mục menu "Khám phá…" sau "Sao chép mới"): chọn nguồn bằng đúng câu hỏi của wizard clone, dựng/cập nhật chỉ mục (`q`/Esc dừng và dùng phần đã có), nạp cả chỉ mục vào bộ nhớ rồi mọi bước là **đếm lại trong bộ nhớ**, không gọi Telegram. Bốn bảng cạnh nhau (loại, tháng, hashtag + một bảng đổi bằng Tab: forward/domain/topic/người gửi); ←→ cột, ↑↓ dòng, Enter thêm vị từ vào **một** rule include (AND), `x` thêm rule exclude, Backspace bỏ bước cuối. Hành động: `l` danh sách tin khớp, `s` ghi `@last` (kèm id), `c`/`b` mở `CloneFlow`/`BackupFlow` với nguồn và filter đã điền (các câu hỏi còn lại — đích, D3, xác nhận — giữ nguyên), `u` cập nhật, `R` đọc lại cả nguồn. Luật 7: không có logic chỉ menu mới có — filter dựng từ `Step` đi qua `FilterSpec`/`Matcher` như cờ, và mọi hành động mở đúng flow của lệnh.
+- **Hạ tầng**: `engine/flood.py::inspect_guard` (một chỗ dựng `FloodGuard` cho cái nhìn chỉ đọc, `tgmirror inspect` và màn hình Khám phá dùng chung); `MenuKey.LEFT/RIGHT`.
+- **Test mới**: `test_index.py`, `test_cli_inspect_index.py` (cả `--quick`), `test_explore.py`, `test_menu_explore.py`, `test_telethon_gateway.py::test_media_counters_*`, các ca `OTHER` ở `test_telethon_messages.py`/`test_reupload.py`. Cả bộ: 2202 pass, 3 skip (trước 18b: 2146).
+
+**Khác với đề xuất ở `07` mục 3.4/4.5** (không đụng D1–D10):
+
+1. **Thư mục chỉ mục là `<data_dir>/index/`** chứ không phải `<cache_dir>`: cùng chỗ với `selections/`, tránh thêm một vị trí vào `Paths` (không đi theo `appdata export` vì export chỉ lấy `tgmirror.db` + `config.toml`).
+2. **Chỉ mục lưu JSON của `SrcMessage`, không dựng cột SQL**: filter chạy bằng `Matcher` trên bộ nhớ đúng như `07` đề xuất; một dòng ~0,5 KB nên kênh 100.000 tin cỡ vài chục MB. Chưa đo trên kênh thật (spike 6).
+3. **Mặc định đi qua chỉ mục** (cập nhật phần mới), không phải cờ bật: chi phí lần đầu như cũ, các lần sau rẻ hơn hẳn. `--offline` là cách "không gọi Telegram" của `07`; `--no-index` giữ lối quét sống cho ai cần.
+4. **Một chỉ mục lạc hậu trong delta**: tin đã sửa/xoá và số lượt xem/reaction chỉ làm mới bằng `--refresh` (hoặc `R` trong màn hình). Mọi đầu ra nói điều đó; không có phát hiện tự động.
+5. **Chỉ mục không bao giờ là căn cứ để ghi** (như `07` mục 3.4): không có đường nào dùng nó cho clone/backup; `IndexReader` từ chối `fetch`/`prepare`/`export_unit`.
+6. **Màn hình Khám phá chưa có `e`/`d`** (sửa/xoá tại chỗ): thuộc Phase 20 (D10); các phím được để trống.
+7. **Một include cùng loại thay vì cộng**: chọn `video` rồi `photo` thì giữ `photo` (hai danh sách "bất kỳ trong" không AND được trong một rule); loại một tháng (exclude) không có vị từ nên báo thay vì lờ đi.
+
+**Kiểm trên Telegram thật (người dùng, 2026-10-14)**: chỉ mục (`inspect` lần đầu rồi lần hai, `--offline`, `--refresh`) và màn hình Khám phá **pass**. `inspect --quick --topic 9496` trên một forum thật **thất bại**: `GetSearchCountersRequest` trả `RpcCallFailError` cả sáu lần Telethon thử, rồi Telethon ném một `ValueError("Request was unsuccessful 6 time(s)")` trần mà `map_exception` không biết, nên người dùng thấy "Có lỗi ngoài dự kiến". Sửa: `ValueError` đó thành `ServerFailed` (lớp con của `Transient`, câu thông báo riêng nói đây là lỗi nội bộ của Telegram, gợi ý `--quick` không kèm `--topic` hay quét bằng `inspect`); cũng sửa gợi ý `--debug` (là cờ toàn cục, đứng **trước** tên lệnh: `tgmirror --debug inspect ...`). Cùng lỗi trước đó làm một `run` gặp `RpcCallFailError` liên tục thành crash thay vì `Transient`. **Nguyên nhân**: chạy lại cùng nguồn với `--topic 1` thì **ổn**, chỉ `--topic 9496` lỗi — id đó không trả được số đếm; người dùng đối chiếu: 9496 **có** trong `tgmirror topics`, nên đây là giới hạn phía server — nhiều khả năng do topic lớn (chưa kiểm số tin của nó). Vì một id không phải topic làm Telegram trả sáu lỗi nội bộ liền, `--quick --topic N` nay **hỏi danh sách topic trước** (một request đọc) và nói thẳng "forum này không có topic N" / "nguồn không phải forum" (mã 2) thay vì gửi request hỏng; nếu topic có trong danh sách mà server vẫn lỗi thì câu `ServerFailed` ở trên mới hiện ra.
+
+**Chưa kiểm trên Telegram thật** (người dùng chạy): cập nhật chỉ mục delta khi tin đã được sửa; màn hình Khám phá trên kênh lớn (thời gian nạp và đếm lại ở ~100.000 tin — bộ đếm chạy trên luồng chính, có thể thấy khựng); spike 6 (cỡ chỉ mục và thời gian quét 100.000 tin).
 
 ### Đã chốt (người dùng duyệt 2026-09-25)
 

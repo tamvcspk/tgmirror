@@ -30,6 +30,7 @@ class MediaKind(StrEnum):
     GAME = "game"
     INVOICE = "invoice"
     WEBPAGE = "webpage"
+    OTHER = "other"  # no file, no name of its own: checklist, story, paid media, giveaway
     TEXT = "text"  # text only, no media
 
 
@@ -101,6 +102,23 @@ class SrcMessage:
     post_author: str | None = None  # signature of a channel post
     via_bot_id: int | None = None  # the inline bot a message was sent through
     pinned: bool = False
+
+
+# the kinds ``messages.getSearchCounters`` answers for (spike 1, docs/07 section 9), in the order
+# a report lists them; contacts, polls and pinned messages are not answered at all
+COUNTER_KEYS = ("photo", "video", "document", "audio", "voice", "video_note", "gif", "link", "geo")
+
+
+@dataclass(frozen=True, slots=True)
+class MediaCounters:
+    """How many messages of each kind *Telegram says* a chat (or one forum topic) holds, from one
+    request. The numbers are Telegram's own classification, so they can differ a little from what
+    a scan counts (a message the server hides behind a notice still counts as a video): a quick
+    look, not a base for deciding what a filter selects. A kind the server did not answer for is
+    absent from ``counts``."""
+
+    counts: dict[str, int]
+    topic_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,6 +426,12 @@ class MessageReader(Protocol):
     async def list_topics(self, src: int) -> list[TopicInfo]:
         """A forum's topics (phase 8), one paced read request. ``engine/topics.py`` uses it to
         name a destination topic the first time it must create one."""
+        ...
+
+    async def media_counters(self, src: int, topic_id: int | None = None) -> MediaCounters:
+        """``tgmirror inspect --quick`` (phase 18b): the number of photos, videos, ... Telegram
+        reports for the chat, or for one forum topic (1 = General), in one request. There is no
+        range: a count "after id N" has to be read."""
         ...
 
     async def fetch(self, src: int, unit: Unit) -> Prepared:

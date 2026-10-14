@@ -20,6 +20,7 @@ from tgmirror.core.gateway import (
     NO_FILTER,
     ExportedMessage,
     FromBackup,
+    MediaCounters,
     MediaKind,
     OnTransfer,
     Prepared,
@@ -143,6 +144,9 @@ class BackupReader:
 
     async def list_topics(self, src: int) -> list[TopicInfo]:
         return [TopicInfo(t.id, t.title) for t in self._manifest.topics]
+
+    async def media_counters(self, src: int, topic_id: int | None = None) -> MediaCounters:
+        raise NotImplementedError("a backup is read in full: there is nothing quick about it")
 
     async def fetch(self, src: int, unit: Unit) -> Prepared:
         return self._prepared(unit)

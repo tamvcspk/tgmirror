@@ -58,22 +58,37 @@ from tgmirror.cli.transform_options import (
 from tgmirror.cli.transform_options import resolve as resolve_transform
 from tgmirror.core.config import Limits
 from tgmirror.core.errors import FloodWait
-from tgmirror.core.gateway import CaptionMode, ChatKind, MessageReader, Unit
-from tgmirror.core.limiter import Limiter
+from tgmirror.core.gateway import (
+    CaptionMode,
+    ChannelInfo,
+    ChatKind,
+    MediaCounters,
+    MessageReader,
+    Unit,
+)
+from tgmirror.engine import index as indexing
 from tgmirror.engine import inspect as engine
 from tgmirror.engine import selection
 from tgmirror.engine.backup_reader import BackupReader
 from tgmirror.engine.backupdir import manifest_path, read_manifest
 from tgmirror.engine.endpoints import find_channel
-from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted
+from tgmirror.engine.flood import Interrupted, inspect_guard
 from tgmirror.engine.preflight import KINDS, PlanOptions, Preflight, plan_to_dict
 from tgmirror.engine.runner import RunControl
 from tgmirror.engine.runs import RunRequest, check_options
 from tgmirror.engine.transform import Transform
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
+from tgmirror.store.index import MetadataIndex
 from tgmirror.ui.messages import t
-from tgmirror.ui.tables import channel_label, print_listing, print_plan, print_report
+from tgmirror.ui.tables import (
+    channel_label,
+    print_listing,
+    print_plan,
+    print_quick,
+    print_report,
+    quick_rows,
+)
 
 PROGRESS_INTERVAL = 5.0  # seconds between two "reading..." lines
 NAP_STEP = 1.0  # a FloodWait sleep looks for Ctrl+C this often
@@ -93,6 +108,18 @@ class Source:
     protected: bool = False  # the source restricts saving content (decision D3)
     title: str = ""
     backup: str | None = None  # the directory, when the source is a backup
+    feed: "IndexFeed | None" = None  # a channel read through its index (phase 18b)
+
+
+@dataclass(frozen=True, slots=True)
+class IndexFeed:
+    """How a ``Source`` whose reader is an index keeps it up to date: the index, the live reader
+    (behind ``FloodGuard``) to read the newer messages through, and what the index says about the
+    source. ``live`` is ``None`` for ``--offline``: the index is used as it is."""
+
+    index: MetadataIndex
+    source: indexing.IndexedSource
+    live: MessageReader | None
 
 
 class _Notices:
@@ -243,6 +270,39 @@ def inspect_command(
             help="With --plan clone: a forum source into a destination without topics.",
         ),
     ] = False,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Read the whole source again into its local index (catches messages edited or "
+            "deleted since; by default only the messages newer than the index are read).",
+        ),
+    ] = False,
+    offline: Annotated[
+        bool,
+        typer.Option(
+            "--offline",
+            help="Report from the local index as it is: no account, no Telegram. The source must "
+            "have been inspected before (an id, @username or title the index knows).",
+        ),
+    ] = False,
+    no_index: Annotated[
+        bool,
+        typer.Option(
+            "--no-index",
+            help="Read the source live and keep nothing (the way inspect worked before the "
+            "local index).",
+        ),
+    ] = False,
+    quick: Annotated[
+        bool,
+        typer.Option(
+            "--quick",
+            help="Telegram's own counters (photos, videos, documents, links, ...) in one "
+            "request, without reading the source: for a first look at a big or unknown channel. "
+            "Whole source, or one forum topic with --topic ID; no other filter.",
+        ),
+    ] = False,
 ) -> None:
     """Count what a source holds and what a filter selects, by media, month, hashtag, ...
 
@@ -259,6 +319,51 @@ def inspect_command(
     rt: Runtime = ctx.obj
 
     async def command() -> None:
+        quick_topic: int | None = None
+        if quick:
+            quick_topic = _quick_scope(
+                topic,
+                others=[
+                    media,
+                    hashtag,
+                    contains,
+                    regex,
+                    exclude_regex,
+                    exclude_media,
+                    since,
+                    until,
+                    min_size,
+                    max_size,
+                    album,
+                    filter_file,
+                    from_user,
+                    forwarded is not None,
+                    forwarded_from,
+                    has_link,
+                    link_domain,
+                    by,
+                    save,
+                    plan,
+                    csv_path,
+                    mode,
+                    caption,
+                    caption_text,
+                    transform_file,
+                    topic_map,
+                    topic_default,
+                    list_messages,
+                    freeze,
+                    offline,
+                    refresh,
+                    no_index,
+                    hashtag_to_topic,
+                    strip_routing_hashtag,
+                    reset_polls,
+                    ignore_unsupported,
+                    placeholder,
+                    topic_as_hashtag,
+                ],  # fmt: skip
+            )
         filters = collect(
             media=media,
             hashtag=hashtag,
@@ -291,7 +396,18 @@ def inspect_command(
         tables = _validated_by(by)
         if freeze and save is None:
             raise UsageProblem("inspect.freeze_needs_save")
+        if offline and (refresh or no_index):
+            raise UsageProblem(
+                "err.conflicting_flags",
+                flags="--offline / " + ("--refresh" if refresh else "--no-index"),
+            )
+        if refresh and no_index:
+            raise UsageProblem("err.conflicting_flags", flags="--refresh / --no-index")
         kind, directory = await asyncio.to_thread(_classify, src)
+        if kind == "backup" and (refresh or no_index):
+            raise UsageProblem("inspect.index_not_for_backup")
+        if kind == "backup" and quick:
+            raise UsageProblem("inspect.quick_backup")
         limits = rt.config().limits
         planned = _plan_options(
             plan,
@@ -318,7 +434,16 @@ def inspect_command(
             save=save,
             freeze=freeze,
             selections_dir=rt.paths.selections_dir,
+            index_dir=rt.paths.index_dir,
+            refresh=refresh,
+            offline=offline,
+            use_index=not no_index,
         )
+        if offline and kind != "backup":
+            if src is None:
+                raise UsageProblem("err.missing_flag", flag="SRC")
+            await _inspect_offline(src, job)
+            return
         if kind == "backup":
             assert directory is not None
             await _inspect_backup(directory, job)
@@ -345,20 +470,14 @@ def inspect_command(
                         if control.stop_requested:
                             raise Interrupted
 
-                limiter = Limiter(
-                    limits,
-                    nap,
-                    state=await store.load_limiter_state(FloodOwner.of_inspect().account),
-                )
-                guard = FloodGuard(
-                    limiter=limiter,
-                    store=store,
-                    owner=FloodOwner.of_inspect(),
-                    limits=limits,
-                    notifier=_Notices(),
-                    nap=nap,
-                )
+                guard = await inspect_guard(store, limits, notifier=_Notices(), nap=nap)
                 reader = guard.reader(conn.gateway)
+                if quick:
+                    if quick_topic is not None:  # a topic Telegram does not have fails server-side
+                        await _check_topic(reader, channel, quick_topic)
+                    counters = await reader.media_counters(channel.id, quick_topic)
+                    _print_quick(counters, channel_label(channel), job.as_json)
+                    return
                 titles: dict[int, str] = {}
                 if channel.kind is ChatKind.FORUM:
                     titles = {tp.id: tp.title for tp in await reader.list_topics(channel.id)}
@@ -372,9 +491,57 @@ def inspect_command(
                     protected=channel.noforwards,
                     title=channel.title,
                 )
-                await _inspect(source, job, control)
+                if not job.use_index:
+                    await _inspect(source, job, control)
+                    return
+                known = indexing.IndexedSource(
+                    id=channel.id,
+                    title=channel.title,
+                    username=channel.username,
+                    kind=channel.kind,
+                    noforwards=channel.noforwards,
+                    topics=dict(titles),
+                )
+                index = await MetadataIndex.open(indexing.path_of(job.index_dir, channel.id))
+                try:
+                    feed = IndexFeed(index, known, reader)
+                    await _inspect(
+                        replace(source, reader=indexing.IndexReader(index, known), feed=feed),
+                        job,
+                        control,
+                    )
+                finally:
+                    await index.close()
 
     run(rt, command())
+
+
+def _quick_scope(topic: list[int] | None, *, others: list[object]) -> int | None:
+    """The one topic ``--quick`` counts (or ``None``: the whole source). The counters answer for
+    a chat or a topic and nothing else, so any flag that asks for more is refused rather than
+    quietly not applied."""
+    if (topic is not None and len(topic) != 1) or any(v not in (None, False) for v in others):
+        raise UsageProblem("inspect.quick_alone")
+    return topic[0] if topic else None
+
+
+async def _check_topic(reader: MessageReader, channel: ChannelInfo, topic: int) -> None:
+    """``--quick --topic N`` asks the server for one topic's counters; an id that is no topic of
+    this source made Telegram answer with an internal error six times in a row, which says
+    nothing to the person. One cheap read says it plainly instead."""
+    if channel.kind is not ChatKind.FORUM:
+        raise UsageProblem("inspect.quick_topic_not_forum", src=channel.title)
+    known = {tp.id for tp in await reader.list_topics(channel.id)}
+    if topic != 1 and topic not in known:
+        raise UsageProblem("inspect.quick_topic_unknown", topic=topic, src=channel.title)
+
+
+def _print_quick(counters: MediaCounters, label: str, as_json: bool) -> None:
+    if as_json:
+        data = {"source": label, "topic": counters.topic_id, "counts": dict(quick_rows(counters))}
+        typer.echo(_dumps({"quick": data}))
+        return
+    print_quick(Console(), counters, source=label)
 
 
 def _plan_options(
@@ -453,6 +620,33 @@ class _Job:
     save: Path | None
     freeze: bool
     selections_dir: Path
+    index_dir: Path
+    refresh: bool = False  # read the whole source again into the index
+    offline: bool = False  # use the index as it is
+    use_index: bool = True  # False: ``--no-index``, the live scan of phase 18a
+
+
+async def _inspect_offline(ref: str, job: _Job) -> None:
+    """A channel from its local index alone: no account, no limiter, no Telegram."""
+    found = await indexing.find(job.index_dir, ref)
+    if found is None:
+        raise UsageProblem("inspect.offline_no_index", ref=ref)
+    index, known = found
+    try:
+        source = Source(
+            reader=indexing.IndexReader(index, known),
+            id=known.id,
+            label=f"{known.title} ({known.id})" if known.title else str(known.id),
+            username=known.username,
+            forum=known.kind is ChatKind.FORUM,
+            topic_titles=known.topics,
+            protected=known.noforwards,
+            title=known.title,
+            feed=IndexFeed(index, known, None),
+        )
+        await _inspect(source, job, RunControl())
+    finally:
+        await index.close()
 
 
 async def _inspect_backup(directory: Path, job: _Job) -> None:
@@ -533,16 +727,51 @@ async def _inspect(source: Source, job: _Job, control: RunControl) -> None:
     complete = True
     flood: FloodWait | None = None
     interrupted = False
+    index_line = [time.monotonic()]
+
+    def indexing_progress(read: int, last_id: int) -> None:
+        now = time.monotonic()
+        if now - index_line[0] >= PROGRESS_INTERVAL:
+            index_line[0] = now
+            emit(t("inspect.indexing", messages=f"{read:,}", last_id=last_id))
+
+    async def bring_up_to_date() -> bool:
+        """Read what the index does not have yet. A stop or a FloodWait too long to sit out ends
+        it early; what was read is kept and the report is made from that."""
+        nonlocal flood
+        feed = source.feed
+        if feed is None or feed.live is None:
+            return True
+        try:
+            updated = await indexing.update(
+                feed.index,
+                feed.live,
+                feed.source,
+                refresh=job.refresh,
+                stop=lambda: control.stop_requested,
+                on_progress=indexing_progress,
+            )
+        except Interrupted:
+            return False
+        except FloodWait as exc:
+            flood = exc
+            return False
+        return updated.complete
+
     try:
         with stop_on_interrupt(control, lambda: emit(t("inspect.stopping"))) as interrupt:
             try:
-                complete = await engine.scan(
+                fresh = await bring_up_to_date()
+                # the index is local: a stop that ended the update must not also cut the report
+                local = source.feed is not None
+                scanned = await engine.scan(
                     source.reader,
                     source.id,
                     inspector,
-                    stop=lambda: control.stop_requested,
+                    stop=(lambda: False) if local else (lambda: control.stop_requested),
                     on_progress=progress,
                 )
+                complete = fresh and scanned
             except Interrupted:
                 complete = False
             except FloodWait as exc:  # a wait too long to sit out: show what was read, then fail
@@ -558,9 +787,20 @@ async def _inspect(source: Source, job: _Job, control: RunControl) -> None:
     if complete and flood is None and not interrupted:  # a partial scan is no selection
         saved = await asyncio.to_thread(_write_selections, source, job, spec, chosen_ids, report)
     next_commands = _next_commands(source, spec, job)
+    state = await indexing.info(source.feed.index) if source.feed is not None else None
     if job.as_json:
         data = engine.report_to_dict(report)
         data["source"] = {"id": source.id, "label": source.label}
+        if state is not None:
+            data["index"] = {
+                "messages": state.messages,
+                "last_id": state.last_id,
+                "updated_at": state.updated_at.isoformat(timespec="seconds")
+                if state.updated_at
+                else None,
+                "complete": state.complete,
+                "offline": job.offline,
+            }
         data["messages"] = shown
         if preflight is not None:
             data["plan"] = plan_to_dict(preflight.plan())
@@ -569,6 +809,8 @@ async def _inspect(source: Source, job: _Job, control: RunControl) -> None:
     else:
         console = Console()
         print_report(console, report, source=source.label, forum=source.forum)
+        if state is not None:
+            console.print(_index_line(state, offline=job.offline))
         if job.list_messages:
             print_listing(console, shown, more=max(selected - len(shown), 0))
         if preflight is not None and job.plan is not None:
@@ -592,6 +834,18 @@ async def _inspect(source: Source, job: _Job, control: RunControl) -> None:
         raise flood
     if interrupted or not complete:
         raise typer.Exit(EXIT_INTERRUPTED)
+
+
+def _index_line(state: indexing.IndexInfo, *, offline: bool) -> str:
+    """What the numbers above rest on: the local index and when it was last brought up to date."""
+    when = (
+        state.updated_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        if state.updated_at is not None
+        else "?"
+    )
+    key = "inspect.index_offline" if offline else "inspect.index_state"
+    line = t(key, messages=f"{state.messages:,}", when=when)
+    return line if state.complete else line + " " + t("inspect.index_partial")
 
 
 def _write_selections(

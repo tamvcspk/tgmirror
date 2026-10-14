@@ -106,7 +106,7 @@ The same flags on `clone`, `backup`, `restore` and `inspect` (the wizard asks fo
 
 | Flag | Keeps | Notes |
 |---|---|---|
-| `--media video,photo` | these media types | `photo video audio voice document gif sticker video_note poll geo contact game invoice webpage text`; `text` = text only |
+| `--media video,photo` | these media types | `photo video audio voice document gif sticker video_note poll geo contact game invoice webpage other text`; `text` = text only, `other` = a checklist, story, paid media or giveaway (forwarded as it is, never sent again) |
 | `--hashtag "#news"` | messages with this hashtag | repeat for any-of; whole tag, any case |
 | `--contains "word"` | text/caption containing it | repeat for any-of; substring, any case |
 | `--regex "pat"` | text/caption matching it | case-sensitive (`(?i)` to ignore case); a pattern taking over 0.5 s on a message stops the run with an error naming it |
@@ -166,6 +166,10 @@ tgmirror clone --src "@my_channel" --dst-new "Videos" --selection @last --yes   
 | `inspect --csv FILE` | **every** selected message, one row each (UTF-8 with BOM, opens in Excel); not the tables |
 | `inspect --json` | the report, the plan and every selected message on stdout (progress goes to stderr) |
 | `inspect --plan clone\|backup\|restore` | pre-flight: units by way (forward / by file id / download + upload / left out), volume to move, write calls, the limiter's time floor, days at `daily_cap`, what would stop the run. Takes `--mode --caption --caption-text --reset-polls --ignore-unsupported --placeholder --topic-as-hashtag` like the real command; `restore` only for a backup directory |
+| `inspect --refresh` | the first `inspect` of a source builds a local index of its messages (`<data dir>/index/<id>.db`); later ones read only what is newer and report from it. `--refresh` reads the whole source again (catches edited/deleted messages, view and reaction counts) |
+| `inspect --offline` | report from the index as it is: no account, no Telegram (the source by id, `@username` or exact title, once inspected before) |
+| `inspect --no-index` | read the source live and keep nothing |
+| `inspect --quick [--topic ID]` | Telegram's own counters (photos, videos, documents, links, ...) for the whole source or one forum topic, in one request: a first look at a big channel. Telegram's classification, a few % off a scan; no filters, no range |
 | `inspect --save FILE [--freeze]` | save the filter as a selection file; `--freeze` also writes the ids of the selected messages (`FILE.ids`, one per line, editable) |
 | `--selection FILE\|@last` | on `clone`/`backup`/`restore`: use a selection instead of filter flags. `@last` is what `inspect` last made of that source (kept after every complete scan) |
 | `--exact` | with `--selection`: take exactly the frozen ids, even if more messages match now |
@@ -260,7 +264,7 @@ Exit codes: `0` done (or stopped with `q`/`tgmirror stop`), `1` general error, `
 
 ### Full-screen menu
 
-Typing bare `tgmirror` on a real terminal opens a full-screen app instead (arrow keys + Enter, Esc to go back) with the same commands as menu items: New clone, Backup, Restore, Continue / Retry failures (only once a pair exists), Status, History, Joined channels, Account, Config, Quit. Not logged in yet: a shorter menu (Log in, Status, History, Config, Quit). Ctrl+C during a run started from the menu stops the run **and** exits the app, same as the classic CLI. No terminal attached (redirected, a script, CI): bare `tgmirror` still prints help, as before.
+Typing bare `tgmirror` on a real terminal opens a full-screen app instead (arrow keys + Enter, Esc to go back) with the same commands as menu items: New clone, Explore, Backup, Restore, Continue / Retry failures (only once a pair exists), Status, History, Joined channels, Account, Config, Quit. Not logged in yet: a shorter menu (Log in, Status, History, Config, Quit). **Explore** shows a source's messages by media, month, hashtag and (Tab) forward origin, domain, topic or sender: Enter keeps a row, `x` leaves it out, Backspace undoes the last step, and `c`/`b` open the clone/backup wizard with that filter already filled in (`l` lists the messages, `s` saves the filter as `@last`, `u` reads what is new, `R` reads everything again). It works on the source's local index, so every step is instant and calls nothing. Ctrl+C during a run started from the menu stops the run **and** exits the app, same as the classic CLI. No terminal attached (redirected, a script, CI): bare `tgmirror` still prints help, as before.
 
 ## Development
 

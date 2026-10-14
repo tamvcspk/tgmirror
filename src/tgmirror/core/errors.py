@@ -75,6 +75,13 @@ class Transient(GatewayError):
     """Connection-level problem that is expected to go away; retried with backoff."""
 
 
+class ServerFailed(Transient):
+    """Telegram answered one request with an internal error (``RPC_CALL_FAIL``, ...) every time
+    Telethon repeated it, until Telethon gave up with a bare ``ValueError``. A ``Transient`` — a
+    later try may work — but not the network's fault, and not always a passing one: a request
+    that is too heavy for the server (a count over a huge topic) fails the same way again."""
+
+
 class TransportPressure(GatewayError):
     """The server pushed back on the connection, below the level of a FloodWait: HTTP 429, a
     closed connection, a request that never got an answer. The part of a transfer that met it is

@@ -43,7 +43,13 @@ from tgmirror.store.runs import RunOptions
 
 UNSUPPORTED = "unsupported"  # prefix of ``msg_map.reason`` for what cannot be copied
 
-_KIND_LABEL = {"game": "Game", "invoice": "Hóa đơn", "quiz": "Quiz", "poll": "Poll"}
+_KIND_LABEL = {
+    "game": "Game",
+    "invoice": "Hóa đơn",
+    "quiz": "Quiz",
+    "poll": "Poll",
+    "other": "Tệp đính kèm",
+}
 
 
 class UnsupportedMedia(RunError):
@@ -119,7 +125,7 @@ def plan_unit(unit: Unit, options: Options) -> Action:
         if first.quiz_unanswered:
             return _cannot(kind, first.id, first.title, options)
         return SEND
-    if first.media in (MediaKind.GAME, MediaKind.INVOICE):
+    if first.media in (MediaKind.GAME, MediaKind.INVOICE, MediaKind.OTHER):
         return _cannot(first.media.value, first.id, first.title, options)
     return SEND
 

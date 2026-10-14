@@ -223,8 +223,8 @@ def test_an_unanswered_quiz_is_dropped_without_reset_polls_and_unsupported_with_
     assert (kept.kind, kept.reason) == (ActionKind.DROP, "unsupported:quiz")
 
 
-@pytest.mark.parametrize("media", [MediaKind.GAME, MediaKind.INVOICE])
-def test_a_game_or_an_invoice_stops_the_run_unless_told_otherwise(media: MediaKind) -> None:
+@pytest.mark.parametrize("media", [MediaKind.GAME, MediaKind.INVOICE, MediaKind.OTHER])
+def test_a_game_an_invoice_or_other_stops_the_run_unless_told_otherwise(media: MediaKind) -> None:
     thing = unit(msg(4, media=media, title="Chess"))
 
     with pytest.raises(UnsupportedMedia) as caught:

@@ -19,7 +19,10 @@ from tgmirror.ui.messages import t
 from tgmirror.ui.prompts import run_steps
 
 
-def clone_screen(app: AppContext) -> WizardScreen:
+def clone_screen(app: AppContext, options: CloneOptions | None = None) -> WizardScreen:
+    """The clone wizard; ``options`` carries what is already decided (the "Khám phá" screen hands
+    over a source and a filter, so those two questions are not asked again)."""
+
     async def flow(prompter: MenuPrompter) -> ScreenResult:
         gateway = app.gateway
         channels = await gateway.list_channels()
@@ -30,7 +33,7 @@ def clone_screen(app: AppContext) -> WizardScreen:
             app.store,
             gateway,
             channels,
-            CloneOptions(),
+            options or CloneOptions(),
             prompter=prompter,
             interactive=True,
             echo=prompter.echo,

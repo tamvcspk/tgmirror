@@ -34,6 +34,7 @@ from telethon.tl.functions.messages import (
     CreateForumTopicRequest,
     ForwardMessagesRequest,
     GetForumTopicsRequest,
+    GetSearchCountersRequest,
     SearchRequest,
     SendMultiMediaRequest,
     UploadMediaRequest,
@@ -58,6 +59,7 @@ from tgmirror.core.errors import (
     PasswordRequired,
     PeerFlood,
     PerMessage,
+    ServerFailed,
     SessionBusy,
     TooManyChannels,
     Transient,
@@ -75,6 +77,7 @@ from tgmirror.core.gateway import (
     ExportedMedia,
     ExportedMessage,
     FromBackup,
+    MediaCounters,
     MediaKind,
     OnTransfer,
     Prepared,
@@ -207,6 +210,9 @@ def map_exception(exc: BaseException) -> GatewayError | None:
             return PerMessage(_rpc_name(exc))
         case errors.ChannelsTooMuchError() | errors.UserChannelsTooMuchError():
             return TooManyChannels(_rpc_name(exc))
+        case ValueError() if str(exc).startswith("Request was unsuccessful"):
+            # what Telethon raises once its retries of ``RpcCallFailError``/``ServerError`` run out
+            return ServerFailed("Telegram kept answering with an internal error")
         case ConnectionError() | TimeoutError() | errors.TimedOutError() | errors.ServerError():
             return Transient(f"connection problem: {type(exc).__name__}")
         case errors.RPCError():
@@ -301,6 +307,35 @@ def channel_info(entity: object) -> ChannelInfo | None:
 # ---- messages -> SrcMessage -----------------------------------------------------------------
 
 
+# Attachments with no file to download and nothing Telethon can rebuild them from: a forward
+# carries them, nothing else can (``MediaKind.OTHER``). Dice is not here: it is rebuilt from the
+# message's own media object (``_SELF_CONTAINED``).
+_OTHER_MEDIA = (
+    types.MessageMediaToDo,
+    types.MessageMediaPaidMedia,
+    types.MessageMediaStory,
+    types.MessageMediaGiveaway,
+    types.MessageMediaGiveawayResults,
+    types.MessageMediaVideoStream,
+    types.MessageMediaUnsupported,
+)
+
+
+# the filters ``getSearchCounters`` is asked about, and the key each answer goes under
+# (``COUNTER_KEYS``); contacts, polls and pinned messages are left out: the server drops them
+_COUNTER_FILTERS: dict[type, str] = {
+    types.InputMessagesFilterPhotos: "photo",
+    types.InputMessagesFilterVideo: "video",
+    types.InputMessagesFilterDocument: "document",
+    types.InputMessagesFilterMusic: "audio",
+    types.InputMessagesFilterVoice: "voice",
+    types.InputMessagesFilterRoundVideo: "video_note",
+    types.InputMessagesFilterGif: "gif",
+    types.InputMessagesFilterUrl: "link",
+    types.InputMessagesFilterGeo: "geo",
+}
+
+
 def media_kind(message: custom.Message) -> MediaKind:
     """The ``media`` filter value of a message (docs/03-filters.md)."""
     media = message.media
@@ -335,7 +370,9 @@ def media_kind(message: custom.Message) -> MediaKind:
         return MediaKind.GAME
     if isinstance(media, types.MessageMediaInvoice):
         return MediaKind.INVOICE
-    return MediaKind.DOCUMENT  # dice, stories, giveaways...: attachments we have no filter name for
+    if isinstance(media, _OTHER_MEDIA):
+        return MediaKind.OTHER
+    return MediaKind.DOCUMENT  # dice...: attachments we have no filter name for
 
 
 def _hashtags(message: custom.Message) -> tuple[str, ...]:
@@ -566,6 +603,12 @@ def _self_contained_media(media: object) -> ExportedMedia | None:
         return ExportedMedia(kind=MediaKind.GAME, title=media.game.title)
     if isinstance(media, types.MessageMediaInvoice):
         return ExportedMedia(kind=MediaKind.INVOICE, title=media.title)
+    if isinstance(media, _OTHER_MEDIA):  # kept as a record: what it was, not its content
+        title = getattr(getattr(media, "todo", None), "title", None)
+        return ExportedMedia(
+            kind=MediaKind.OTHER,
+            title=_text_of(title) if title is not None else type(media).__name__[12:],
+        )
     return None
 
 
@@ -1168,6 +1211,21 @@ class TelethonGateway:
         if info is None:  # cannot happen for a fresh channel; fail loudly if it does
             raise GatewayError("Telegram returned an unexpected result for the new channel")
         return info
+
+    async def media_counters(self, src: int, topic_id: int | None = None) -> MediaCounters:
+        peer = await self._peer(src)
+        with mapped_errors():
+            got = await self._client(
+                GetSearchCountersRequest(
+                    peer=peer, filters=[kind() for kind in _COUNTER_FILTERS], top_msg_id=topic_id
+                )
+            )
+        counts = {
+            _COUNTER_FILTERS[type(c.filter)]: int(c.count)
+            for c in got
+            if type(c.filter) in _COUNTER_FILTERS
+        }
+        return MediaCounters(counts, topic_id)
 
     async def list_topics(self, src: int) -> list[TopicInfo]:
         peer = await self._peer(src)

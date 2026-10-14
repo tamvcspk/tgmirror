@@ -241,6 +241,12 @@ VI: dict[str, str] = {
         "File session đang được tiến trình tgmirror khác dùng. Đóng nó rồi thử lại."
     ),
     "err.transient": "Lỗi kết nối tới Telegram. Kiểm tra mạng rồi thử lại.",
+    "err.server_failed": (
+        "Telegram báo lỗi nội bộ cho yêu cầu này (đã thử lại nhiều lần). Thường chỉ là "
+        "tạm thời: thử lại sau ít phút. Nếu lỗi lặp lại với đúng yêu cầu đó (vd. đếm một "
+        "topic rất lớn), thử cách khác: `inspect --quick` không kèm --topic, hoặc quét bằng "
+        "`inspect`."
+    ),
     "err.generic": "{detail}",
     "err.aborted": "Đã hủy.",
     "err.no_tty": (
@@ -369,7 +375,10 @@ VI: dict[str, str] = {
         "Hết chỗ đĩa: {detail}. Tiến độ đã lưu, không mất gì — giải phóng dung lượng rồi chạy lại."
     ),
     "err.os_error": "Lỗi hệ điều hành/tệp: {detail}",
-    "err.crashed": "Có lỗi ngoài dự kiến: {detail}. Chạy lại với --debug để xem traceback đầy đủ.",
+    "err.crashed": (
+        "Có lỗi ngoài dự kiến: {detail}. Chạy lại với `tgmirror --debug <lệnh> ...` "
+        "(--debug đứng trước tên lệnh) để xem traceback đầy đủ."
+    ),
     "err.backup_dir_missing": (
         "{dir} không còn đọc được (mất backup.json) — thư mục có thể đã bị xoá hoặc chuyển chỗ. "
         "Dùng --from-backup THƯ_MỤC_MỚI để trỏ lại cặp này, hoặc --fresh để chạy lại từ đầu."
@@ -606,6 +615,25 @@ VI: dict[str, str] = {
     "menu.footer_info": "Nhấn phím bất kỳ để tiếp tục",
     "menu.footer_filter": "Gõ để lọc · Esc quay lại",
     "menu.item_clone": "Sao chép mới…",
+    "menu.item_explore": "Khám phá một kênh (đếm, lọc, rồi sao chép)…",
+    "explore.title": "Khám phá ▸ {src}",
+    "explore.footer": (
+        "←→ cột · ↑↓ dòng · Enter lọc · x loại trừ · ⌫ bỏ bước · Tab đổi cột · l danh sách · "
+        "s lưu @last · c clone · b backup · u cập nhật · R đọc lại · Esc thoát"
+    ),
+    "explore.footer_building": "q hoặc Esc: dừng đọc và dùng phần đã có",
+    "explore.index_line": "{messages} tin trong chỉ mục · cập nhật lúc {when}",
+    "explore.partial": "Chỉ mục chưa tới cuối nguồn: bấm u để đọc tiếp.",
+    "explore.flood": "Telegram bắt chờ {seconds} giây: dùng chỉ mục như đang có (bấm u sau).",
+    "explore.empty": "Nguồn không có tin nào trong chỉ mục.",
+    "explore.filter": "Lọc: {steps}",
+    "explore.no_filter": "(chưa lọc)",
+    "explore.not_filterable": "Dòng này không thành bộ lọc được.",
+    "explore.hidden_forward": "Nguồn forward ẩn tên: không lọc theo nó được.",
+    "explore.channel_post": "Bài đăng của kênh không có người gửi để lọc.",
+    "explore.exclude_month": "Không loại trừ theo tháng được: chọn tháng để lọc vào.",
+    "explore.saved": "Đã lưu bộ lọc ({count} tin) thành @last: dùng `--selection @last`.",
+    "explore.list_title": "Tin khớp (hiện {shown} trên {total})",
     "menu.item_backup": "Backup…",
     "menu.item_restore": "Restore…",
     "menu.item_resume": "Chạy tiếp",
@@ -643,6 +671,53 @@ VI: dict[str, str] = {
         "Đã dừng sớm: báo cáo chỉ gồm các tin tới id {last_id}, không phải cả nguồn."
     ),
     "inspect.progress": "Đang đọc: {messages} tin (tới id {last_id})...",
+    "inspect.quick_title": "Số đếm của chính Telegram ({scope}), một request:",
+    "inspect.quick_scope_all": "cả nguồn",
+    "inspect.quick_scope_topic": "topic {topic}",
+    "inspect.quick_note": (
+        "Telegram tự phân loại nên có thể lệch vài % so với quét đầy đủ (tin bị ẩn vì vi phạm "
+        'điều khoản vẫn được đếm là video/ảnh). Không đếm được theo khoảng id hay ngày; "—" là '
+        "Telegram không trả loại đó. Chạy `tgmirror inspect` để quét và lọc."
+    ),
+    "inspect.quick_alone": (
+        "--quick chỉ đếm cả nguồn hoặc một topic (--topic ID): không đi cùng bộ lọc khác, "
+        "--by/--list/--csv/--save/--plan hay --offline/--refresh/--no-index."
+    ),
+    "inspect.quick_backup": "--quick hỏi Telegram, nên không dùng với một thư mục backup.",
+    "inspect.quick_topic_not_forum": (
+        "--topic chỉ dùng với nguồn là forum, mà {src} không phải forum."
+    ),
+    "inspect.quick_topic_unknown": (
+        "Forum {src} không có topic {topic}: `tgmirror topics <nguồn>` liệt kê các topic."
+    ),
+    "inspect.kind.photo": "Ảnh",
+    "inspect.kind.video": "Video",
+    "inspect.kind.document": "Tài liệu",
+    "inspect.kind.audio": "Nhạc",
+    "inspect.kind.voice": "Voice",
+    "inspect.kind.video_note": "Video tròn",
+    "inspect.kind.gif": "GIF",
+    "inspect.kind.link": "Có link",
+    "inspect.kind.geo": "Vị trí",
+    "inspect.kind.contact": "Danh bạ",
+    "inspect.kind.poll": "Poll",
+    "inspect.kind.pinned": "Tin ghim",
+    "inspect.indexing": "Đang cập nhật chỉ mục: đã đọc {messages} tin (tới id {last_id})...",
+    "inspect.index_state": (
+        "Chỉ mục cục bộ: {messages} tin, cập nhật lúc {when} (số lượt xem/reaction và tin đã "
+        "sửa hay xoá chỉ được làm mới khi chạy với --refresh)."
+    ),
+    "inspect.index_offline": (
+        "Chỉ mục cục bộ (không gọi Telegram): {messages} tin, cập nhật lúc {when}."
+    ),
+    "inspect.index_partial": "Lần cập nhật cuối chưa tới cuối nguồn; chạy lại để đọc tiếp.",
+    "inspect.index_not_for_backup": (
+        "--refresh và --no-index chỉ dành cho một kênh: thư mục backup vốn đã đọc ngoại tuyến."
+    ),
+    "inspect.offline_no_index": (
+        "Chưa có chỉ mục cho {ref!r}: chạy `tgmirror inspect` một lần (không có --offline) để "
+        "dựng nó. --offline nhận id, @username hay tên đúng của nguồn đã được xem."
+    ),
     "inspect.stopping": (
         "Đang dừng, sẽ in báo cáo của phần đã đọc (Ctrl+C lần nữa để thoát ngay)."
     ),
@@ -971,6 +1046,12 @@ EN: dict[str, str] = {
     "err.too_many_channels": "The account reached Telegram's limit on channels/groups.",
     "err.session_busy": "The session file is used by another tgmirror process. Close it and retry.",
     "err.transient": "Connection problem talking to Telegram. Check your network and retry.",
+    "err.server_failed": (
+        "Telegram answered this request with an internal error (after several tries). Usually "
+        "passing: try again in a few minutes. If it keeps failing for that very request (e.g. "
+        "counting a huge topic), try another way: `inspect --quick` without --topic, or a "
+        "scan with `inspect`."
+    ),
     "err.generic": "{detail}",
     "err.aborted": "Cancelled.",
     "err.no_tty": (
@@ -1108,8 +1189,10 @@ EN: dict[str, str] = {
         "Out of disk space: {detail}. Progress is already saved — free up space and run again."
     ),
     "err.os_error": "OS/file error: {detail}",
-    "err.crashed": "Something unexpected went wrong: {detail}. Run again with --debug for the "
-    "full traceback.",
+    "err.crashed": (
+        "Something unexpected went wrong: {detail}. Run again as `tgmirror --debug <command> "
+        "...` (--debug goes before the command name) for the full traceback."
+    ),
     "err.backup_dir_missing": (
         "{dir} is no longer readable (backup.json is missing) — it may have been deleted or "
         "moved. Use --from-backup NEW_DIR to point this pair at it, or --fresh to start over."
@@ -1351,6 +1434,25 @@ EN: dict[str, str] = {
     "menu.footer_info": "Press any key to continue",
     "menu.footer_filter": "Type to filter - Esc back",
     "menu.item_clone": "New clone...",
+    "menu.item_explore": "Explore a channel (count, filter, then copy)...",
+    "explore.title": "Explore > {src}",
+    "explore.footer": (
+        "left/right column - up/down row - Enter filter - x exclude - Backspace undo - Tab "
+        "other column - l list - s save @last - c clone - b backup - u update - R re-read - Esc"
+    ),
+    "explore.footer_building": "q or Esc: stop reading and use what there is",
+    "explore.index_line": "{messages} messages in the index - updated {when}",
+    "explore.partial": "The index does not reach the end of the source: press u to read on.",
+    "explore.flood": "Telegram asked to wait {seconds} s: using the index as it is (u: retry).",
+    "explore.empty": "The source has no messages in the index.",
+    "explore.filter": "Filter: {steps}",
+    "explore.no_filter": "(not filtered yet)",
+    "explore.not_filterable": "This row cannot become a filter.",
+    "explore.hidden_forward": "The forward hides its origin: it cannot be filtered on.",
+    "explore.channel_post": "A channel post has no sender to filter on.",
+    "explore.exclude_month": "A month cannot be excluded: pick a month to keep instead.",
+    "explore.saved": "Filter saved ({count} messages) as @last: use `--selection @last`.",
+    "explore.list_title": "Matching messages (showing {shown} of {total})",
     "menu.item_backup": "Backup...",
     "menu.item_restore": "Restore...",
     "menu.item_resume": "Continue",
@@ -1390,6 +1492,55 @@ EN: dict[str, str] = {
         "Stopped early: the report only covers messages up to id {last_id}, not the whole source."
     ),
     "inspect.progress": "Reading: {messages} messages (up to id {last_id})...",
+    "inspect.quick_title": "Telegram's own counters ({scope}), one request:",
+    "inspect.quick_scope_all": "the whole source",
+    "inspect.quick_scope_topic": "topic {topic}",
+    "inspect.quick_note": (
+        "Telegram classifies by itself, so it can differ a few % from a full scan (a message "
+        "hidden for violating the terms still counts as a video/photo). No range by id or date; "
+        '"—" means Telegram does not return that kind. Run `tgmirror inspect` to scan and filter.'
+    ),
+    "inspect.quick_alone": (
+        "--quick counts the whole source or one topic (--topic ID): not with other filters, "
+        "--by/--list/--csv/--save/--plan or --offline/--refresh/--no-index."
+    ),
+    "inspect.quick_backup": "--quick asks Telegram, so it does not apply to a backup directory.",
+    "inspect.quick_topic_not_forum": (
+        "--topic only applies to a forum source, and {src} is not a forum."
+    ),
+    "inspect.quick_topic_unknown": (
+        "The forum {src} has no topic {topic}: `tgmirror topics <source>` lists its topics."
+    ),
+    "inspect.kind.photo": "Photos",
+    "inspect.kind.video": "Videos",
+    "inspect.kind.document": "Documents",
+    "inspect.kind.audio": "Music",
+    "inspect.kind.voice": "Voice",
+    "inspect.kind.video_note": "Round videos",
+    "inspect.kind.gif": "GIFs",
+    "inspect.kind.link": "With a link",
+    "inspect.kind.geo": "Locations",
+    "inspect.kind.contact": "Contacts",
+    "inspect.kind.poll": "Polls",
+    "inspect.kind.pinned": "Pinned",
+    "inspect.indexing": "Updating the index: read {messages} messages (up to id {last_id})...",
+    "inspect.index_state": (
+        "Local index: {messages} messages, updated {when} (views/reactions and messages edited "
+        "or deleted since are only refreshed by running with --refresh)."
+    ),
+    "inspect.index_offline": (
+        "Local index (no Telegram call): {messages} messages, updated {when}."
+    ),
+    "inspect.index_partial": (
+        "The last update did not reach the end of the source; run again to go on."
+    ),
+    "inspect.index_not_for_backup": (
+        "--refresh and --no-index are for a channel: a backup directory is read offline anyway."
+    ),
+    "inspect.offline_no_index": (
+        "There is no index for {ref!r}: run `tgmirror inspect` once (without --offline) to build "
+        "it. --offline takes the id, @username or exact title of a source inspected before."
+    ),
     "inspect.stopping": (
         "Stopping; the report of what was read will be printed (Ctrl+C again quits at once)."
     ),

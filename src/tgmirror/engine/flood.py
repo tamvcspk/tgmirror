@@ -29,6 +29,7 @@ from tgmirror.core.errors import FloodWait, PeerFlood
 from tgmirror.core.gateway import (
     NO_FILTER,
     ExportedMessage,
+    MediaCounters,
     MessageReader,
     OnTransfer,
     Prepared,
@@ -189,6 +190,18 @@ class FloodGuard:
         )
 
 
+async def inspect_guard(
+    store: Store, limits: Limits, *, notifier: Notifier, nap: Sleep
+) -> FloodGuard:
+    """The guard a read-only look at a source reads through (``tgmirror inspect``, the "Khám
+    phá" screen): paced like a run's reads, its floods feeding the account's limiter state."""
+    owner = FloodOwner.of_inspect()
+    limiter = Limiter(limits, nap, state=await store.load_limiter_state(owner.account))
+    return FloodGuard(
+        limiter=limiter, store=store, owner=owner, limits=limits, notifier=notifier, nap=nap
+    )
+
+
 class _GuardedReader:
     def __init__(self, guard: FloodGuard, inner: MessageReader) -> None:
         self._guard = guard
@@ -261,6 +274,22 @@ class _GuardedReader:
                 await self._guard.flooded("list_topics", exc, give_up=floods >= MAX_FLOODS_PER_CALL)
             except PeerFlood:
                 await self._guard.peer_flood("list_topics")
+                raise
+
+    async def media_counters(self, src: int, topic_id: int | None = None) -> MediaCounters:
+        """One paced read request (``inspect --quick``)."""
+        floods = 0
+        while True:
+            await self._guard.pace_read(1)
+            try:
+                return await self._inner.media_counters(src, topic_id)
+            except FloodWait as exc:
+                floods += 1
+                await self._guard.flooded(
+                    "media_counters", exc, give_up=floods >= MAX_FLOODS_PER_CALL
+                )
+            except PeerFlood:
+                await self._guard.peer_flood("media_counters")
                 raise
 
     async def fetch(self, src: int, unit: Unit) -> Prepared:

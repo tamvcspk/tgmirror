@@ -20,7 +20,7 @@ MediaOption = Annotated[
     typer.Option(
         "--media",
         help="Only these media types, comma-separated: photo, video, audio, voice, document, "
-        "gif, sticker, video_note, poll, geo, contact, game, invoice, webpage, text.",
+        "gif, sticker, video_note, poll, geo, contact, game, invoice, webpage, other, text.",
         rich_help_panel=PANEL,
     ),
 ]

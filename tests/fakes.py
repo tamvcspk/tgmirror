@@ -29,6 +29,7 @@ from tgmirror.core.errors import (
 )
 from tgmirror.core.gateway import (
     ALBUM_MARGIN,
+    COUNTER_KEYS,
     MAX_IDS_PER_CALL,
     NO_FILTER,
     Append,
@@ -38,6 +39,7 @@ from tgmirror.core.gateway import (
     Clear,
     ExportedMedia,
     ExportedMessage,
+    MediaCounters,
     MediaKind,
     OnTransfer,
     Prepared,
@@ -256,6 +258,33 @@ class FakeGateway:
         self._channel(src)
         general = TopicInfo(id=1, title="General")
         return [general, *self.topics.get(src, [])]
+
+    async def media_counters(self, src: int, topic_id: int | None = None) -> MediaCounters:
+        """What Telegram's counters say: per kind, over messages that are not service ones; the
+        server answers for a topic by ``top_msg_id`` (1 = General) and has no range."""
+        self._enter("media_counters", src, topic_id)
+        self._channel(src)
+        by_media = {
+            MediaKind.PHOTO: "photo",
+            MediaKind.VIDEO: "video",
+            MediaKind.DOCUMENT: "document",
+            MediaKind.AUDIO: "audio",
+            MediaKind.VOICE: "voice",
+            MediaKind.VIDEO_NOTE: "video_note",
+            MediaKind.GIF: "gif",
+            MediaKind.GEO: "geo",
+        }
+        counts = dict.fromkeys(COUNTER_KEYS, 0)
+        for m in self.messages[src]:
+            if m.is_service:
+                continue
+            if topic_id is not None and (m.topic_id or 1) != topic_id:
+                continue
+            if m.media in by_media:
+                counts[by_media[m.media]] += 1
+            if m.link_domains:
+                counts["link"] += 1
+        return MediaCounters(counts, topic_id)
 
     async def create_topic(self, dst: int, title: str) -> int:
         self._enter("create_topic", dst, title)

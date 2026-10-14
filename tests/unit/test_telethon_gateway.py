@@ -12,7 +12,11 @@ import pytest
 from pydantic import SecretStr
 from telethon import TelegramClient, errors, types
 from telethon.tl.functions.channels import CreateChannelRequest, ToggleForumRequest
-from telethon.tl.functions.messages import CreateForumTopicRequest, GetForumTopicsRequest
+from telethon.tl.functions.messages import (
+    CreateForumTopicRequest,
+    GetForumTopicsRequest,
+    GetSearchCountersRequest,
+)
 
 from tgmirror.core.auth import TelegramAuth
 from tgmirror.core.config import Config
@@ -582,3 +586,27 @@ async def test_telethon_session_refuses_a_second_open_on_the_same_session(
         pass
     plain = map_exception(errors.FloodWaitError(None, capture=15))
     assert isinstance(plain, FloodWait) and plain.slow_mode is False
+
+
+async def test_media_counters_asks_once_and_keeps_only_the_kinds_it_knows() -> None:
+    """Spike 1: the server answers for ten filters and leaves contacts/polls/pinned out; a count
+    comes back under our key, and a filter we did not ask for (or do not name) is ignored."""
+    client = StubClient()
+    answer = [
+        types.messages.SearchCounter(types.InputMessagesFilterPhotos(), 144),
+        types.messages.SearchCounter(types.InputMessagesFilterVideo(), 861),
+        types.messages.SearchCounter(types.InputMessagesFilterUrl(), 79),
+        types.messages.SearchCounter(types.InputMessagesFilterPhotoVideo(), 1005),  # no key: a sum
+    ]
+    client.results.append(answer)
+
+    got = await TelethonGateway(client).media_counters(-1001, 5)  # type: ignore[arg-type]
+
+    assert got.counts == {"photo": 144, "video": 861, "link": 79}
+    assert got.topic_id == 5
+    (request,) = client.requests
+    assert isinstance(request, GetSearchCountersRequest)
+    assert request.top_msg_id == 5
+    asked = {type(f) for f in request.filters}
+    assert types.InputMessagesFilterContacts not in asked  # the server drops these anyway
+    assert types.InputMessagesFilterPhotos in asked and types.InputMessagesFilterGeo in asked

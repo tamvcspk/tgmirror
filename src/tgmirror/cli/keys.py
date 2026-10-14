@@ -54,6 +54,8 @@ class MenuKey(StrEnum):
 
     UP = "up"
     DOWN = "down"
+    LEFT = "left"
+    RIGHT = "right"
     ENTER = "enter"
     ESC = "esc"
     BACKSPACE = "backspace"
@@ -77,6 +79,10 @@ def decode_menu_key(raw: str) -> MenuKey | str:
             return MenuKey.UP
         case "\x1b[B" | "\xe0P":
             return MenuKey.DOWN
+        case "\x1b[D" | "\xe0K":
+            return MenuKey.LEFT
+        case "\x1b[C" | "\xe0M":
+            return MenuKey.RIGHT
         case _:
             return raw
 

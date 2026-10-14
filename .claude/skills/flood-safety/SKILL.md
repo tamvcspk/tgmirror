@@ -32,7 +32,7 @@ Source docs: `docs/05-chong-flood.md` (numbers, rationale) and `docs/01-kien-tru
 
 When adding or changing a code path that can raise flood errors:
 
-- [ ] Wrapped by `FloodGuard.write` / `FloodGuard.reader` (do not hand-roll retry loops).
+- [ ] Wrapped by `FloodGuard.write` / `FloodGuard.reader` (do not hand-roll retry loops). A read-only look (`inspect`, the "Khám phá" screen, index updates) gets its guard from `engine/flood.py::inspect_guard`; `media_counters` is one paced read request like `list_topics`.
 - [ ] Logs to `flood_log` (method, seconds, delay, batch_size).
 - [ ] `seconds <= max_auto_wait` → notice, sleep `seconds + uniform(1,5)`, retry the same call (a cut read resumes after the last message it gave).
 - [ ] `seconds > max_auto_wait`, or 5 floods in a row on one call → refused batch's `pending` deleted, run `waiting_flood`, `resume_at` set, exit 3 (keep waiting only with `--wait`, never past the 5-in-a-row stop).

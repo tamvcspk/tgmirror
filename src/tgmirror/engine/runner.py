@@ -809,7 +809,7 @@ def _placeholder_ids(messages: Sequence[SrcMessage], run: Run) -> set[int]:
     options = Options.of(run.options)
     ids: set[int] = set()
     for m in messages:
-        if m.media not in (MediaKind.POLL, MediaKind.GAME, MediaKind.INVOICE):
+        if m.media not in (MediaKind.POLL, MediaKind.GAME, MediaKind.INVOICE, MediaKind.OTHER):
             continue
         if plan_unit(Unit((m,)), options).kind is ActionKind.PLACEHOLDER:
             ids.add(m.id)

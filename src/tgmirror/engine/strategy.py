@@ -66,6 +66,7 @@ FILELESS = frozenset(
         MediaKind.CONTACT,
         MediaKind.GAME,
         MediaKind.INVOICE,
+        MediaKind.OTHER,
     }
 )
 
@@ -79,6 +80,7 @@ NO_CAPTION = frozenset(
         MediaKind.CONTACT,
         MediaKind.GAME,
         MediaKind.INVOICE,
+        MediaKind.OTHER,
         MediaKind.STICKER,
         MediaKind.VIDEO_NOTE,
     }

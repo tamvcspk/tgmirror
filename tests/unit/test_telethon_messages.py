@@ -18,12 +18,15 @@ from tgmirror.core.errors import (
     NoPermission,
     PeerFlood,
     PerMessage,
+    ServerFailed,
+    Transient,
 )
 from tgmirror.core.gateway import ALBUM_MARGIN, MediaKind, ServerFilter, SrcMessage
 from tgmirror.core.telethon_gateway import (
     _MEDIA_FILTERS,
     READ_WAIT,
     TelethonGateway,
+    _self_contained_media,
     map_exception,
     media_kind,
     src_message,
@@ -86,10 +89,27 @@ STICKER = types.DocumentAttributeSticker(alt="x", stickerset=types.InputStickerS
         (bare(types.MessageMediaGame), MediaKind.GAME),
         (bare(types.MessageMediaInvoice), MediaKind.INVOICE),
         (bare(types.MessageMediaDice), MediaKind.DOCUMENT),  # no filter name: a generic attachment
+        # nothing to download and nothing to rebuild it from: never a document
+        (bare(types.MessageMediaToDo), MediaKind.OTHER),
+        (bare(types.MessageMediaPaidMedia), MediaKind.OTHER),
+        (bare(types.MessageMediaStory), MediaKind.OTHER),
+        (bare(types.MessageMediaGiveaway), MediaKind.OTHER),
+        (bare(types.MessageMediaGiveawayResults), MediaKind.OTHER),
+        (bare(types.MessageMediaVideoStream), MediaKind.OTHER),
+        (bare(types.MessageMediaUnsupported), MediaKind.OTHER),
     ],
 )
 def test_media_kind(media: Any, kind: MediaKind) -> None:
     assert media_kind(message(media=media)) is kind
+
+
+def test_other_media_is_not_pushed_down_and_a_backup_keeps_a_record_of_it() -> None:
+    """``other`` has no Telegram filter of its own, and an export says what was there instead of
+    writing an empty text message."""
+    assert MediaKind.OTHER not in PUSHABLE_MEDIA
+    exported = _self_contained_media(bare(types.MessageMediaStory))
+    assert exported is not None and exported.kind is MediaKind.OTHER
+    assert exported.title == "Story"
 
 
 def test_src_message_reduces_a_telethon_message() -> None:
@@ -112,6 +132,16 @@ def test_message_id_invalid_maps_to_per_message() -> None:
     mapped = map_exception(errors.MessageIdInvalidError(None))
 
     assert isinstance(mapped, PerMessage) and mapped.reason == "MESSAGE_ID_INVALID"
+
+
+def test_telethons_gave_up_retrying_maps_to_server_failed_not_to_a_crash() -> None:
+    """Telethon repeats a request that fails with ``RpcCallFailError`` and, out of tries, raises a
+    bare ``ValueError``: it used to reach the person as "unexpected error" (found by a real
+    ``inspect --quick --topic``). Any other ``ValueError`` is still not ours to map."""
+    mapped = map_exception(ValueError("Request was unsuccessful 6 time(s)"))
+
+    assert isinstance(mapped, ServerFailed) and isinstance(mapped, Transient)
+    assert map_exception(ValueError("something else entirely")) is None
 
 
 class HistoryClient:

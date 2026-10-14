@@ -15,6 +15,7 @@ from tgmirror.ui.menu.screens.backup import backup_screen
 from tgmirror.ui.menu.screens.channels import ChannelsScreen
 from tgmirror.ui.menu.screens.clone import clone_screen
 from tgmirror.ui.menu.screens.config import ConfigScreen
+from tgmirror.ui.menu.screens.explore import explore_screen
 from tgmirror.ui.menu.screens.history import HistoryScreen
 from tgmirror.ui.menu.screens.login import login_screen
 from tgmirror.ui.menu.screens.restore import restore_screen
@@ -26,6 +27,7 @@ from tgmirror.ui.messages import t
 _Action = Literal[
     "login",
     "clone",
+    "explore",
     "backup",
     "restore",
     "resume",
@@ -70,6 +72,7 @@ class MainMenuScreen(Screen):
         else:
             items = [
                 (t("menu.item_clone"), "clone"),
+                (t("menu.item_explore"), "explore"),
                 (t("menu.item_backup"), "backup"),
                 (t("menu.item_restore"), "restore"),
             ]
@@ -106,6 +109,8 @@ class MainMenuScreen(Screen):
                 return ("push", login_screen(self._app))
             case "clone":
                 return ("push", clone_screen(self._app))
+            case "explore":
+                return ("push", explore_screen(self._app))
             case "backup":
                 return ("push", backup_screen(self._app))
             case "restore":

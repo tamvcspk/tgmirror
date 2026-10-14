@@ -48,6 +48,12 @@ class Paths:
         return self.data_dir / "selections"
 
     @property
+    def index_dir(self) -> Path:
+        """``<source id>.db``: the metadata index of a source (``tgmirror inspect``, phase 18b).
+        A cache that can be rebuilt: not in ``tgmirror.db``, not in an app-data export."""
+        return self.data_dir / "index"
+
+    @property
     def tmp_dir(self) -> Path:
         """Scratch space for strategy B downloads (``tmp/<run>/<msg_id>``)."""
         return self.data_dir / "tmp"
