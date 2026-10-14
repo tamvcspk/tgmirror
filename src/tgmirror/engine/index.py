@@ -37,7 +37,7 @@ from tgmirror.store.index import MetadataIndex
 
 BATCH = 200  # messages per transaction: a stop or a crash loses at most this many reads
 _DATES = ("date", "edit_date")
-_TUPLES = ("hashtags", "link_domains")
+_TUPLES = ("hashtags", "link_domains", "own_links")
 
 
 # ---- one message <-> the text kept in the index -----------------------------------------------

@@ -144,6 +144,12 @@ def check_options(request: RunRequest) -> None:
     transform = Transform.from_json(request.transform_json)  # TransformError: exit code 2
     if transform.rewrites and request.mode == "copy":  # (routing alone is a forward: allowed)
         raise InvalidOptions("transform_needs_reupload")
+    if transform.keep_forward_header and (
+        request.mode == "reupload"
+        or request.caption != CaptionMode.KEEP
+        or request.topic_as_hashtag
+    ):  # the header only exists on a forward (the transform itself refuses its own rewrites)
+        raise InvalidOptions("forward_header_needs_forward")
 
 
 async def begin_run(
@@ -223,6 +229,7 @@ async def begin_run(
             src_protected=protected,
             retry_of=request.retry_of,
             from_backup=request.from_backup,
+            dst_username=dst.username,
         ),
         filters_json=request.filters_json,
     )

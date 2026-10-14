@@ -223,6 +223,7 @@ Without a file, the same things as flags (on `clone`, `restore` and `inspect --p
 | `--topic-map "Old=New"` (repeat) | one `topic_map` entry | added to the file's; wins for the same topic. Left of `=`: a topic title (any case) or, when all digits, its id; split at the first `=` |
 | `--topic-default NAME` | `default:` | replaces the file's |
 | `--strip-routing-hashtag` | `strip: true` | switches it on |
+| `--keep-replies` | `reply: keep` | switches it on |
 | `--caption …` / `--caption-text` | `caption:` operations | run **after** the file's operations |
 
 `--topic-default` and `--strip-routing-hashtag` only mean something with routing (`--hashtag-to-topic`, or `hashtag_to_topic:` in the file): without it they are a usage error, not silently ignored. `limit`, `skip` and `hashtag_format` have no flag; put them in the file.
@@ -238,6 +239,12 @@ tgmirror clone --src "@my_forum" --dst-new "Mirror" --topic-map "Old chat=Chat" 
 tgmirror inspect "@my_channel" --plan clone --hashtag-to-topic --json
 ```
 
+`--keep-replies` (or `reply: keep`) makes a message that answered another one answer *its copy*, found through the pair's record of what was copied, so a copy made by an earlier run counts. A forward cannot carry a reply, so these messages are sent again (by file id, or downloaded and re-uploaded when the source restricts saving content, with the same statement as `--mode reupload`); one whose original was not copied is still sent, without its reply, and the result line says how many. `links: rewrite` (or `--rewrite-links`) turns a link in a caption or text that points at a message of the source into a link to that message's copy in the destination, found through the pair's record of what was copied. Only links to messages already copied can change: a link to a later message (or one the filter left out) stays as it is and the result line counts it. It runs before the caption operations, and also on plain text messages. Checked on real Telegram: the links come out pointing at the copies.
+
+`forward_header: keep` (or `--keep-forward-header`) leaves the "Forwarded from" header on what is forwarded, as a plain forward does. A header only exists on a forward, so it is refused (exit code 2) together with anything that sends a message again: caption operations, `--strip-routing-hashtag`, `--keep-replies`, `--mode reupload`. On real Telegram an album forwarded this way stays one album and every message carries the header; not yet confirmed there: a forward into a forum topic landing in it (`scripts/spike_forward_header.py --topic N` asks).
+
+A reply sent into a forum topic has been checked on real Telegram: it lands in the right topic and answers the right message (and so has a whole `clone --keep-replies` run into a forum: replies kept exactly, none lost).
+
 Forum to forum with a transform file has been run against real Telegram. Not yet confirmed there: whether a forward into a topic lands in the right one when the *source* is not a forum, whether an album forwarded into a topic keeps its group, and what General is called on an account with a localised interface. Try a small channel first.
 
 #### Copy options (`clone`; `backup`/`restore` take the ones that apply)
@@ -249,6 +256,9 @@ Forum to forum with a transform file has been run against real Telegram. Not yet
 | `--caption keep\|strip-links\|append\|none` (+ `--caption-text`) | what happens to the captions of media messages |
 | `--transform FILE` | a YAML transform: caption operations and topic rules (see "Transform") |
 | `--hashtag-to-topic`, `--topic-map "Old=New"`, `--topic-default NAME`, `--strip-routing-hashtag` | route messages into forum topics by hashtag / rename or merge topics / topic for the rest / take the routing hashtag out of the caption (see "Transform") |
+| `--keep-forward-header` | forward with the "Forwarded from" header on instead of without author (only on what is forwarded: it does not go with `--mode reupload`, `--caption`, `--keep-replies` or `--strip-routing-hashtag`) |
+| `--rewrite-links` | a link to a message of the source (`t.me/<source>/<id>`) becomes a link to its copy; one whose message has no copy yet stays and is counted (those messages are sent again) |
+| `--keep-replies` | a reply answers the copy of the message it answered (those messages are sent again, since a forward carries no reply; one whose original was not copied loses its reply) |
 | `--topic-as-hashtag` / `--no-topic-as-hashtag` | forum source into a destination without topics: keep each topic's name as a hashtag |
 | `--reset-polls`, `--ignore-unsupported`, `--placeholder` | with `reupload`: re-create polls (votes are lost) / leave out what cannot be copied / and post a note where it was |
 | `--yes-i-administer-this-channel` | your own statement for a "Restrict saving content" source (see "Responsible use"); `--yes` never stands in for it |

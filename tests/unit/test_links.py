@@ -2,7 +2,16 @@
 
 import pytest
 
-from tgmirror.core.links import domain_matches, domain_of, domains_in_html, domains_of
+from tgmirror.core.links import (
+    MessageLink,
+    domain_matches,
+    domain_of,
+    domains_in_html,
+    domains_of,
+    parse_message_link,
+    points_at,
+    relinked,
+)
 
 
 @pytest.mark.parametrize(
@@ -52,3 +61,64 @@ def test_domains_in_html_reads_hyperlinks_and_bare_urls() -> None:
 
 def test_domains_in_html_without_links_is_empty() -> None:
     assert domains_in_html("<b>no links</b> here #tag") == ()
+
+
+# ---- links to messages (phase 19c3) -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://t.me/news/123", MessageLink("news", 123)),
+        ("http://t.me/News/123", MessageLink("news", 123)),  # usernames are not case-sensitive
+        ("t.me/news/123", MessageLink("news", 123)),  # shown without a scheme
+        ("https://t.me/news/123?single", MessageLink("news", 123)),
+        ("https://telegram.me/news/7", MessageLink("news", 7)),
+        ("https://www.t.me/news/7", MessageLink("news", 7)),
+        ("https://t.me/c/1234567890/42", MessageLink("c/1234567890", 42)),
+        ("https://t.me/c/1234567890/5/42", MessageLink("c/1234567890", 42)),  # topic 5, message 42
+        ("https://t.me/forum_chat/5/42", MessageLink("forum_chat", 42)),
+    ],
+)
+def test_a_link_to_a_message_names_the_chat_and_the_message(
+    url: str, expected: MessageLink
+) -> None:
+    assert parse_message_link(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://t.me/news",  # a channel, not a message
+        "https://t.me/joinchat/AAAA",
+        "https://t.me/+AbCdEf",
+        "https://t.me/addstickers/pack",
+        "https://t.me/s/news/123",  # the web preview of a channel
+        "https://t.me/c/123",
+        "https://t.me/c/abc/1",
+        "https://t.me/news/abc",
+        "https://t.me/news/0",
+        "https://example.org/news/123",
+        "tg://resolve?domain=news&post=123",
+        "mailto:a@b.c",
+        "",
+        "https://t.me/ab/1",  # shorter than any username
+    ],
+)
+def test_what_is_not_a_link_to_a_message_is_none(url: str) -> None:
+    assert parse_message_link(url) is None
+
+
+def test_a_link_is_into_the_source_by_its_username_or_its_number() -> None:
+    names = {"news", "1234567890"}
+
+    assert points_at(MessageLink("news", 1), names)
+    assert points_at(MessageLink("c/1234567890", 1), names)
+    assert not points_at(MessageLink("other", 1), names)
+    assert not points_at(MessageLink("c/999", 1), names)
+
+
+def test_the_new_link_keeps_the_way_the_old_one_was_written() -> None:
+    assert relinked("https://t.me/news/12", 7, "t.me/copy") == "https://t.me/copy/7"
+    assert relinked("t.me/news/12", 7, "t.me/copy") == "t.me/copy/7"
+    assert relinked("t.me/c/111/5/12", 7, "t.me/c/222") == "t.me/c/222/7"  # the topic is dropped

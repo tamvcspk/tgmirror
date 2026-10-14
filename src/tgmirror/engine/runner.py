@@ -50,6 +50,7 @@ from tgmirror.core.errors import (
 from tgmirror.core.gateway import (
     CaptionMode,
     ChatKind,
+    LinkRewrite,
     MediaKind,
     MessageReader,
     SrcMessage,
@@ -538,6 +539,18 @@ class Runner:
     async def _send(self, run: Run, batch: Batch, ready: Ready | None = None) -> None:
         assert self._guard is not None and self._limiter is not None
         route = await self._topic_route(run, batch) if batch.units else TopicRoute()
+        transform = Transform.from_json(run.options.transform_json)
+        reply_to: int | None = None
+        reply_lost = False
+        links: LinkRewrite | None = None
+        links_left = 0
+        if ready is not None and ready.action is not None:
+            # phase 19c: only a unit sent again can answer something or carry a new link
+            if transform.keep_replies:
+                reply_to = await self._reply_target(run, transform, batch.units[0])
+                reply_lost = reply_to is None and batch.units[0].reply_to_id is not None
+            if transform.rewrite_links:
+                links, links_left = await self._link_targets(run, batch.units[0])
         batch_id = await self._store.begin_batch(run.id, batch.units)  # write-ahead
         try:
             # A FloodWait is sat out inside ``write`` and the same call repeated: the batch stays
@@ -549,9 +562,7 @@ class Runner:
                 and batch.strategy is Strategy.REFERENCE
             ):  # strategy B, by the files' ids: one unit
                 options = Options.of(run.options)
-                strip = Transform.from_json(run.options.transform_json).topics.strip_tag(
-                    batch.units[0]
-                )
+                strip = transform.topics.strip_tag(batch.units[0])
                 results = await self._guard.write(
                     "send_by_reference",
                     batch.size,
@@ -571,13 +582,13 @@ class Runner:
                         topic=route.dst_topic_id,
                         hashtag=route.hashtag,
                         strip=strip,
+                        reply_to=reply_to,
+                        links=links,
                     ),
                 )
             elif ready is not None and ready.action is not None:  # strategy B: one unit
                 action, options = ready.action, Options.of(run.options)
-                strip = Transform.from_json(run.options.transform_json).topics.strip_tag(
-                    batch.units[0]
-                )
+                strip = transform.topics.strip_tag(batch.units[0])
                 method = "send_text" if action.kind is ActionKind.PLACEHOLDER else "send_prepared"
                 results = await self._guard.write(
                     method,
@@ -593,6 +604,8 @@ class Runner:
                         topic=route.dst_topic_id,
                         hashtag=route.hashtag,
                         strip=strip,
+                        reply_to=reply_to,
+                        links=links,
                     ),
                 )
             else:
@@ -600,7 +613,12 @@ class Runner:
                     "copy_messages",
                     batch.size,
                     lambda: copy_batch(
-                        self._gateway, run.src_id, run.dst_id, batch, topic=route.dst_topic_id
+                        self._gateway,
+                        run.src_id,
+                        run.dst_id,
+                        batch,
+                        topic=route.dst_topic_id,
+                        keep_header=transform.keep_forward_header,
                     ),
                 )
         except PerMessage as exc:
@@ -622,10 +640,48 @@ class Runner:
             batch_id,
             results,
             batch.last_id,
-            extra_stats=_extra_stats(batch),
+            extra_stats=_extra_stats(batch, reply_lost=reply_lost, links_left=links_left),
             limiter=self._limiter.state,
         )
         self._reporter.progress(updated)
+
+    async def _reply_target(self, run: Run, transform: Transform, unit: Unit) -> int | None:
+        """Phase 19c: the message in the destination that ``unit`` should answer, or ``None``
+        (it answers nothing, or what it answered has no copy there: the unit is sent without its
+        reply, which the run counts as ``reply_lost``).
+
+        The copy is found through ``msg_map`` (so one made by an earlier run of the pair counts).
+        With hashtag routing (19b) the two messages may have been sent to different topics, and a
+        reply across topics is not one: the answered message is read again (one paced read) to
+        see where its own hashtags sent it.
+        """
+        answered = unit.reply_to_id
+        if answered is None:
+            return None
+        if transform.routes_to_topics:
+            assert self._reader is not None
+            found = await self._reader.get_messages(run.src_id, [answered])
+            if not found:
+                return None
+            there = transform.topics.destination(Unit((found[0],)))
+            if there != transform.topics.destination(unit):
+                return None
+        return await self._store.dst_id_of(run.id, answered)
+
+    async def _link_targets(self, run: Run, unit: Unit) -> tuple[LinkRewrite | None, int]:
+        """Phase 19c3: for the links of ``unit`` into its own chat, which message of the destination
+        each one should point at (through ``msg_map``, so a copy of an earlier run counts), and how
+        many have no copy yet: those stay as they are and the run counts them."""
+        wanted = unit.own_links
+        if not wanted:
+            return None, 0
+        found = await self._store.dst_ids_of(run.id, wanted)
+        left = len(wanted) - len(found)
+        if not found:
+            return None, left
+        username = run.options.dst_username
+        prefix = f"t.me/{username}" if username else f"t.me/c/{_bare_id(run.dst_id)}"
+        return LinkRewrite(tuple(sorted(found.items())), prefix), left
 
     async def _send_units_apart(self, run: Run, batch: Batch) -> None:
         assert self._guard is not None
@@ -784,14 +840,27 @@ def _topic_hashtag(run: Run) -> bool:
     return run.options.topic_as_hashtag and run.dst_kind is not ChatKind.FORUM
 
 
-def _extra_stats(batch: Batch) -> dict[str, int] | None:
+def _bare_id(chat_id: int) -> str:
+    """The number in ``t.me/c/<number>/...`` for a marked channel id (``-100<number>``)."""
+    return str(chat_id).removeprefix("-100").removeprefix("-")
+
+
+def _extra_stats(
+    batch: Batch, *, reply_lost: bool = False, links_left: int = 0
+) -> dict[str, int] | None:
     """What a batch adds to the run's counters besides its own messages: the ones that needed no
-    work (dropped by the filter, or already in the destination)."""
+    work (dropped by the filter, or already in the destination), a reply that had to be given
+    up (``reply_lost``, phase 19c: the message itself was sent, just not as an answer) and the
+    links to a message with no copy yet (``links_left``, 19c3)."""
     extra = {}
     if batch.skipped:
         extra["skipped_filter"] = batch.skipped
     if batch.already:
         extra["already_done"] = batch.already
+    if reply_lost:
+        extra["reply_lost"] = 1
+    if links_left:
+        extra["links_left"] = links_left
     return extra or None
 
 

@@ -5,7 +5,8 @@ offer the same flag and the same rules.
 The transform can also arrive in the ``transform:`` section of a ``--selection`` file. Both at
 once is a conflict, not a merge (two files, no way to say which is the base). The ``topics`` flags
 (``--hashtag-to-topic``, ``--topic-map``, ``--topic-default``, ``--strip-routing-hashtag``) are
-not a second file: they go on top of whichever one there is (or of nothing).
+not a second file: they go on top of whichever one there is (or of nothing), and so do
+``--keep-replies``, ``--keep-forward-header`` and ``--rewrite-links``.
 """
 
 import asyncio
@@ -82,15 +83,59 @@ StripRoutingHashtagOption = Annotated[
 ]
 
 
+KeepRepliesOption = Annotated[
+    bool,
+    typer.Option(
+        "--keep-replies",
+        help="A message that answers another one answers the copy of it in the destination. "
+        "Those messages are sent again (by file id, or downloaded and re-uploaded when the "
+        "source restricts saving content) instead of forwarded, since a forward carries no "
+        "reply. One whose original was not copied is sent without its reply.",
+        rich_help_panel="Transform",
+    ),
+]
+
+
+KeepForwardHeaderOption = Annotated[
+    bool,
+    typer.Option(
+        "--keep-forward-header",
+        help='Forward with the "Forwarded from" header on, as a plain forward does (default: '
+        "without it). Only on what is forwarded, so it does not go with --mode reupload, "
+        "--caption, --keep-replies or --strip-routing-hashtag: those send a message again, "
+        "which has no header.",
+        rich_help_panel="Transform",
+    ),
+]
+
+
+RewriteLinksOption = Annotated[
+    bool,
+    typer.Option(
+        "--rewrite-links",
+        help="A link to a message of the source (t.me/<source>/<id>) becomes a link to its copy in "
+        "the destination. One whose message has no copy yet stays as it is, and the result line "
+        "counts those. The messages carrying such a link are sent again (by file id, or "
+        "downloaded and re-uploaded when the source restricts saving content).",
+        rich_help_panel="Transform",
+    ),
+]
+
+
 @dataclass(frozen=True, slots=True)
 class TopicFlags:
-    """The ``topics`` flags of one command line, gathered so a command passes them on as one
-    value. All off by default, which leaves a transform exactly as its file wrote it."""
+    """The flags of one command line that go on top of a transform, gathered so a command passes
+    them on as one value (named for the ``topics`` flags it began with; ``keep_replies`` is the
+    first that is not about topics). All off by default, which leaves a transform exactly as its
+    file wrote it."""
 
     hashtag_to_topic: bool = False
     topic_map: tuple[str, ...] = ()
     topic_default: str | None = None
     strip_routing_hashtag: bool = False
+    keep_replies: bool = False
+    keep_forward_header: bool = False
+    rewrite_links: bool = False
 
 
 def topic_flags(
@@ -99,9 +144,18 @@ def topic_flags(
     topic_map: list[str] | None = None,
     topic_default: str | None = None,
     strip_routing_hashtag: bool = False,
+    keep_replies: bool = False,
+    keep_forward_header: bool = False,
+    rewrite_links: bool = False,
 ) -> TopicFlags:
     return TopicFlags(
-        hashtag_to_topic, tuple(topic_map or ()), topic_default, strip_routing_hashtag
+        hashtag_to_topic,
+        tuple(topic_map or ()),
+        topic_default,
+        strip_routing_hashtag,
+        keep_replies,
+        keep_forward_header,
+        rewrite_links,
     )
 
 
@@ -139,7 +193,14 @@ def with_topic_flags(base: Transform, flags: TopicFlags) -> Transform:
         default=flags.topic_default,
         strip=flags.strip_routing_hashtag,
     )
-    return base if rules == base.topics else replace(base, topics=rules)
+    changed = base if rules == base.topics else replace(base, topics=rules)
+    if flags.keep_replies:
+        changed = replace(changed, keep_replies=True)
+    if flags.keep_forward_header:
+        changed = replace(changed, keep_forward_header=True)
+    if flags.rewrite_links:
+        changed = replace(changed, rewrite_links=True)
+    return changed
 
 
 def _renames_of(items: tuple[str, ...]) -> list[tuple[int | str, str]]:
@@ -160,6 +221,7 @@ def _load(path: Path) -> Transform:
     if loaded.is_empty:  # a file given by name that does nothing is a mistake, not a no-op
         raise TransformError(
             f"{path}: nothing in it changes a message (no `caption:` operation, no `topics:` "
-            "rule or name) — a key left with nothing under it is the usual cause"
+            "rule or name, no `reply: keep`, no `forward_header: keep`, no `links: rewrite`) — "
+            "a key left with nothing under it is the usual cause"
         )
     return loaded

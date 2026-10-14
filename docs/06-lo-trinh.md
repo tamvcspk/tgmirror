@@ -28,10 +28,10 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 - [x] Phase 15b — Hardening toàn dự án (Đợt 1–3 xong 2026-09-27; **Đợt 4 xong 2026-10-12**, người dùng xác nhận phần thử thật). Xem "Phase 15b"
 - [x] Phase 16 — Phát hành 0.1.1 chính thức (2026-09-28): GitHub Release + `SHA256SUMS`, Docker Hub `0.1.1`/`latest`, PyPI — kiểm lại trực tiếp 2026-10-12
 
-**0.2.0 — Inspect & Transform (đã duyệt hướng 2026-10-12; Phase 18a xong code 2026-10-12, Phase 19 đang làm theo lát cắt, 19a, 19b và 19b1 xong code 2026-10-13, 18b xong code 2026-10-14 (chưa thử trên Telegram thật); chi tiết `07-inspect-transform.md`)**
+**0.2.0 — Inspect & Transform (đã duyệt hướng 2026-10-12; Phase 18a xong code 2026-10-12, Phase 19 đang làm theo lát cắt, 19a, 19b và 19b1 xong code 2026-10-13, 19c1 xong code và đã thử thật 2026-10-14, 19c2 xong code 2026-10-14 (album và tin thường đã thử thật; forward vào topic chưa), 19c3 xong code và đã thử thật 2026-10-14 (Phase 19 hết lát cắt), 18b xong code 2026-10-14 (chưa thử trên Telegram thật); chi tiết `07-inspect-transform.md`)**
 
 - [x] Phase 18a — `tgmirror inspect`, metadata/predicate mới, pre-flight, file selection, `--selection` (2026-10-12; đã thử trên Telegram thật phần lớn, còn vài mục nhỏ ở spike 14, xem "Phase 18a — ghi chú")
-- [ ] Phase 19 — Transform khi sao chép (caption, hashtag ↔ topic, `topic_map`, reply, link nội bộ). **Làm theo ba lát cắt** (2026-10-13, xem "Phase 19 — ghi chú"): **19a xong code 2026-10-13** (chuỗi thao tác caption, `--transform`, `transform:` trong selection, nhớ theo cặp, pre-flight; **người dùng đã thử trên kênh thật 2026-10-13, mọi bước pass**); **19b và 19b1 xong code 2026-10-13** (hashtag → topic, `topic_map`, `hashtag_format`, `strip`, cờ `--topic-map`/`--topic-default`/`--strip-routing-hashtag`; **người dùng thử forum → forum bằng file transform 2026-10-13: chạy được** sau khi sửa lỗi khóa `topics` để trống bị lờ đi; các trường hợp còn lại chưa thử, xem "Phase 19 — ghi chú"); 19c (giữ reply, `forward_header`, link nội bộ) chưa bắt đầu
+- [x] Phase 19 — Transform khi sao chép (caption, hashtag ↔ topic, `topic_map`, reply, link nội bộ). **Làm theo ba lát cắt** (2026-10-13, xem "Phase 19 — ghi chú"): **19a xong code 2026-10-13** (chuỗi thao tác caption, `--transform`, `transform:` trong selection, nhớ theo cặp, pre-flight; **người dùng đã thử trên kênh thật 2026-10-13, mọi bước pass**); **19b và 19b1 xong code 2026-10-13** (hashtag → topic, `topic_map`, `hashtag_format`, `strip`, cờ `--topic-map`/`--topic-default`/`--strip-routing-hashtag`; **người dùng thử forum → forum bằng file transform 2026-10-13: chạy được** sau khi sửa lỗi khóa `topics` để trống bị lờ đi; các trường hợp còn lại chưa thử, xem "Phase 19 — ghi chú"); **19c1 (giữ reply: `reply: keep`, `--keep-replies`) xong code và đã thử trên Telegram thật 2026-10-14**; **19c2 (`forward_header: keep`, `--keep-forward-header`) xong code 2026-10-14; album và tin thường đã thử trên Telegram thật, forward vào topic chưa**; **19c3 (link nội bộ lùi: `links: rewrite`, `--rewrite-links`) xong code và đã thử trên Telegram thật 2026-10-14: viết lại thành công** — hết lát cắt của Phase 19
 - [x] Phase 18b — Chỉ mục metadata cục bộ, `inspect --quick`, màn hình "Khám phá" (xong code 2026-10-14, sau spike 1 và một sửa phân loại media; **chưa thử trên Telegram thật**, xem "Phase 18b — ghi chú")
 
 **0.3.0 — Thao tác tại chỗ (D10)**
@@ -41,7 +41,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 
 ## Lộ trình
 
-Thứ tự làm tiếp (18a, 18b đã xong; 19c còn lại của 19): **18a ✓ → 19 (19a, 19b, 19b1 ✓; 19c) → 18b ✓ → 20 → 17** (giữ số phase cũ để các tham chiếu không lệch). Phase 14 (các kênh phân phối còn lại) làm xen khi cần, không chặn release nào.
+Thứ tự làm tiếp (18a, 18b, 19 đã xong code): **18a ✓ → 19 (19a, 19b, 19b1, 19c1, 19c2, 19c3 ✓) → 18b ✓ → 20 → 17** (giữ số phase cũ để các tham chiếu không lệch). Phase 14 (các kênh phân phối còn lại) làm xen khi cần, không chặn release nào.
 
 | Phase | Nội dung | Hoàn thành khi |
 |---|---|---|
@@ -905,14 +905,17 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 
 **Test mới** (1992 pass, 3 skip lúc ghi): `test_links.py`, `test_filter_metadata.py`, `test_inspect.py`, `test_preflight.py`, `test_selection.py`, `test_cli_inspect.py` (có "plan khớp lần clone thật" và "clone `@last` sao chép đúng số tin inspect đã báo", tức tiêu chí hoàn thành của 18a trên `FakeGateway`), bổ sung vào `test_telethon_messages.py`, `test_backupdir.py`, `test_backup_reader.py`, `test_architecture.py` và `tests/integration/test_pushdown_equivalence.py` (predicate mới + `message_ids` cùng predicate đẩy xuống được).
 
-### Phase 19 — ghi chú (bắt đầu 2026-10-13; lát 19a xong code và đã thử trên Telegram thật cùng ngày; 19b và 19b1 xong code cùng ngày, forum → forum đã thử thật)
+### Phase 19 — ghi chú (bắt đầu 2026-10-13; lát 19a xong code và đã thử trên Telegram thật cùng ngày; 19b và 19b1 xong code cùng ngày, forum → forum đã thử thật; 19c1 xong code và đã thử thật 2026-10-14; 19c2 xong code cùng ngày)
 
 **Chia lát cắt** (như 11a/11b, 18a/18b; không đổi D1–D10): `07` mục 5 gồm sáu việc độc lập nhau về đường code, nên làm theo thứ tự phụ thuộc, mỗi lát cắt là một lần commit chạy được:
 
 - **19a — mô hình Transform + thao tác caption** (xong code): nền mà hai lát sau cùng dùng (`engine/transform.py`, `RunOptions.transform_json`, `--transform`, selection mang `transform:`). Không thêm hành vi Telegram mới ngoài viết lại caption phong phú hơn.
 - **19b — định tuyến** (xong code, xem "Đã làm ở 19b"): hashtag → topic (`auto`/`map`/`default`/`strip`), `topic_map`, chọn định dạng hashtag của topic → hashtag. Đây là tiêu chí hoàn thành của cả Phase 19 ("clone kênh thường sang forum: đúng topic, đúng thứ tự trong từng topic").
 - **19b1 — cờ cho phần còn lại của `topics`** (xong code, xem "Đã làm ở 19b1"): `--topic-map`, `--topic-default`, `--strip-routing-hashtag`; không thêm hành vi mới, chỉ thêm đường cờ cho những gì file đã làm được.
-- **19c — tham chiếu** (chưa làm): giữ reply qua `msg_map`, `forward_header: keep` (`drop_author=False`), link nội bộ lùi. Cần spike 5 (mục 9 của `07`).
+- **19c — tham chiếu**, chia tiếp theo thứ tự phụ thuộc (mỗi lát một commit chạy được):
+  - **19c1 — giữ reply** (xong code, đã thử thật, xem "Đã làm ở 19c1"): `reply: keep` / `--keep-replies`, qua `msg_map`.
+  - **19c2 — `forward_header: keep`** (xong code, xem "Đã làm ở 19c2"): forward giữ "Forwarded from" (`drop_author` tắt); `scripts/spike_forward_header.py` cho câu hỏi spike 5 chưa kiểm.
+  - **19c3 — link nội bộ lùi** (xong code, xem "Đã làm ở 19c3"): `links: rewrite`, `t.me/<nguồn>/<id>` → tin tương ứng ở đích qua `msg_map`.
 
 **Đã làm ở 19a**:
 
@@ -972,6 +975,67 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 **Kiểm trên Telegram thật (người dùng, 2026-10-13)**: forum → forum bằng file `--transform` (sau lần sửa ở trên) **chạy được**: hashtag thành topic ở đích. Người dùng báo ngắn gọn, không ghi từng bước hay số liệu; các cờ `--topic-map`/`--topic-default`/`--strip-routing-hashtag` chưa nghe báo riêng.
 
 **Còn chưa kiểm trên Telegram thật** (người dùng chạy; cùng câu hỏi mở số 9 ở "Việc cần xác minh sớm"): `ForwardMessagesRequest(top_msg_id=...)` và `reply_to=<id topic>` có đưa tin vào đúng topic không khi nguồn **không phải** forum; một album forward vào topic có giữ nhóm không; tên `General` của topic 1 theo ngôn ngữ giao diện của tài khoản (nếu bản địa hóa thì `General` trong file không khớp, tin vào topic mới tên "General"); `create_topic` của một kênh broadcast vừa chuyển thành forum (`--dst-new` từ nguồn kênh thường).
+
+**Đã làm ở 19c1** (2026-10-14; không đụng D1–D10, không migration, không thêm bảng):
+
+- `engine/transform.py`: `Transform.keep_replies` (khóa `reply: keep|drop`, mặc định `drop`; `reply` hết bị đặt trước, còn `forward_header`/`links`), `rewrites_content` tách khỏi `rewrites` (`rewrites` thêm `keep_replies`: là thứ buộc tin phải gửi lại nên D3 và `--mode copy` xử như mọi biến đổi khác; `text_too` chỉ xét theo `rewrites_content`).
+- `core/gateway.py`: `Unit.reply_to_id`; `reply_to=` thêm vào `send_prepared`/`send_by_reference`/`send_text` (id **ở đích** của tin được trả lời). `core/telethon_gateway.py`: `_reply_of(topic, reply_to)` (Telethon chỉ nhận một id `reply_to`: reply thay chỗ topic); album qua `SendMultiMediaRequest` gửi cả `reply_to_msg_id` lẫn `top_msg_id`.
+- `engine/strategy.py`: `answers_something`/`KEEP_FORWARDING`; `router`/`may_reupload` gửi lại unit có reply.
+- `store/msgmap.py` + `Store.dst_id_of`; `engine/runner.py::_reply_target` giải reply (qua `msg_map` của **cặp**, nên bản sao do lần chạy trước tạo ra cũng tính) và đếm `reply_lost` vào `stats_json` (`Run.reply_lost`, dòng kết quả `run.reply_lost`).
+- `cli/transform_options.py`: `--keep-replies` trên `clone`/`restore`/`inspect --plan`, ghép như các cờ `topics`; `scripts/spike_reply.py` cho câu hỏi chưa kiểm được.
+- Test mới: `tests/integration/test_runner_replies.py` (10 ca: reply theo bản sao, lần chạy sau, tin được trả lời bị lọc/lỗi, media + album theo mã file, poll vẫn forward, D3, `--mode copy`, định tuyến hashtag không giữ reply qua topic), ca router/model/CLI/restore trong `test_reupload.py`, `test_transform.py`, `test_cli_transform.py`, `test_cli_restore.py`.
+
+**Khác với đề xuất ở `07` mục 5.1** (nêu để sửa nếu không hợp):
+
+1. **Router không biết trước tin được trả lời có bản sao hay không** (là chuyện của `msg_map`, mà router thuần và đồng bộ): mọi unit có reply đều bị gửi lại, kể cả khi sau đó reply bị bỏ vì tin gốc nằm ngoài selection — cùng kiểu với ghi chú 19a mục 6. Pre-flight đếm đúng như vậy; tin bị bỏ reply nằm trong `reply_lost` của lần chạy.
+2. **Poll, game, invoice và loại không rõ vẫn được forward** (reply mất, không đếm vào `reply_lost` vì không đi đường gửi lại): gửi lại poll làm mất phiếu, còn ba loại kia không có bản để gửi.
+3. **Có định tuyến hashtag, reply chỉ giữ khi hai tin vào cùng một topic đích**: `msg_map` không lưu topic đích, nên runner đọc lại tin được trả lời (một lời gọi đọc qua `FloodGuard`) và so `TopicRules.destination` của hai bên. Một tin thuộc album mà hashtag nằm ở tin anh em thì so ra khác → bỏ reply (thận trọng, không đoán). Không có định tuyến thì không đọc thêm gì: reply trong forum luôn nằm cùng topic nguồn.
+4. **Reply tới chỗ không còn bản sao** (tin gốc bị filter loại, `failed`, đã `gone`) → gửi tin **không kèm reply** và đếm; không bao giờ làm lỗi tin.
+5. **Restore dùng cùng đường**: `reply_to_id` đọc từ `messages.jsonl`, bản sao tìm trong `msg_map` của chính lần restore.
+
+**Kiểm trên Telegram thật (người dùng chạy `scripts/spike_reply.py` trên một forum thử, 2026-10-14)**: tin gửi bằng `reply_to=<id tin trong topic>` **một mình** (không có `top_msg_id`) **vào đúng topic** của tin đó và trả lời đúng tin; album gửi bằng `InputReplyToMessage(reply_to_msg_id, top_msg_id)` cũng vào đúng topic và trả lời đúng. Vậy `_reply_of` (reply thay chỗ topic) đủ cho đường tin đơn lẻ, không cần yêu cầu thô. **Chưa kiểm (khi chạy spike)**: reply sang tin ở *topic khác* (script không thử; tgmirror không gửi trường hợp đó vì so topic đích trước khi giữ reply, nên chỉ ảnh hưởng nếu so sai) và chạy `clone --keep-replies` thật từ đầu đến cuối.
+
+**Kiểm cả lệnh trên Telegram thật (người dùng, 2026-10-14)**: `clone --keep-replies` sang forum đích **giữ reply chính xác** và dòng kết quả **không có `reply_lost`** (không tin nào mất reply). Người dùng báo ngắn gọn, không ghi số liệu. Phần còn chưa kiểm ở trên (reply sang topic khác) vẫn chưa thử.
+
+**Đã làm ở 19c2** (2026-10-14; không migration, không bảng mới; **D2 không đổi**: mặc định vẫn là forward không tác giả, `keep` là công tắc tùy chọn đã nằm trong hướng được duyệt ở `07` mục 5.1):
+
+- `engine/transform.py`: `Transform.keep_forward_header` (khóa `forward_header: keep|drop`, mặc định `drop`; còn `links` là khóa đặt trước), kiểm trong `__post_init__` để cả đường cờ chồng lên (`dataclasses.replace`) cũng bị chặn.
+- `core/gateway.py`/`core/telethon_gateway.py`: `copy_messages(..., keep_header=False)` → `drop_author=None` thay cho `True` (đường tin thường lẫn `ForwardMessagesRequest` có `top_msg_id`). `engine/copy.py::copy_batch(keep_header=)`, `runner._send` truyền `transform.keep_forward_header`.
+- `engine/runs.py::check_options`: `forward_header_needs_forward` (mã 2) khi kèm `--mode reupload`, `--caption` khác keep, `--topic-as-hashtag`.
+- `cli/transform_options.py`: `--keep-forward-header` trên `clone` và `inspect --plan` (không có trên `restore`: restore luôn tải lên lại; file có `forward_header: keep` ở restore bị từ chối bằng chính lỗi trên).
+- Test mới: `tests/integration/test_runner_forward_header.py` (header mặc định/keep, album vẫn một nhóm, định tuyến vào topic vẫn là forward, nhớ theo cặp, các tổ hợp bị từ chối), ca model/CLI/restore trong `test_transform.py`, `test_cli_transform.py`, `test_cli_restore.py`; `FakeGateway.copy_messages` đặt/ bỏ `is_forward`/`fwd_from_id`.
+
+**Chọn lựa ở 19c2** (nêu để sửa nếu không hợp):
+
+1. **Không ghép với mọi thứ buộc gửi lại** (thao tác `caption`, `strip`, `reply: keep`, `--mode reupload`, `--topic-as-hashtag`): header chỉ có trên forward, nên một tin vừa gửi lại vừa giữ header là không thể; chọn từ chối bằng mã 2 thay vì lặng lẽ mất một trong hai. Hệ quả: `--keep-forward-header --keep-replies` là lỗi; ai cần reply thì không có header.
+2. **Định tuyến hashtag và `topic_map` đi cùng được** (chỉ là forward vào topic).
+3. **Nguồn `noforwards`** vẫn không forward được dù có header hay không: hành vi hiện có (`ForwardsRestricted`), D3 không liên quan vì không tải gì.
+
+**Kiểm trên Telegram thật (người dùng chạy `scripts/spike_forward_header.py`, 2026-10-14, nguồn là kênh công khai, đích là kênh thường)**: một album (2 tin) và một tin thường forward **không `drop_author`**: cả ba tin ở đích **mang header** "Forwarded from" (kênh nguồn), album vẫn **một nhóm** (cùng `grouped_id`, một nhóm cho cả cuộc forward). Vậy `forward_header: keep` giữ album như `drop_author=True` (spike 5, vế album).
+
+**Còn chưa kiểm**: forward vào topic của forum (`top_msg_id`, chạy lại script với `--topic N` và đích là forum) có vào đúng topic không; header hiện thế nào với nguồn là kênh riêng tư/ẩn tên (Telegram có thể hiện tên ẩn hoặc không hiện); một lần `clone --keep-forward-header` từ đầu đến cuối.
+
+**Đã làm ở 19c3** (2026-10-14; không đụng D1–D10, không migration của DB; backup thêm một trường tùy chọn):
+
+- `core/links.py` (thuần): `parse_message_link` (`t.me/<tên>/<id>`, `t.me/c/<số>/<id>`, kèm topic ở giữa với forum; loại link kênh, mời, `tg://`, trang web khác), `points_at`, `relinked` (viết lại giữ nguyên kiểu có/không `https://`).
+- `SrcMessage.own_links` / `ExportedMessage.own_links`: id các tin **của cùng chat** mà text/caption trỏ tới, lấy từ entity lúc đọc (`telethon_gateway._own_links`, dùng `_source_names` có sẵn, nên username lẫn `c/<số>` đều nhận); lưu trong `messages.jsonl` (trường tùy chọn: backup cũ không có thì không viết lại link) và trong chỉ mục (`_TUPLES`). `BackupManifest.src_username` (tùy chọn) để restore nhận link `@username`; `FromBackup.src_username`.
+- `core/gateway.py`: `LinkRewrite(mapping, prefix)`, `CaptionPolicy.links`, `Unit.own_links`. `telethon_gateway._op_rewrite_links`: hyperlink (`MessageEntityTextUrl`) đổi địa chỉ, giữ chữ; link hiển thị (`MessageEntityUrl`) sửa trong text và entity quanh nó dịch theo UTF-16 (`_apply_edits`). Chạy **trước** các thao tác caption (để `strip_links: source` không xóa mất link vừa trỏ về đích) và áp cho cả tin chữ **không cần `text_too`** (link là thứ tạo nên tin chữ).
+- `engine/transform.py`: `Transform.rewrite_links` (`links: rewrite|keep`; khóa `links` hết bị đặt trước, `_RESERVED` bỏ); không đi cùng `forward_header: keep`. `engine/strategy.py`: `links_to_source`; router gửi lại unit có link tới chính chat.
+- `engine/runner.py::_link_targets`: tra `Store.dst_ids_of` (qua `msg_map` của **cặp**), dựng `LinkRewrite` với tiền tố `t.me/<username đích>` (`RunOptions.dst_username`, đọc ở `begin_run`, thuộc về từng lần chạy) hoặc `t.me/c/<số>`; đếm `links_left` vào `stats_json` (`Run.links_left`, dòng `run.links_left`).
+- `cli/transform_options.py`: `--rewrite-links` trên `clone`/`restore`/`inspect --plan`, ghép như các cờ khác.
+- Test mới: `tests/integration/test_runner_links.py` (9 ca), ca parse/rewrite trong `test_links.py`, `test_transform.py` (entity UTF-16, thứ tự với `strip_links`, tin chữ), ca CLI/restore, `FakeGateway` (`own_links`, viết lại link trong text).
+
+**Chọn lựa ở 19c3** (người dùng không phải quyết, nêu để sửa nếu không hợp):
+
+1. **Chỉ link lùi** (07 mục 5.3): link tới tin chưa có bản sao lúc gửi **giữ nguyên** và được đếm (`links_left`); lượt sửa bù sau khi clone xong là việc của Phase 20 (`edit`), chưa có.
+2. **Router không biết trước link có bản sao hay không**: mọi unit có link tới chính chat đều bị gửi lại, kể cả khi sau đó link không đổi được (cùng kiểu 19a mục 6 và 19c1 mục 1). Poll/game/invoice/loại không rõ vẫn được forward (link không đổi).
+3. **Link tới chat khác không đụng**; link vào topic của forum (`t.me/c/<số>/<topic>/<id>`) thành link không có topic (`t.me/<đích>/<id>`), Telegram vẫn mở đúng tin.
+4. **Chỉ entity**: link không có entity (chữ trần mà Telegram không nhận là link) không đổi; backup làm trước 19c3 không có `own_links` nên restore từ nó không viết lại link (làm lại backup để có).
+5. **Chỉ mục metadata cũ** thiếu `own_links` đọc ra rỗng; `clone` không đọc qua chỉ mục nên không ảnh hưởng, `inspect` không dùng trường này.
+
+**Kiểm trên Telegram thật (người dùng, 2026-10-14)**: `clone --rewrite-links` **viết lại link thành công** (link tới tin đã sao chép trỏ về bản sao ở đích). Người dùng báo ngắn gọn, không ghi từng ca hay số liệu.
+
+**Còn chưa nghe báo riêng**: link có topic của forum, kênh nguồn riêng tư (`t.me/c/...`) so với công khai, `restore` từ backup mới làm.
 
 ### Phase 18b — ghi chú (2026-10-14; xong code, chưa thử trên Telegram thật)
 

@@ -87,6 +87,7 @@ def _src_message(message: ExportedMessage) -> SrcMessage:
         edit_date=message.edit_date,
         # a backup made before 18a recorded no domains: fall back to what its HTML links to
         link_domains=message.link_domains or domains_in_html(message.text_html),
+        own_links=message.own_links,
         file_name=media.original_filename if media is not None else None,
         file_key=media.file_key if media is not None else None,
         forwards=message.forwards,
@@ -167,5 +168,7 @@ class BackupReader:
         engine's cleanup (``engine/reupload.py``'s ``Pipeline.finish``/``send_unit_by_reference``
         only ever unlink what is listed there — decision 1, phase 11b)."""
         exported = tuple(self._records[m.id] for m in unit.messages)
-        handle = FromBackup(exported, self._media_dir, self._manifest.src_id)
+        handle = FromBackup(
+            exported, self._media_dir, self._manifest.src_id, self._manifest.src_username
+        )
         return Prepared(unit, files=(), handle=handle)

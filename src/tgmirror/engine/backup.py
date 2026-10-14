@@ -146,6 +146,7 @@ async def begin_backup(
         src_kind=current.kind,
         src_about="",
         src_noforwards=current.noforwards,
+        src_username=current.username,
         protected_ack=protected_ack,
         filters_json=filters,
         topics=topics,

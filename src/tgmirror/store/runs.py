@@ -93,6 +93,10 @@ class RunOptions:
     # property (like ``retry_of``), not carried into ``for_pair`` — after a restore the same pair
     # can go back to being driven by a live ``clone``/``run``.
     from_backup: str | None = None
+    # Phase 19c3: the username of the destination as ``begin_run`` read it, what a link to a message
+    # there starts with (``t.me/<username>``; none: ``t.me/c/<number>``). A run-only property: a
+    # username can change between runs.
+    dst_username: str | None = None
 
     def for_pair(self, dst_base_id: int) -> "RunOptions":
         """What the mirror remembers: the run-only keys dropped, ``dst_base_id`` as given."""
@@ -194,6 +198,18 @@ class Run:
     @property
     def skipped_unsupported(self) -> int:
         return self.stats.get("skipped_unsupported", 0)
+
+    @property
+    def reply_lost(self) -> int:
+        """Messages sent without the reply they had, because what they answered has no copy in the
+        destination (phase 19c). Not a count of messages: they are in ``done`` as well."""
+        return self.stats.get("reply_lost", 0)
+
+    @property
+    def links_left(self) -> int:
+        """Links to a message of the source that had no copy yet when the message carrying them was
+        sent, so they were left as they were (phase 19c3)."""
+        return self.stats.get("links_left", 0)
 
     @property
     def gone(self) -> int:

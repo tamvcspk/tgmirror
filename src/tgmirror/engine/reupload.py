@@ -26,6 +26,7 @@ from tgmirror.core.errors import FileRefExpired
 from tgmirror.core.gateway import (
     CaptionMode,
     CaptionPolicy,
+    LinkRewrite,
     MediaKind,
     MessageReader,
     OnTransfer,
@@ -157,6 +158,8 @@ async def send_unit(
     topic: int | None = None,
     hashtag: str | None = None,
     strip: str | None = None,
+    reply_to: int | None = None,
+    links: LinkRewrite | None = None,
 ) -> list[MessageResult]:
     """Post the unit (or its placeholder) and say what became of each message.
 
@@ -165,13 +168,18 @@ async def send_unit(
     for a topic the destination cannot hold — appended to the placeholder directly here, and to
     every caption/text ``gateway.send_prepared`` sends (``CaptionPolicy.hashtag``). ``strip``
     (phase 19b) is the hashtag a rule routed the unit by, taken out of its caption first.
+    ``reply_to`` (phase 19c) is the message in ``dst`` the unit answers, ``links`` (19c3) says
+    which links in its text point at which copies.
     """
     if action.kind is ActionKind.PLACEHOLDER:
         text = f"{action.text}\n{hashtag}" if hashtag else action.text
-        return left_out(unit, action, await gateway.send_text(dst, text, topic=topic))
+        sent = await gateway.send_text(dst, text, topic=topic, reply_to=reply_to)
+        return left_out(unit, action, sent)
     assert action.kind is ActionKind.SEND and prepared is not None
-    caption = _caption_of(options, hashtag, strip)
-    sent = await gateway.send_prepared(dst, prepared, caption, on_transfer, topic=topic)
+    caption = _caption_of(options, hashtag, strip, links)
+    sent = await gateway.send_prepared(
+        dst, prepared, caption, on_transfer, topic=topic, reply_to=reply_to
+    )
     return results_of(unit, sent)
 
 
@@ -190,6 +198,8 @@ async def send_unit_by_reference(
     topic: int | None = None,
     hashtag: str | None = None,
     strip: str | None = None,
+    reply_to: int | None = None,
+    links: LinkRewrite | None = None,
 ) -> list[MessageResult]:
     """Send ``unit`` by the ids of its files: nothing is downloaded or uploaded.
 
@@ -197,13 +207,17 @@ async def send_unit_by_reference(
     Telegram still will not send the media this way, the unit goes the long way, exactly as
     ``--mode reupload`` would send it, and ``on_fallback`` is told. Telegram created nothing
     before this returns, whichever way it went, so the caller's batch stays ``pending`` meanwhile
-    and the write-ahead rule holds. ``topic``/``hashtag``/``strip``: as ``send_unit``.
+    and the write-ahead rule holds. ``topic``/``hashtag``/``strip``/``reply_to``/``links``: as
+    ``send_unit``.
     """
-    caption = _caption_of(options, hashtag, strip)
+    caption = _caption_of(options, hashtag, strip, links)
     for attempt in range(2):
         try:
             return results_of(
-                unit, await gateway.send_by_reference(dst, prepared, caption, topic=topic)
+                unit,
+                await gateway.send_by_reference(
+                    dst, prepared, caption, topic=topic, reply_to=reply_to
+                ),
             )
         except FileRefExpired:
             if attempt == 0:
@@ -222,17 +236,21 @@ async def send_unit_by_reference(
             topic=topic,
             hashtag=hashtag,
             strip=strip,
+            reply_to=reply_to,
+            links=links,
         )
     finally:
         for path in full.files:
             path.unlink(missing_ok=True)
 
 
-def _caption_of(options: Options, hashtag: str | None, strip: str | None) -> CaptionPolicy:
+def _caption_of(
+    options: Options, hashtag: str | None, strip: str | None, links: LinkRewrite | None = None
+) -> CaptionPolicy:
     """The run's caption policy with this unit's own additions: the hashtag its routing rule
     matched comes out first (before the operations, which may add text of their own), the topic
-    hashtag goes last."""
-    caption = options.caption
+    hashtag goes last, and the links to the source (19c3) are re-pointed before any of it."""
+    caption = replace(options.caption, links=links) if links is not None else options.caption
     if strip:
         caption = replace(caption, ops=(RemoveHashtags((strip,)), *caption.ops))
     if hashtag:

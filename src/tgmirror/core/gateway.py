@@ -102,6 +102,8 @@ class SrcMessage:
     post_author: str | None = None  # signature of a channel post
     via_bot_id: int | None = None  # the inline bot a message was sent through
     pinned: bool = False
+    # --- phase 19c3: ids of the messages *of this same chat* its text links to (``links: rewrite``)
+    own_links: tuple[int, ...] = ()
 
 
 # the kinds ``messages.getSearchCounters`` answers for (spike 1, docs/07 section 9), in the order
@@ -153,6 +155,17 @@ class Unit:
     @property
     def topic_id(self) -> int | None:
         return self.messages[0].topic_id
+
+    @property
+    def own_links(self) -> tuple[int, ...]:
+        """The messages of the same chat that this unit's messages link to (phase 19c3)."""
+        return tuple(sorted({i for m in self.messages for i in m.own_links}))
+
+    @property
+    def reply_to_id(self) -> int | None:
+        """The source message this unit answers (phase 19c): every message of an album carries the
+        same reply header, so the first one that has one says."""
+        return next((m.reply_to_id for m in self.messages if m.reply_to_id is not None), None)
 
 
 ALBUM_MARGIN = 10  # an album has at most 10 messages, with consecutive ids
@@ -258,6 +271,16 @@ def ops_of_mode(mode: CaptionMode, text: str = "") -> tuple[CaptionOp, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class LinkRewrite:
+    """``links: rewrite`` for one unit (phase 19c3): a link to a message of the source becomes a
+    link to ``mapping[id]`` in the destination, whose links start ``prefix``. Built by the runner
+    from ``msg_map``; a link whose message is not in ``mapping`` is left as it is."""
+
+    mapping: tuple[tuple[int, int], ...]  # (source message id, destination message id)
+    prefix: str  # ``t.me/<username>`` or ``t.me/c/<number>``
+
+
+@dataclass(frozen=True, slots=True)
 class CaptionPolicy:
     """How captions are rewritten while re-sending: ``ops`` (a transform's ``caption`` list, in
     order), then ``mode``/``text`` (the ``--caption`` shorthand, a flag layered on top). They
@@ -276,6 +299,9 @@ class CaptionPolicy:
     hashtag: str | None = None  # e.g. "#general", appended last regardless of ``mode``
     ops: tuple[CaptionOp, ...] = ()  # phase 19: the transform's caption operations
     text_too: bool = False  # phase 19: rewrite the text of a plain text message as well
+    # phase 19c3: links to messages of the source, re-pointed at their copies. Runs *before* the
+    # operations and reaches plain text too (a link is what a text message is made of).
+    links: LinkRewrite | None = None
 
     @property
     def all_ops(self) -> tuple[CaptionOp, ...]:
@@ -369,6 +395,7 @@ class ExportedMessage:
     post_author: str | None = None
     via_bot_id: int | None = None
     pinned: bool = False
+    own_links: tuple[int, ...] = ()  # phase 19c3; a backup made before has none
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +409,7 @@ class FromBackup:
     messages: tuple[ExportedMessage, ...]
     media_dir: Path
     src_id: int  # the original channel's id (``BackupManifest.src_id``), for caption link-stripping
+    src_username: str | None = None  # what its links looked like (``BackupManifest``, 19c3)
 
 
 class TransferPhase(StrEnum):
@@ -512,9 +540,17 @@ class TelegramGateway(Protocol):
         ...
 
     async def copy_messages(
-        self, src: int, dst: int, ids: list[int], *, topic: int | None = None
+        self,
+        src: int,
+        dst: int,
+        ids: list[int],
+        *,
+        topic: int | None = None,
+        keep_header: bool = False,
     ) -> list[int | None]:
-        """Strategy A: server-side copy without author. Result is aligned with ``ids``.
+        """Strategy A: server-side copy without author (``keep_header``, phase 19c2: with the
+        "Forwarded from" header, which is what a plain forward does). Result is aligned with
+        ``ids``.
 
         A call that returns normally is authoritative: ``None`` means Telegram created no message
         for that id (deleted at the source, not forwardable). Raises ``PerMessage`` when Telegram
@@ -544,14 +580,21 @@ class TelegramGateway(Protocol):
         ...
 
     async def send_by_reference(
-        self, dst: int, prepared: Prepared, caption: CaptionPolicy, *, topic: int | None = None
+        self,
+        dst: int,
+        prepared: Prepared,
+        caption: CaptionPolicy,
+        *,
+        topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         """Sending by reference, the write half: post the unit as new messages by handing
         Telegram the id of each file it already stores, so nothing is downloaded or uploaded
         (an album stays one album). Returns the new ids aligned with ``prepared.unit``;
         ``caption`` rewrites the captions. Raises ``FileRefExpired`` when the media cannot be
         sent this way (the reference expired, or Telegram will not reuse it). ``topic`` targets a
-        destination topic (phase 8)."""
+        destination topic (phase 8); ``reply_to`` (phase 19c) is the id, in ``dst``, of the message
+        the new one answers."""
         ...
 
     async def upload_prepared(
@@ -572,15 +615,19 @@ class TelegramGateway(Protocol):
         on_transfer: OnTransfer | None = None,
         *,
         topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         """Strategy B, the write half: send the unit as new messages (one album for an album, text
         for text, the poll/location/contact itself for those) and return their ids in the
         destination, aligned with ``prepared.unit``. ``caption`` rewrites the captions of media;
         ``on_transfer`` hears how far the upload is. A unit already ``uploaded`` is only
-        posted. ``topic`` targets a destination topic (phase 8)."""
+        posted. ``topic`` targets a destination topic (phase 8); ``reply_to`` (phase 19c) is the id,
+        in ``dst``, of the message the new one answers (an album answers as a whole)."""
         ...
 
-    async def send_text(self, dst: int, text: str, *, topic: int | None = None) -> int:
+    async def send_text(
+        self, dst: int, text: str, *, topic: int | None = None, reply_to: int | None = None
+    ) -> int:
         """Post a plain text message (the stub that stands for what cannot be copied). ``topic``
-        targets a destination topic (phase 8)."""
+        targets a destination topic (phase 8), ``reply_to`` is as in ``send_prepared``."""
         ...

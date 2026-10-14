@@ -289,6 +289,11 @@ VI: dict[str, str] = {
         "Transform đổi caption nên phải gửi lại tin, forward không làm được: dùng --mode auto "
         "(chỉ tin cần sửa đi đường đó) hoặc --mode reupload, không dùng --mode copy."
     ),
+    "err.opt_forward_header_needs_forward": (
+        "`forward_header: keep` (--keep-forward-header) chỉ có trên tin được forward: không đi "
+        "cùng --mode reupload (restore luôn tải lên lại), --caption khác keep hay "
+        "--topic-as-hashtag."
+    ),
     "err.transform": "Transform không hợp lệ: {detail}",
     "err.opt_topics_need_forum": (
         "Transform chuyển tin vào topic theo hashtag (`topics.hashtag_to_topic`) nên đích phải là "
@@ -417,6 +422,14 @@ VI: dict[str, str] = {
     "run.skipped_unsupported": "Bỏ qua tin {id} ({reason}): không sao chép được.",
     "run.unsupported_total": (
         "{count} tin không sao chép được đã bị bỏ qua (xem `tgmirror history {id}`)."
+    ),
+    "run.links_left": (
+        "{count} link trỏ tới tin chưa có bản sao ở đích (tin sau, hoặc bị filter loại): giữ "
+        "nguyên, vẫn trỏ về nguồn."
+    ),
+    "run.reply_lost": (
+        "{count} tin trả lời một tin không có bản sao ở đích (ngoài phạm vi sao chép, bị lỗi, "
+        "hoặc ở topic khác): đã gửi, nhưng không kèm reply."
     ),
     "clone.confirm_protected": (
         "«{title}» bật «Restrict saving content»: chủ kênh đã cấm lưu nội dung của nó. Chỉ tiếp "
@@ -1099,6 +1112,11 @@ EN: dict[str, str] = {
         "cannot do: use --mode auto (only the messages that need it take that road) or "
         "--mode reupload, not copy."
     ),
+    "err.opt_forward_header_needs_forward": (
+        "`forward_header: keep` (--keep-forward-header) only exists on a forwarded message: it "
+        "does not go with --mode reupload (restore always uploads again), a --caption other than "
+        "keep, or --topic-as-hashtag."
+    ),
     "err.transform": "Invalid transform: {detail}",
     "err.opt_topics_need_forum": (
         "The transform sends messages to topics by hashtag (`topics.hashtag_to_topic`), so the "
@@ -1230,6 +1248,14 @@ EN: dict[str, str] = {
     "run.skipped_unsupported": "Left out message {id} ({reason}): it cannot be copied.",
     "run.unsupported_total": (
         "{count} messages that cannot be copied were left out (see `tgmirror history {id}`)."
+    ),
+    "run.links_left": (
+        "{count} links point at a message with no copy in the destination yet (a later one, or "
+        "one the filter left out): left as they were, still pointing at the source."
+    ),
+    "run.reply_lost": (
+        "{count} messages answered one that has no copy in the destination (outside what was "
+        "copied, failed, or in another topic): sent, but without the reply."
     ),
     "clone.confirm_protected": (
         "'{title}' has 'Restrict saving content' on: its owner forbade saving its content. Go on "

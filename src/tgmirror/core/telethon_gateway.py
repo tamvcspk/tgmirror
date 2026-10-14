@@ -77,6 +77,7 @@ from tgmirror.core.gateway import (
     ExportedMedia,
     ExportedMessage,
     FromBackup,
+    LinkRewrite,
     MediaCounters,
     MediaKind,
     OnTransfer,
@@ -91,7 +92,7 @@ from tgmirror.core.gateway import (
     TransferPhase,
     Unit,
 )
-from tgmirror.core.links import domains_of
+from tgmirror.core.links import domains_of, parse_message_link, points_at, relinked
 from tgmirror.core.paths import Paths
 from tgmirror.core.pool import RequestBudget, run_parts
 from tgmirror.core.session_lock import session_lock
@@ -455,13 +456,25 @@ def _forward_of(message: custom.Message) -> tuple[bool, int | None, str | None]:
     return True, _peer_id_of(header.from_id), name
 
 
-def _link_domains(message: custom.Message) -> tuple[str, ...]:
-    urls = [
+def _link_urls(message: custom.Message) -> list[str]:
+    return [
         entity.url if isinstance(entity, types.MessageEntityTextUrl) else text
         for entity, text in message.get_entities_text()
         if isinstance(entity, types.MessageEntityTextUrl | types.MessageEntityUrl)
     ]
-    return domains_of(urls)
+
+
+def _link_domains(message: custom.Message) -> tuple[str, ...]:
+    return domains_of(_link_urls(message))
+
+
+def _own_links(message: custom.Message) -> tuple[int, ...]:
+    """Ids of the messages of this same chat the text links to, in order, once each (phase 19c3)."""
+    names = _source_names(message)
+    found = (parse_message_link(url) for url in _link_urls(message))
+    return tuple(
+        dict.fromkeys(link.msg_id for link in found if link is not None and points_at(link, names))
+    )
 
 
 def _reaction_total(message: custom.Message) -> int | None:
@@ -506,6 +519,7 @@ def _extras(message: custom.Message) -> dict[str, Any]:
         "reply_to_id": _reply_to_of(message),
         "edit_date": message.edit_date,
         "link_domains": _link_domains(message),
+        "own_links": _own_links(message),
         "forwards": message.forwards,
         "reactions": _reaction_total(message),
         "post_author": message.post_author or None,
@@ -809,12 +823,47 @@ def strip_source_links(
     return _op_remove_mentions(text, kept, names, "source")
 
 
+def _relinked_url(url: str, names: Collection[str], links: LinkRewrite) -> str | None:
+    """``url`` pointed at the copy of the message it names, or ``None`` when it is not a link into
+    the source, or that message has no copy (yet)."""
+    link = parse_message_link(url)
+    if link is None or not points_at(link, names):
+        return None
+    new_id = dict(links.mapping).get(link.msg_id)
+    return None if new_id is None else relinked(url, new_id, links.prefix)
+
+
+def _op_rewrite_links(
+    text: str, entities: Sequence[object], names: Collection[str], links: LinkRewrite
+) -> tuple[str, list[object]]:
+    """``links: rewrite``: a hyperlink gets a new address and keeps its words; a visible link is
+    rewritten in the text, and the entities that covered it follow (formatting included)."""
+    edits: list[_Edit] = []
+    out: list[object] = []
+    for entity in entities:
+        if isinstance(entity, types.MessageEntityTextUrl):
+            if (new := _relinked_url(entity.url, names, links)) is not None:
+                clone = copy.copy(entity)
+                clone.url = new
+                out.append(clone)
+                continue
+        elif isinstance(entity, types.MessageEntityUrl):
+            visible = _slice16(text, entity.offset, entity.length)
+            if (new := _relinked_url(visible, names, links)) is not None:
+                edits.append((entity.offset, entity.length, new))
+        out.append(entity)
+    return _apply_edits(text, out, edits)
+
+
 def rewrite_caption(
     text: str, entities: Sequence[object], policy: CaptionPolicy, names: Collection[str]
 ) -> tuple[str, list[object]]:
     """The caption and its entities after ``policy`` (docs/02-cli-ux.md, "Caption handling"):
-    each operation in order, then the topic hashtag."""
+    the links re-pointed (19c3, first: ``strip_links`` then finds none of the source's), each
+    operation in order, then the topic hashtag."""
     kept = list(entities)
+    if policy.links is not None:
+        text, kept = _op_rewrite_links(text, kept, names, policy.links)
     for op in policy.all_ops:
         match op:
             case Clear():
@@ -840,6 +889,10 @@ def _plain_text(
     """The text of a message with no file: only a transform with ``text_too`` rewrites it, and
     the topic hashtag is added either way. A text the operations leave empty is refused (a
     message cannot be sent with no text), as that unit's own failure."""
+    entities = list(entities)
+    if policy.links is not None:  # a link is what a text message is made of: never left out
+        text, entities = _op_rewrite_links(text, entities, names, policy.links)
+        policy = replace(policy, links=None)
     if policy.text_too and policy.rewrites:
         new_text, kept = rewrite_caption(text, entities, policy, names)
         if text.strip() and not new_text.strip():
@@ -883,11 +936,15 @@ def _source_names(message: custom.Message) -> set[str]:
     return names
 
 
-def _source_names_from_id(src_id: int) -> set[str]:
-    """As ``_source_names``, but from just the original channel's id (phase 11b, restore): a
-    backup does not keep a username (``BackupManifest`` has none), so link-stripping only catches
-    ``t.me/c/<number>/...``, not an ``@username`` link — a known approximation, not a bug."""
-    return {str(src_id).removeprefix("-100").removeprefix("-")}
+def _source_names_from_id(src_id: int, username: str | None = None) -> set[str]:
+    """As ``_source_names``, but from just the original channel's id (phase 11b, restore) and the
+    username its manifest recorded (19c3; a backup made before has none, so link-stripping and
+    link-rewriting then only catch ``t.me/c/<number>/...``, not an ``@username`` link — a known
+    approximation, not a bug)."""
+    names = {str(src_id).removeprefix("-100").removeprefix("-")}
+    if username:
+        names.add(username.casefold())
+    return names
 
 
 def _backup_self_contained_media(media: ExportedMedia) -> object:
@@ -969,6 +1026,14 @@ class _Fetched:
 
 def _has_file(message: custom.Message) -> bool:
     return isinstance(message.media, types.MessageMediaPhoto | types.MessageMediaDocument)
+
+
+def _reply_of(topic: int | None, reply_to: int | None) -> int | None:
+    """The one id Telethon's ``send_message``/``send_file`` take as ``reply_to``. A forum topic is
+    named by its first message, so posting into one and answering a message are the same
+    parameter: a reply names the message it answers, which sits in the topic (phase 19c; checked
+    on a real forum, 2026-10-14: ``scripts/spike_reply.py``, the reply lands in that topic)."""
+    return topic if reply_to is None else reply_to
 
 
 @contextmanager
@@ -1378,19 +1443,27 @@ class TelethonGateway:
         return found[0].id if found else None
 
     async def copy_messages(
-        self, src: int, dst: int, ids: list[int], *, topic: int | None = None
+        self,
+        src: int,
+        dst: int,
+        ids: list[int],
+        *,
+        topic: int | None = None,
+        keep_header: bool = False,
     ) -> list[int | None]:
         from_peer, to_peer = await self._peer(src), await self._peer(dst)
+        # ``drop_author`` off keeps the "Forwarded from" header: a plain forward (phase 19c2)
+        drop_author = None if keep_header else True
         if topic is None:  # the well-verified path (docs/06-lo-trinh.md, spike 2)
             with mapped_errors():
                 sent = await self._client.forward_messages(
-                    to_peer, ids, from_peer=from_peer, drop_author=True
+                    to_peer, ids, from_peer=from_peer, drop_author=drop_author
                 )
             return [None if m is None else m.id for m in sent]
         # ``forward_messages`` has no topic parameter (docs/01-kien-truc.md, "Ánh xạ topic");
         # phase 8, unverified on a real account.
         req = ForwardMessagesRequest(
-            from_peer=from_peer, id=ids, to_peer=to_peer, drop_author=True, top_msg_id=topic
+            from_peer=from_peer, id=ids, to_peer=to_peer, drop_author=drop_author, top_msg_id=topic
         )
         with mapped_errors():
             result = await self._client(req)
@@ -1426,7 +1499,13 @@ class TelethonGateway:
         return Prepared(unit, (), _Fetched(tuple(_Item(m) for m in messages)))
 
     async def send_by_reference(
-        self, dst: int, prepared: Prepared, caption: CaptionPolicy, *, topic: int | None = None
+        self,
+        dst: int,
+        prepared: Prepared,
+        caption: CaptionPolicy,
+        *,
+        topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
@@ -1435,6 +1514,7 @@ class TelethonGateway:
         texts = [text for text, _ in captions]
         entity_lists = [entities for _, entities in captions]
         media = [item.message.media for item in fetched.items]
+        reply = _reply_of(topic, reply_to)
         with mapped_errors(), _media_reusable():
             if len(media) > 1:
                 sent = await self._client.send_file(
@@ -1443,7 +1523,7 @@ class TelethonGateway:
                     caption=texts,
                     formatting_entities=entity_lists,
                     parse_mode=None,
-                    reply_to=topic,
+                    reply_to=reply,
                 )
                 return [int(m.id) for m in sent]
             one = await self._client.send_file(
@@ -1452,7 +1532,7 @@ class TelethonGateway:
                 caption=texts[0],
                 formatting_entities=entity_lists[0] or None,
                 parse_mode=None,
-                reply_to=topic,
+                reply_to=reply,
             )
             return [int(one.id)]
 
@@ -1812,16 +1892,23 @@ class TelethonGateway:
         on_transfer: OnTransfer | None = None,
         *,
         topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         if isinstance(prepared.handle, FromBackup):
-            return await self._send_from_backup(dst, prepared.handle, caption, on_transfer, topic)
+            return await self._send_from_backup(
+                dst, prepared.handle, caption, on_transfer, topic, reply_to
+            )
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
         peer = await self._peer(dst)
         with mapped_errors():
             if len(fetched.items) > 1:
-                return await self._send_album(peer, fetched.items, caption, on_transfer, topic)
-            return [await self._send_one(peer, fetched.items[0], caption, on_transfer, topic)]
+                return await self._send_album(
+                    peer, fetched.items, caption, on_transfer, topic, reply_to
+                )
+            return [
+                await self._send_one(peer, fetched.items[0], caption, on_transfer, topic, reply_to)
+            ]
 
     # ---- phase 11b (restore): sending from a backup directory, no live Telethon message --------
 
@@ -1832,22 +1919,23 @@ class TelethonGateway:
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None,
         topic: int | None,
+        reply_to: int | None = None,
     ) -> list[int]:
         """``send_prepared``'s restore path: nothing here comes from a live Telethon message, only
         what ``messages.jsonl`` kept (``ExportedMessage``/``ExportedMedia``). One call to
         ``send_file``/``send_message`` either way — Telethon's own attribute auto-detection
         (hachoir) does the rest, the same as it already does for a live reupload's single files."""
         peer = await self._peer(dst)
-        names = _source_names_from_id(handle.src_id)
+        names = _source_names_from_id(handle.src_id, handle.src_username)
         with mapped_errors():
             if len(handle.messages) > 1:
                 return await self._send_backup_album(
-                    peer, handle, caption, names, on_transfer, topic
+                    peer, handle, caption, names, on_transfer, topic, reply_to
                 )
             one = handle.messages[0]
             return [
                 await self._send_backup_one(
-                    peer, one, handle.media_dir, caption, names, on_transfer, topic
+                    peer, one, handle.media_dir, caption, names, on_transfer, topic, reply_to
                 )
             ]
 
@@ -1860,7 +1948,9 @@ class TelethonGateway:
         names: Collection[str],
         on_transfer: OnTransfer | None,
         topic: int | None,
+        reply_to: int | None = None,
     ) -> int:
+        reply = _reply_of(topic, reply_to)
         text, entities = tl_html.parse(message.text_html)
         media = message.media
         if media is not None and media.filename is not None:
@@ -1887,7 +1977,7 @@ class TelethonGateway:
                 formatting_entities=entities or None,
                 parse_mode=None,
                 mime_type=media.mime,
-                reply_to=topic,
+                reply_to=reply,
                 attributes=_backup_attributes(media) or None,
                 **extra,
             )
@@ -1898,12 +1988,12 @@ class TelethonGateway:
                 file=_backup_self_contained_media(media),
                 formatting_entities=entities or None,
                 parse_mode=None,
-                reply_to=topic,
+                reply_to=reply,
             )
         else:
             text, entities = _plain_text(text, entities, caption, names)
             sent = await self._client.send_message(
-                peer, text, formatting_entities=entities or None, parse_mode=None, reply_to=topic
+                peer, text, formatting_entities=entities or None, parse_mode=None, reply_to=reply
             )
         return int(sent.id)
 
@@ -1935,6 +2025,7 @@ class TelethonGateway:
         names: Collection[str],
         on_transfer: OnTransfer | None,
         topic: int | None,
+        reply_to: int | None = None,
     ) -> list[int]:
         """An album never mixes in a self-contained kind (poll/geo/contact never group), so every
         member here has a file. Goes through the same ``_upload_album_member``/
@@ -1958,7 +2049,7 @@ class TelethonGateway:
             at = next((i for i, (_, text, _) in enumerate(parts) if text), 0)
             fm, text, entities = parts[at]
             parts[at] = (fm, f"{text}\n{caption.hashtag}" if text else caption.hashtag, entities)
-        return await self._post_multi_media(peer, parts, topic)
+        return await self._post_multi_media(peer, parts, topic, reply_to)
 
     async def _send_one(
         self,
@@ -1967,7 +2058,9 @@ class TelethonGateway:
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None = None,
         topic: int | None = None,
+        reply_to: int | None = None,
     ) -> int:
+        reply = _reply_of(topic, reply_to)
         message = item.message
         text, entities = message.message or "", list(message.entities or [])
         media = message.media
@@ -2005,7 +2098,7 @@ class TelethonGateway:
                 formatting_entities=entities or None,
                 parse_mode=None,  # the entities are the formatting: nothing to parse as markdown
                 thumb=None if item.thumb is None else str(item.thumb),
-                reply_to=topic,
+                reply_to=reply,
                 **extra,
             )
         elif media is None or isinstance(media, types.MessageMediaWebPage):
@@ -2019,7 +2112,7 @@ class TelethonGateway:
                 formatting_entities=entities or None,
                 parse_mode=None,
                 link_preview=media is not None,
-                reply_to=topic,
+                reply_to=reply,
             )
         elif isinstance(media, _SELF_CONTAINED):
             sent = await self._client.send_message(
@@ -2028,7 +2121,7 @@ class TelethonGateway:
                 file=media,
                 formatting_entities=entities or None,
                 parse_mode=None,
-                reply_to=topic,
+                reply_to=reply,
             )
         else:
             raise PerMessage(f"unsupported_media:{type(media).__name__}")
@@ -2133,6 +2226,7 @@ class TelethonGateway:
         peer: object,
         parts: Sequence[tuple[types.TypeInputMedia, str, Sequence[Any]]],
         topic: int | None,
+        reply_to: int | None = None,
     ) -> list[int]:
         """``SendMultiMediaRequest`` for already-uploaded members, mapping ids back by
         ``random_id`` — the write half of every album, live or restored alike."""
@@ -2140,14 +2234,13 @@ class TelethonGateway:
             types.InputSingleMedia(fm, message=text, entities=list(entities) or None)
             for fm, text, entities in parts
         ]
-        reply_to = (
-            None
-            if topic is None
-            else types.InputReplyToMessage(reply_to_msg_id=topic, top_msg_id=topic)
-        )
-        result = await self._client(
-            SendMultiMediaRequest(peer, multi_media=media, reply_to=reply_to)
-        )
+        # the raw request can name both: the message answered, and the topic it is posted in
+        reply: types.InputReplyToMessage | None = None
+        if reply_to is not None:
+            reply = types.InputReplyToMessage(reply_to_msg_id=reply_to, top_msg_id=topic)
+        elif topic is not None:
+            reply = types.InputReplyToMessage(reply_to_msg_id=topic, top_msg_id=topic)
+        result = await self._client(SendMultiMediaRequest(peer, multi_media=media, reply_to=reply))
         has_updates = types.Updates | types.UpdatesCombined
         updates = result.updates if isinstance(result, has_updates) else []
         id_map = {u.random_id: u.id for u in updates if isinstance(u, types.UpdateMessageID)}
@@ -2160,6 +2253,7 @@ class TelethonGateway:
         caption: CaptionPolicy,
         on_transfer: OnTransfer | None = None,
         topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         sizes = [_item_size(i) for i in items]
         total = _album_share(sizes)
@@ -2172,13 +2266,15 @@ class TelethonGateway:
             fm = await self._album_media(peer, item, progress)
             done += _album_share([size])
             parts.append((fm, text, entities))
-        return await self._post_multi_media(peer, parts, topic)
+        return await self._post_multi_media(peer, parts, topic, reply_to)
 
-    async def send_text(self, dst: int, text: str, *, topic: int | None = None) -> int:
+    async def send_text(
+        self, dst: int, text: str, *, topic: int | None = None, reply_to: int | None = None
+    ) -> int:
         peer = await self._peer(dst)
         with mapped_errors():
             sent = await self._client.send_message(
-                peer, text, parse_mode=None, link_preview=False, reply_to=topic
+                peer, text, parse_mode=None, link_preview=False, reply_to=_reply_of(topic, reply_to)
             )
         return int(sent.id)
 

@@ -175,6 +175,7 @@ async def test_the_files_are_kept_until_the_unit_is_sent_and_gone_afterwards(rig
         on_transfer: Any = None,
         *,
         topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         seen.append(
             len(leftovers(rig))
@@ -329,7 +330,12 @@ async def test_killed_after_sending_by_id_the_next_run_finds_it_and_sends_nothin
     calls = 0
 
     async def dies_after_the_second_one(
-        dst: int, prepared: Any, caption: Any, *, topic: int | None = None
+        dst: int,
+        prepared: Any,
+        caption: Any,
+        *,
+        topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         nonlocal calls
         calls += 1
@@ -370,6 +376,7 @@ def watch_order(rig: Rig) -> list[tuple[str, int]]:
         on_transfer: Any = None,
         *,
         topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         order.append(("send", prepared.unit.ids[0]))
         await asyncio.sleep(0.05)  # an upload takes time: the pipeline has a chance to look ahead
@@ -649,7 +656,9 @@ async def test_killed_after_a_placeholder_the_next_run_reconciles_it_not_resends
     original = rig.gw.send_text
     calls = 0
 
-    async def dies_after_sending(dst: int, text: str, *, topic: int | None = None) -> int:
+    async def dies_after_sending(
+        dst: int, text: str, *, topic: int | None = None, reply_to: int | None = None
+    ) -> int:
         nonlocal calls
         calls += 1
         msg_id = await original(dst, text, topic=topic)
@@ -755,7 +764,13 @@ async def test_killed_after_the_upload_the_next_run_finds_it_and_sends_nothing_t
     calls = 0
 
     async def dies_after_the_second_upload(
-        dst: int, prepared: Any, caption: Any, on_transfer: Any = None, *, topic: int | None = None
+        dst: int,
+        prepared: Any,
+        caption: Any,
+        on_transfer: Any = None,
+        *,
+        topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         nonlocal calls
         calls += 1
@@ -782,7 +797,13 @@ async def test_killed_before_the_upload_the_next_run_sends_the_unit_once(rig: Ri
     original = rig.gw.send_prepared
 
     async def dies_first(
-        dst: int, prepared: Any, caption: Any, on_transfer: Any = None, *, topic: int | None = None
+        dst: int,
+        prepared: Any,
+        caption: Any,
+        on_transfer: Any = None,
+        *,
+        topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         raise Crash
 

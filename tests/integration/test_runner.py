@@ -168,13 +168,18 @@ class Rig:
         counter = 0
 
         async def wrapped(
-            src: int, dst: int, ids: list[int], *, topic: int | None = None
+            src: int,
+            dst: int,
+            ids: list[int],
+            *,
+            topic: int | None = None,
+            keep_header: bool = False,
         ) -> list[int | None]:
             nonlocal counter
             counter += 1
             if not after:
                 await hook(ids, counter)
-            result = await original(src, dst, ids, topic=topic)
+            result = await original(src, dst, ids, topic=topic, keep_header=keep_header)
             if after:
                 await hook(ids, counter)
             return result

@@ -41,6 +41,7 @@ def full(message_id: int = 7) -> SrcMessage:
         reply_to_id=3,
         edit_date=WHEN + timedelta(days=1),
         link_domains=("example.com", "t.me"),
+        own_links=(4, 9),
         file_name="clip.mp4",
         file_key="d1",
         forwards=2,

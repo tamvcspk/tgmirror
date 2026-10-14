@@ -49,6 +49,9 @@ from tgmirror.cli.refs import SOURCE_HELP
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
 from tgmirror.cli.transform_options import (
     HashtagToTopicOption,
+    KeepForwardHeaderOption,
+    KeepRepliesOption,
+    RewriteLinksOption,
     StripRoutingHashtagOption,
     TopicDefaultOption,
     TopicMapOption,
@@ -252,6 +255,9 @@ def inspect_command(
     topic_map: TopicMapOption = None,
     topic_default: TopicDefaultOption = None,
     strip_routing_hashtag: StripRoutingHashtagOption = False,
+    keep_replies: KeepRepliesOption = False,
+    rewrite_links: RewriteLinksOption = False,
+    keep_forward_header: KeepForwardHeaderOption = False,
     reset_polls: Annotated[
         bool, typer.Option("--reset-polls", help="With --plan: polls are re-created.")
     ] = False,
@@ -358,6 +364,9 @@ def inspect_command(
                     no_index,
                     hashtag_to_topic,
                     strip_routing_hashtag,
+                    keep_replies,
+                    rewrite_links,
+                    keep_forward_header,
                     reset_polls,
                     ignore_unsupported,
                     placeholder,
@@ -391,6 +400,9 @@ def inspect_command(
                 topic_map=topic_map,
                 topic_default=topic_default,
                 strip_routing_hashtag=strip_routing_hashtag,
+                keep_replies=keep_replies,
+                rewrite_links=rewrite_links,
+                keep_forward_header=keep_forward_header,
             ),
         )
         tables = _validated_by(by)

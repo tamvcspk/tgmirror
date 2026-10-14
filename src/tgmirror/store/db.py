@@ -533,6 +533,19 @@ class Store:
             mirror_id = await self._mirror_id(self._conn, run_id)
             return await msgmap.done_ids(self._conn, mirror_id, ids)
 
+    async def dst_id_of(self, run_id: int, src_msg_id: int) -> int | None:
+        """Where ``src_msg_id`` went in the destination of this run's pair (phase 19c: a reply
+        answers the copy of the message it answered), or ``None``."""
+        async with self._lock:
+            mirror_id = await self._mirror_id(self._conn, run_id)
+            return await msgmap.dst_id_of(self._conn, mirror_id, src_msg_id)
+
+    async def dst_ids_of(self, run_id: int, src_msg_ids: Sequence[int]) -> dict[int, int]:
+        """``dst_id_of`` for several messages: source id -> destination id (phase 19c3, links)."""
+        async with self._lock:
+            mirror_id = await self._mirror_id(self._conn, run_id)
+            return await msgmap.dst_ids_of(self._conn, mirror_id, src_msg_ids)
+
     async def last_done_dst_id(self, run_id: int) -> int:
         async with self._lock:
             return await msgmap.last_done_dst_id(

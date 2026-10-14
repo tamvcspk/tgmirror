@@ -27,6 +27,7 @@ from tgmirror.engine.reupload import (
 )
 from tgmirror.engine.runs import InvalidOptions, ModeUnsupported, RunRequest, check_options
 from tgmirror.engine.strategy import Strategy, has_caption, has_files, router
+from tgmirror.engine.transform import Transform
 from tgmirror.store.msgmap import MessageResult
 from tgmirror.store.runs import RunOptions
 
@@ -555,3 +556,50 @@ async def test_next_recovers_an_item_the_poll_timeout_raced_the_producer_for(
 
     assert isinstance(result, _End)
     await producer
+
+
+# ---- keeping replies (phase 19c) ---------------------------------------------------------------
+
+
+def test_a_unit_that_answers_a_message_is_sent_again_to_keep_its_reply() -> None:
+    route = router(
+        "auto", CaptionMode.KEEP, by_reference=True, transform=Transform(keep_replies=True)
+    )
+
+    assert route(unit(msg(2, "text", reply_to_id=1))) is Strategy.REUPLOAD  # no file to reuse
+    assert route(unit(msg(3, "", MediaKind.PHOTO, reply_to_id=1))) is Strategy.REFERENCE
+    assert route(unit(msg(5, "no reply"))) is Strategy.COPY
+
+
+def test_an_album_answers_when_any_of_its_messages_does() -> None:
+    answering = unit(
+        msg(1, "cap", MediaKind.PHOTO, grouped_id=7, reply_to_id=9),
+        msg(2, "", MediaKind.PHOTO, grouped_id=7),
+    )
+    route = router(
+        "auto", CaptionMode.KEEP, by_reference=True, transform=Transform(keep_replies=True)
+    )
+
+    assert answering.reply_to_id == 9
+    assert route(answering) is Strategy.REFERENCE
+
+
+def test_what_would_lose_more_than_it_gains_by_being_sent_again_stays_a_forward() -> None:
+    """A poll sent again has no votes, a game or an invoice cannot be copied: the reply is the
+    smaller loss."""
+    route = router("auto", CaptionMode.KEEP, transform=Transform(keep_replies=True))
+
+    for kind in (MediaKind.POLL, MediaKind.GAME, MediaKind.INVOICE, MediaKind.OTHER):
+        assert route(unit(msg(2, "", kind, reply_to_id=1))) is Strategy.COPY
+    assert route(unit(msg(3, "", MediaKind.GEO, reply_to_id=1))) is Strategy.REUPLOAD
+
+
+def test_replies_are_left_alone_unless_the_transform_keeps_them() -> None:
+    answering = unit(msg(2, "text", reply_to_id=1))
+
+    assert router("auto", CaptionMode.KEEP)(answering) is Strategy.COPY
+    assert router("auto", CaptionMode.KEEP, transform=Transform())(answering) is Strategy.COPY
+    # the user's own mode is never second-guessed, either way
+    keep = Transform(keep_replies=True)
+    assert router("copy", CaptionMode.KEEP, transform=keep)(answering) is Strategy.COPY
+    assert router("reupload", CaptionMode.KEEP, transform=keep)(answering) is Strategy.REUPLOAD

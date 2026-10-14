@@ -91,7 +91,7 @@ def test_filter_file_still_refuses_a_selection_file(tmp_path: Path) -> None:
     ("text", "why"),
     [
         ("version: 2\nfilter: {}\n", "not supported"),
-        ("version: 1\nfilter: {}\ntransform: {reply: keep}\n", "transform: reply"),
+        ("version: 1\nfilter: {}\ntransform: {links: yes}\n", "transform: links"),
         (
             "version: 1\nfilter: {}\ntransform: {topics: {hashtag_to_topic: {}}}\n",
             "transform: topics.hashtag_to_topic",

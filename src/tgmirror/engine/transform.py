@@ -35,8 +35,29 @@ section (where a message lands in a forum, and how a topic is named)::
         "Old name": "New name"        # several into one = merged; also names the topic hashtag
       hashtag_format: "#t_{slug}"     # a topic kept as a hashtag in a destination without topics
 
-The keys of the last slice (replies, forward header, links) are reserved and refused for now rather
-than half used.
+Slice 19c, the references between messages, arrives a key at a time::
+
+    reply: keep                       # a reply answers the copy of the message it answered
+
+A message sent again answers the message at the destination that stands for the one it answered
+here (``msg_map``); a reply to a message that was not copied loses its reply, and a forward cannot
+carry a reply at all, so these messages are sent again (decision D3 as for any message that is).
+
+    forward_header: keep              # "Forwarded from <source>" stays on what is forwarded
+
+The default (``drop``) is the forward without author of decision D2. The header is a property of a
+forward, so ``keep`` is the one key that asks for the opposite of the others: it cannot go together
+with anything that sends a message again (a caption operation, ``strip``, ``reply: keep``), and a
+transform that asks for both is refused rather than left to lose one of them silently.
+Slice 19c3, the links between messages::
+
+    links: rewrite                    # a link to a message of the source -> to its copy
+
+A link written as ``t.me/<source>/<id>`` (or ``t.me/c/<number>/<id>``) in a caption or a text
+becomes a link to the message that stands for ``<id>`` at the destination, found through
+``msg_map`` like a reply's. A link to a message that has no copy *yet* (a later one, or one the
+filter left out) stays as it is, and the run counts those. Rewriting changes the text, so the
+messages that carry such a link are sent again.
 """
 
 import json
@@ -65,9 +86,7 @@ from tgmirror.filters.model import FilterError, normalize_hashtag
 FORMAT_VERSION = 1
 MAX_OPERATIONS = 50
 _SCOPES = ("source", "all")
-# keys of later slices of phase 19: refused with their own message, never silently ignored
-_RESERVED = frozenset({"reply", "forward_header", "links"})
-_KEYS = frozenset({"version", "caption", "topics"})
+_KEYS = frozenset({"version", "caption", "topics", "reply", "forward_header", "links"})
 _TOPICS_KEYS = frozenset({"hashtag_to_topic", "topic_map", "hashtag_format"})
 _TOPICS_KEY_HINTS = {  # what a key needs under it (a present key with no value is an error)
     "hashtag_to_topic": 'give `auto: all` (a topic per hashtag), `auto: ["#a"]` or `map:`',
@@ -284,20 +303,55 @@ class Transform:
     caption: tuple[CaptionOp, ...] = ()
     text_too: bool = False  # rewrite the text of plain text messages too, not only media captions
     topics: TopicRules = TopicRules()  # phase 19b
+    keep_replies: bool = False  # phase 19c: a reply answers the copy of what it answered
+    keep_forward_header: bool = False  # phase 19c2: forward with "Forwarded from" (drop_author off)
+    rewrite_links: bool = False  # phase 19c3: links to messages of the source -> their copies
+
+    def __post_init__(self) -> None:
+        if not self.keep_forward_header:
+            return
+        sends_again = [
+            name
+            for name, on in (
+                ("a `caption` operation", bool(self.caption)),
+                ("`strip`", self.topics.strips),
+                ("`reply: keep`", self.keep_replies),
+                ("`links: rewrite`", self.rewrite_links),
+            )
+            if on
+        ]
+        if sends_again:
+            raise TransformError(
+                "forward_header: keep cannot go with "
+                + ", ".join(sends_again)
+                + ": the header only exists on a forward, and those send the message again"
+            )
 
     @property
     def is_empty(self) -> bool:
-        return not self.caption and self.topics.is_empty
+        return (
+            not self.caption
+            and self.topics.is_empty
+            and not self.keep_replies
+            and not self.keep_forward_header
+            and not self.rewrite_links
+        )
+
+    @property
+    def rewrites_content(self) -> bool:
+        """Some caption (or text) may be changed, which no forward does."""
+        return bool(self.caption) or self.topics.strips
 
     @property
     def rewrites(self) -> bool:
-        """Some message may have to be sent again to be changed (a forward cannot change one)."""
-        return bool(self.caption) or self.topics.strips
+        """Some message may have to be sent again to be changed (a forward cannot change one,
+        nor give one a reply)."""
+        return self.rewrites_content or self.keep_replies or self.rewrite_links
 
     @property
     def rewrites_text(self) -> bool:
         """Plain text messages are rewritten too, so they cannot be forwarded unchanged."""
-        return self.text_too and self.rewrites
+        return self.text_too and self.rewrites_content
 
     @property
     def routes_to_topics(self) -> bool:
@@ -309,12 +363,18 @@ class Transform:
     def to_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {"version": FORMAT_VERSION}
         items: list[dict[str, Any]] = [_item_of(op) for op in self.caption]
-        if self.text_too and self.rewrites:
+        if self.text_too and self.rewrites_content:
             items.append({"text_too": True})
         if items:
             data["caption"] = items
         if not self.topics.is_empty:
             data["topics"] = self.topics.to_data()
+        if self.keep_replies:
+            data["reply"] = "keep"
+        if self.keep_forward_header:
+            data["forward_header"] = "keep"
+        if self.rewrite_links:
+            data["links"] = "rewrite"
         return data
 
     def to_json(self) -> str:
@@ -340,11 +400,6 @@ class Transform:
             return cls()
         if not isinstance(data, dict):
             raise TransformError("a transform is a mapping (version, caption, topics)")
-        reserved = sorted(data.keys() & _RESERVED)
-        if reserved:
-            raise TransformError(
-                f"{', '.join(reserved)}: not available yet (a later part of phase 19)"
-            )
         unknown = data.keys() - _KEYS
         if unknown:
             raise TransformError(f"not a transform key: {', '.join(sorted(map(str, unknown)))}")
@@ -353,7 +408,14 @@ class Transform:
             raise TransformError(f"transform format {version!r} is not supported")
         ops, text_too = _caption(data.get("caption"))
         topics = TopicRules.from_data(data.get("topics"))
-        transform = cls(ops, text_too, topics)
+        transform = cls(
+            ops,
+            text_too,
+            topics,
+            _reply(data.get("reply")),
+            _forward_header(data.get("forward_header")),
+            _links(data.get("links")),
+        )
         if transform.text_too and any(isinstance(op, Clear) for op in ops):
             raise TransformError("caption: `clear` with `text_too` would empty every text message")
         return transform
@@ -382,6 +444,33 @@ def _caption(raw: Any) -> tuple[tuple[CaptionOp, ...], bool]:
             continue
         ops.append(_operation(where, name, value))
     return tuple(ops), bool(text_too)
+
+
+def _reply(raw: Any) -> bool:
+    """``reply: keep`` (a reply answers the copy of its original) or ``drop`` (the default)."""
+    if raw is None or raw == "drop":
+        return False
+    if raw == "keep":
+        return True
+    raise TransformError("reply: `keep` (answer the copy of the message) or `drop`")
+
+
+def _forward_header(raw: Any) -> bool:
+    """``forward_header: keep`` (forward with the source's name on it) or ``drop`` (the default)."""
+    if raw is None or raw == "drop":
+        return False
+    if raw == "keep":
+        return True
+    raise TransformError("forward_header: `keep` (show where it was forwarded from) or `drop`")
+
+
+def _links(raw: Any) -> bool:
+    """``links: rewrite`` (links to messages of the source point at their copies) or ``keep``."""
+    if raw is None or raw == "keep":
+        return False
+    if raw == "rewrite":
+        return True
+    raise TransformError("links: `rewrite` (point at the copies) or `keep` (the default)")
 
 
 # ---- topics -------------------------------------------------------------------------------------

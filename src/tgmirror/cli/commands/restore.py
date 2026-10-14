@@ -49,6 +49,8 @@ from tgmirror.cli.selection_options import (
 )
 from tgmirror.cli.transform_options import (
     HashtagToTopicOption,
+    KeepRepliesOption,
+    RewriteLinksOption,
     StripRoutingHashtagOption,
     TopicDefaultOption,
     TopicMapOption,
@@ -124,6 +126,8 @@ def restore(
     topic_map: TopicMapOption = None,
     topic_default: TopicDefaultOption = None,
     strip_routing_hashtag: StripRoutingHashtagOption = False,
+    keep_replies: KeepRepliesOption = False,
+    rewrite_links: RewriteLinksOption = False,
     ignore_unsupported: Annotated[
         bool,
         typer.Option(
@@ -267,6 +271,8 @@ def restore(
                 topic_map=topic_map,
                 topic_default=topic_default,
                 strip_routing_hashtag=strip_routing_hashtag,
+                keep_replies=keep_replies,
+                rewrite_links=rewrite_links,
             ),
         )
         options = RestoreOptions(

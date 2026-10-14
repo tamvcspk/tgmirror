@@ -108,7 +108,12 @@ async def test_a_crash_shows_the_same_sentence_the_cli_would(tmp_path: Path) -> 
     gateway.add_message(src.id, "m1")
 
     async def die(
-        src_id: int, dst_id: int, ids: list[int], *, topic: int | None = None
+        src_id: int,
+        dst_id: int,
+        ids: list[int],
+        *,
+        topic: int | None = None,
+        keep_header: bool = False,
     ) -> list[int | None]:
         raise RuntimeError("boom")
 

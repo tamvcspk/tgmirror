@@ -190,8 +190,8 @@ Wizard (`clone`, `backup`, `restore`, và các lệnh mới): bước filter th�
 | **hashtag → topic** (không phải forum → forum) | không | mới: định tuyến tin vào topic theo hashtag. `auto` = mỗi hashtag (trong danh sách cho trước, hoặc top N từ inspect) một topic; `map` = bảng hashtag → tên topic; tin nhiều hashtag lấy rule khớp đầu tiên; không có hashtag → General hoặc topic mặc định; `strip: true` bỏ hashtag đã dùng khỏi caption |
 | topic → topic khác tên / gộp topic | không (ánh xạ 1-1 theo tên) | mới: `map` tên/id topic nguồn → tên topic đích; nhiều nguồn vào một đích = gộp; `drop` để bỏ topic |
 | forum → nhiều kênh (tách theo topic) | làm được: nhiều `clone --topic N` | không làm thêm; ghi vào hướng dẫn |
-| giữ reply | không (forward không giữ) | mới, chỉ khi tin đi đường gửi lại (B/REFERENCE): `reply_to` ánh xạ qua `msg_map`; tin được reply nằm ngoài selection → bỏ reply |
-| giữ/bỏ header "Forwarded from" | luôn bỏ (`drop_author=True`, D2) | tùy chọn `forward_header: keep` → `drop_author=False`. Cũng là câu trả lời cho "biến forward thành tin của kênh" **khi clone**: điều đó đã là mặc định |
+| giữ reply | không (forward không giữ) | **xong ở 19c1** (`reply: keep`, xem `06`): mới, chỉ khi tin đi đường gửi lại (B/REFERENCE): `reply_to` ánh xạ qua `msg_map`; tin được reply nằm ngoài selection → bỏ reply |
+| giữ/bỏ header "Forwarded from" | luôn bỏ (`drop_author=True`, D2) | **xong ở 19c2** (không ghép với thứ buộc gửi lại, xem `06`): tùy chọn `forward_header: keep` → `drop_author=False`. Cũng là câu trả lời cho "biến forward thành tin của kênh" **khi clone**: điều đó đã là mặc định |
 
 Mọi biến đổi cấu trúc đều quyết định *đường đi* của unit (giống `topic_as_hashtag` hôm nay): cái gì forward không làm được (đổi caption, thêm reply) đẩy unit sang REFERENCE hoặc B, nên D3 áp dụng như cũ (`strategy.may_reupload` mở rộng). Pre-flight của inspect (mục 3.1) cho người dùng thấy trước bao nhiêu unit sẽ bị đẩy sang tải lại.
 
@@ -220,7 +220,7 @@ caption:
 
 ### 5.4 Nơi đặt transform
 
-Trong file selection (`transform:`), hoặc file riêng `--transform t.yaml`; cờ tắt cho ca phổ biến (`--hashtag-to-topic`, `--topic-map "Cũ=Mới"`, `--topic-default`, `--strip-routing-hashtag` — có từ 19b/19b1; `--keep-replies`, `--rewrite-links` — 19c). Transform được nhớ theo cặp (`mirrors.options_json`), giống filter: `run` dùng lại, đổi transform giữa chừng thì cảnh báo rằng tin đã sao chép không bị sửa lại (không quét lại như đổi filter).
+Trong file selection (`transform:`), hoặc file riêng `--transform t.yaml`; cờ tắt cho ca phổ biến (`--hashtag-to-topic`, `--topic-map "Cũ=Mới"`, `--topic-default`, `--strip-routing-hashtag` — có từ 19b/19b1; `--keep-replies` — có từ 19c1; `--keep-forward-header` — 19c2; `--rewrite-links` — có từ 19c3). Transform được nhớ theo cặp (`mirrors.options_json`), giống filter: `run` dùng lại, đổi transform giữa chừng thì cảnh báo rằng tin đã sao chép không bị sửa lại (không quét lại như đổi filter).
 
 ## 6. Thao tác hàng loạt trên chính một kênh (Phase 20)
 
@@ -305,7 +305,8 @@ Thứ tự trong 0.2.0: 18a → 19 → 18b (18b là UX đắt nhất; 18a + 19 �
 2. `channels.deleteMessages`: tốc độ, FloodWait khi xoá hàng nghìn tin; xoá tin trong supergroup/forum của người khác; xoá có làm đổi id/thứ tự gì không.
 3. `messages.editMessage`: sửa tin cũ trong broadcast/supergroup/forum (giới hạn thời gian?), sửa tin forward, sửa caption album, người theo dõi có nhận thông báo không, nhãn "đã sửa".
 4. Chuyển tin giữa các topic: xác nhận thật sự không có API (nếu có thì `repost` cho hashtag → topic tại chỗ không cần nữa).
-5. Đăng im lặng (`silent`) cho `repost` hàng loạt; `forward_header: keep` (`drop_author=False`) có giữ album/topic như `drop_author=True` không.
+5. Giữ reply vào topic (19c1) — **xong 2026-10-14** (`scripts/spike_reply.py`, chạy trên forum thử): `reply_to=<id tin>` một mình vào đúng topic của tin đó; album với `reply_to_msg_id`+`top_msg_id` cũng đúng; reply sang topic khác chưa thử.
+   Đăng im lặng (`silent`) cho `repost` hàng loạt; `forward_header: keep` (`drop_author=False`) có giữ album/topic như `drop_author=True` không (19c2: **script có sẵn `scripts/spike_forward_header.py`**; **album: có**, một nhóm như `drop_author=True`, chạy 2026-10-14; vế topic chưa chạy).
 6. Cỡ chỉ mục và thời gian quét cho một kênh ~100k tin ở `read_delay` mặc định.
 
 ## 10. Câu hỏi đã chốt (người dùng trả lời 2026-10-12)

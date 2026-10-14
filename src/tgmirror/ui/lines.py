@@ -60,6 +60,10 @@ def run_result_lines(final: Run, retry_of: int | None) -> list[str]:
         lines.append(t("run.skipped", count=final.skipped_filter))
     if final.skipped_unsupported:
         lines.append(t("run.unsupported_total", count=final.skipped_unsupported, id=final.id))
+    if final.reply_lost:
+        lines.append(t("run.reply_lost", count=final.reply_lost))
+    if final.links_left:
+        lines.append(t("run.links_left", count=final.links_left))
     if final.gone:
         lines.append(t("retry.gone", count=final.gone))
     if final.failed:

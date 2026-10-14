@@ -559,3 +559,198 @@ def test_transform_without_plan_is_a_usage_error(
     )
 
     assert result.exit_code == 2
+
+
+# ---- replies (phase 19c) ----------------------------------------------------------------------
+
+
+def answering(gateway: FakeGateway) -> tuple[int, int]:
+    src, dst = source_with_messages(gateway, 0)
+    gateway.add_message(src, "question")  # 1
+    gateway.add_message(src, "answer", reply_to_id=1)  # 2
+    return src, dst
+
+
+def replies_of(gateway: FakeGateway, channel: int) -> dict[str, str | None]:
+    posted = {m.id: m for m in gateway.messages[channel]}
+    return {
+        m.text: posted[m.reply_to_id].text if m.reply_to_id in posted else None
+        for m in posted.values()
+    }
+
+
+def test_keep_replies_flag_alone_is_a_transform_and_the_pair_remembers_it(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, dst = answering(gateway)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, [*CLONE, "--keep-replies"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert replies_of(gateway, dst) == {"question": None, "answer": "question"}
+    (run,) = saved_runs(rt)
+    assert Transform.from_json(run.options.transform_json).keep_replies
+
+    gateway.add_message(src, "later", reply_to_id=2)  # 3: ``run`` carries the flag on by itself
+    assert runner.invoke(app, ["run"], obj=rt).exit_code == 0
+    assert replies_of(gateway, dst)["later"] == "answer"
+
+
+def test_keep_replies_goes_on_top_of_a_transform_file(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    _, dst = answering(gateway)
+    rt = make_runtime(gateway=gateway)
+    path = transform_file(tmp_path, 'caption:\n  - append: "via B"\n  - text_too: true\n')
+
+    result = runner.invoke(app, [*CLONE, "--transform", str(path), "--keep-replies"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst) == ["question\n\nvia B", "answer\n\nvia B"]
+    assert replies_of(gateway, dst) == {
+        "question\n\nvia B": None,
+        "answer\n\nvia B": "question\n\nvia B",
+    }
+
+
+def test_a_file_can_ask_for_replies_itself(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    _, dst = answering(gateway)
+    path = transform_file(tmp_path, "reply: keep\n")
+
+    result = runner.invoke(
+        app, [*CLONE, "--transform", str(path)], obj=make_runtime(gateway=gateway)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert replies_of(gateway, dst)["answer"] == "question"
+
+
+def test_keep_replies_with_a_forward_only_mode_is_refused_before_anything_is_created(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    answering(gateway)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, [*CLONE, "--mode", "copy", "--keep-replies"], obj=rt)
+
+    assert result.exit_code == 2, result.output
+    assert saved_runs(rt) == []
+
+
+def test_the_preflight_counts_a_reply_as_a_unit_sent_again(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    answering(gateway)
+    rt = make_runtime(gateway=gateway)
+    plan = ["inspect", "Source", "--plan", "clone", "--json"]
+
+    plain = runner.invoke(app, plan, obj=rt)
+    planned = runner.invoke(app, [*plan, "--keep-replies"], obj=rt)
+
+    assert plain.exit_code == 0 and planned.exit_code == 0, planned.output
+    assert '"strategy": "reupload"' not in plain.output  # a forward carries no reply
+    assert '"strategy": "reupload"' in planned.output  # the answer is posted again
+
+
+# ---- forward header (phase 19c2) --------------------------------------------------------------
+
+
+def test_keep_forward_header_flag_forwards_with_the_header_and_run_remembers_it(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, dst = source_with_messages(gateway, 2)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, [*CLONE, "--keep-forward-header"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert [m.is_forward for m in gateway.messages[dst]] == [True, True]
+    assert gateway.messages[dst][0].fwd_from_id == src
+    gateway.add_message(src, "m3")
+    assert runner.invoke(app, ["run"], obj=rt).exit_code == 0
+    assert gateway.messages[dst][-1].is_forward
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [["--keep-replies"], ["--caption", "none"], ["--mode", "reupload"]],
+)
+def test_the_header_with_something_that_sends_again_is_refused_before_anything_is_created(
+    make_runtime: MakeRuntime, gateway: FakeGateway, extra: list[str]
+) -> None:
+    source_with_messages(gateway, 1)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, [*CLONE, "--keep-forward-header", *extra], obj=rt)
+
+    assert result.exit_code == 2, result.output
+    assert saved_runs(rt) == []
+
+
+def test_the_header_on_top_of_a_file_with_caption_operations_is_refused(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    captioned(gateway)
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(
+        app, [*CLONE, "--transform", str(transform_file(tmp_path)), "--keep-forward-header"], obj=rt
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "forward_header" in result.output and saved_runs(rt) == []
+
+
+# ---- links (phase 19c3) -----------------------------------------------------------------------
+
+
+def test_rewrite_links_flag_points_a_link_at_the_copy_and_run_remembers_it(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, dst = source_with_messages(gateway, 0)
+    gateway.add_message(src, "target")  # 1
+    gateway.add_message(src, "see t.me/c/555/1", own_links=(1,))  # 2
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, [*CLONE, "--rewrite-links"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    copy = gateway.messages[dst][0].id
+    assert texts(gateway, dst)[1] == f"see https://t.me/c/{str(dst).removeprefix('-100')}/{copy}"
+    (run,) = saved_runs(rt)
+    assert Transform.from_json(run.options.transform_json).rewrite_links
+
+    gateway.add_message(src, "again t.me/c/555/2", own_links=(2,))  # 3: ``run`` carries it on
+    assert runner.invoke(app, ["run"], obj=rt).exit_code == 0
+    second = gateway.messages[dst][1].id
+    assert texts(gateway, dst)[2].endswith(f"/{second}")
+
+
+def test_the_result_line_counts_the_links_that_had_no_copy_yet(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    src, _ = source_with_messages(gateway, 0)
+    gateway.add_message(src, "t.me/c/555/2 comes later", own_links=(2,))  # 1
+    gateway.add_message(src, "later")  # 2
+    rt = make_runtime(gateway=gateway)
+
+    result = runner.invoke(app, [*CLONE, "--rewrite-links"], obj=rt)
+
+    assert result.exit_code == 0, result.output
+    assert "1 link" in result.output or "1 links" in result.output
+
+
+def test_rewrite_links_with_a_forward_only_mode_or_the_header_is_refused(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    source_with_messages(gateway, 1)
+    rt = make_runtime(gateway=gateway)
+
+    copy = runner.invoke(app, [*CLONE, "--mode", "copy", "--rewrite-links"], obj=rt)
+    header = runner.invoke(app, [*CLONE, "--keep-forward-header", "--rewrite-links"], obj=rt)
+
+    assert copy.exit_code == 2 and header.exit_code == 2, (copy.output, header.output)
+    assert saved_runs(rt) == []

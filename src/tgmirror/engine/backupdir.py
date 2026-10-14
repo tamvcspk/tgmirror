@@ -72,6 +72,7 @@ class BackupManifest:
     topics: tuple[BackupTopic, ...] = ()
     created_at: str = ""
     updated_at: str = ""
+    src_username: str | None = None  # phase 19c3: what links to its messages look like
 
     def to_json(self) -> str:
         data = asdict(self)
@@ -185,6 +186,7 @@ _META_FIELDS = (
     "fwd_from_name",
     "reply_to_id",
     "link_domains",
+    "own_links",
     "forwards",
     "reactions",
     "post_author",
@@ -210,6 +212,7 @@ def record_from_dict(data: dict[str, Any]) -> ExportedMessage:
         reply_to_id=data.get("reply_to_id"),
         edit_date=None if edit_date is None else datetime.fromisoformat(edit_date),
         link_domains=tuple(data.get("link_domains", ())),
+        own_links=tuple(data.get("own_links", ())),
         forwards=data.get("forwards"),
         reactions=data.get("reactions"),
         post_author=data.get("post_author"),

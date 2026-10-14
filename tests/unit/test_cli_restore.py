@@ -389,3 +389,74 @@ def test_restore_routes_by_hashtag_into_a_forum_it_creates(
         "rs #rust": topics["Rust"],
         "nothing": None,
     }
+
+
+def test_restore_keeps_a_reply_by_answering_the_copy_in_the_destination(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    """Phase 19c on the restore road: the reply is read from the backup's own record and the
+    original is found in ``msg_map`` of the restore itself."""
+    out = tmp_path / "out"
+    src = gateway.add_channel("Source")
+    gateway.add_message(src.id, "question")
+    gateway.add_message(src.id, "answer", reply_to_id=1)
+    rt = make_runtime(gateway=gateway)
+    assert cli.invoke(app, ["backup", "Source", str(out)], obj=rt).exit_code == 0
+    dst = gateway.add_channel("Dest")
+
+    result = cli.invoke(
+        app,
+        ["restore", str(out), "--dst", "Dest", "--yes", "--keep-replies"],
+        obj=make_runtime(gateway=gateway),
+    )
+
+    assert result.exit_code == 0, result.output
+    posted = {m.id: m for m in gateway.messages[dst.id]}
+    answer = next(m for m in posted.values() if m.text == "answer")
+    assert answer.reply_to_id in posted and posted[answer.reply_to_id].text == "question"
+
+
+def test_restore_refuses_the_forward_header_because_it_always_uploads_again(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    out = tmp_path / "out"
+    src = gateway.add_channel("Source")
+    gateway.add_message(src.id, "one")
+    rt = make_runtime(gateway=gateway)
+    assert cli.invoke(app, ["backup", "Source", str(out)], obj=rt).exit_code == 0
+    dst = gateway.add_channel("Dest")
+    plan = tmp_path / "t.yaml"
+    plan.write_text("forward_header: keep\n", encoding="utf-8")
+
+    result = cli.invoke(
+        app,
+        ["restore", str(out), "--dst", "Dest", "--yes", "--transform", str(plan)],
+        obj=make_runtime(gateway=gateway),
+    )
+
+    assert result.exit_code == 2, result.output
+    assert gateway.messages[dst.id] == []
+
+
+def test_restore_points_a_link_at_the_copy_from_the_backups_own_record(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    """Phase 19c3 on the restore road: which messages a text links to was recorded when the backup
+    was made, and the copy is found in ``msg_map`` of the restore itself."""
+    out = tmp_path / "out"
+    src = gateway.add_channel("Source")
+    gateway.add_message(src.id, "target")
+    gateway.add_message(src.id, "see t.me/c/555/1", own_links=(1,))
+    rt = make_runtime(gateway=gateway)
+    assert cli.invoke(app, ["backup", "Source", str(out)], obj=rt).exit_code == 0
+    dst = gateway.add_channel("Dest")
+
+    result = cli.invoke(
+        app,
+        ["restore", str(out), "--dst", "Dest", "--yes", "--rewrite-links"],
+        obj=make_runtime(gateway=gateway),
+    )
+
+    assert result.exit_code == 0, result.output
+    first, second = gateway.messages[dst.id]
+    assert second.text == f"see https://t.me/c/{str(dst.id).removeprefix('-100')}/{first.id}"

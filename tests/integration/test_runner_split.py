@@ -64,7 +64,13 @@ def watch(rig: Rig, *, uploading: float = 0.0) -> Events:
         return await upload(prepared, on_transfer)
 
     async def posting(
-        dst: int, prepared: Any, caption: Any, on_transfer: Any = None, *, topic: int | None = None
+        dst: int,
+        prepared: Any,
+        caption: Any,
+        on_transfer: Any = None,
+        *,
+        topic: int | None = None,
+        reply_to: int | None = None,
     ) -> Any:
         events.append(("post", pending_now(rig)))
         return await post(dst, prepared, caption, on_transfer, topic=topic)
@@ -263,9 +269,18 @@ class Hybrid:
         return await self._real.upload_prepared(prepared, on_transfer)
 
     async def send_prepared(
-        self, dst: int, prepared: Any, caption: Any, on_transfer: Any = None, *, topic: Any = None
+        self,
+        dst: int,
+        prepared: Any,
+        caption: Any,
+        on_transfer: Any = None,
+        *,
+        topic: Any = None,
+        reply_to: Any = None,
     ) -> Any:
-        return await self._real.send_prepared(dst, prepared, caption, on_transfer, topic=topic)
+        return await self._real.send_prepared(
+            dst, prepared, caption, on_transfer, topic=topic, reply_to=reply_to
+        )
 
 
 @pytest.fixture

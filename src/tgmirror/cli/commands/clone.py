@@ -47,6 +47,9 @@ from tgmirror.cli.selection_options import (
 )
 from tgmirror.cli.transform_options import (
     HashtagToTopicOption,
+    KeepForwardHeaderOption,
+    KeepRepliesOption,
+    RewriteLinksOption,
     StripRoutingHashtagOption,
     TopicDefaultOption,
     TopicMapOption,
@@ -133,6 +136,9 @@ def clone(
     topic_map: TopicMapOption = None,
     topic_default: TopicDefaultOption = None,
     strip_routing_hashtag: StripRoutingHashtagOption = False,
+    keep_replies: KeepRepliesOption = False,
+    rewrite_links: RewriteLinksOption = False,
+    keep_forward_header: KeepForwardHeaderOption = False,
     reset_polls: Annotated[
         bool,
         typer.Option(
@@ -320,6 +326,9 @@ def clone(
             topic_map=topic_map,
             topic_default=topic_default,
             strip_routing_hashtag=strip_routing_hashtag,
+            keep_replies=keep_replies,
+            rewrite_links=rewrite_links,
+            keep_forward_header=keep_forward_header,
         )
         transform = await resolve_transform(  # a bad file is a usage error too
             transform_file, topics=topic_opts

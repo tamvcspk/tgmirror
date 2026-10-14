@@ -166,6 +166,7 @@ class FakeGateway:
         post_author: str | None = None,
         via_bot_id: int | None = None,
         pinned: bool = False,
+        own_links: tuple[int, ...] = (),
     ) -> SrcMessage:
         msg_id = self._alloc_id(channel)
         msg = SrcMessage(
@@ -197,6 +198,7 @@ class FakeGateway:
             post_author=post_author,
             via_bot_id=via_bot_id,
             pinned=pinned,
+            own_links=own_links,
         )
         self.messages[channel].append(msg)
         if poll_options or geo is not None or contact is not None:
@@ -212,12 +214,18 @@ class FakeGateway:
         caption: str = "",
         *,
         topic_id: int | None = None,
+        reply_to_id: int | None = None,
     ) -> list[SrcMessage]:
         """Consecutive messages sharing one ``grouped_id``; the caption sits on the first."""
         gid = self._alloc_group()
         return [
             self.add_message(
-                channel, caption if i == 0 else "", media=kind, grouped_id=gid, topic_id=topic_id
+                channel,
+                caption if i == 0 else "",
+                media=kind,
+                grouped_id=gid,
+                topic_id=topic_id,
+                reply_to_id=reply_to_id,
             )
             for i, kind in enumerate(kinds)
         ]
@@ -351,7 +359,13 @@ class FakeGateway:
         return self.messages[chat][-1].id if self.messages[chat] else 0
 
     async def copy_messages(
-        self, src: int, dst: int, ids: list[int], *, topic: int | None = None
+        self,
+        src: int,
+        dst: int,
+        ids: list[int],
+        *,
+        topic: int | None = None,
+        keep_header: bool = False,
     ) -> list[int | None]:
         self._enter("copy_messages", src, dst, list(ids), topic)
         if not ids or len(ids) > MAX_FORWARD_IDS:
@@ -377,7 +391,14 @@ class FakeGateway:
             if gid is not None:
                 gid = new_groups.setdefault(gid, self._alloc_group())
             new_id = self._alloc_id(dst)
-            self.messages[dst].append(replace(msg, id=new_id, grouped_id=gid, topic_id=topic))
+            # a copy without author has no header (not even the one the source message had);
+            # a plain forward carries the source's own
+            header = {"is_forward": True, "fwd_from_id": src, "fwd_from_name": source.title}
+            if not keep_header:
+                header = {"is_forward": False, "fwd_from_id": None, "fwd_from_name": None}
+            self.messages[dst].append(
+                replace(msg, id=new_id, grouped_id=gid, topic_id=topic, reply_to_id=None, **header)
+            )
             results.append(new_id)
         return results
 
@@ -482,6 +503,7 @@ class FakeGateway:
                     post_author=msg.post_author,
                     via_bot_id=msg.via_bot_id,
                     pinned=msg.pinned,
+                    own_links=msg.own_links,
                 )
             )
         return out
@@ -509,6 +531,7 @@ class FakeGateway:
         on_transfer: OnTransfer | None = None,
         *,
         topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         self._enter("send_prepared", dst, prepared.unit.ids, caption, topic)
         target = self._channel(dst)
@@ -527,7 +550,9 @@ class FakeGateway:
         for msg, text in zip(prepared.unit.messages, texts, strict=True):
             new_id = self._alloc_id(dst)
             self.messages[dst].append(
-                replace(msg, id=new_id, grouped_id=gid, text=text, topic_id=topic)
+                replace(
+                    msg, id=new_id, grouped_id=gid, text=text, topic_id=topic, reply_to_id=reply_to
+                )
             )
             new_ids.append(new_id)
         return new_ids
@@ -542,7 +567,13 @@ class FakeGateway:
         return Prepared(unit)
 
     async def send_by_reference(
-        self, dst: int, prepared: Prepared, caption: CaptionPolicy, *, topic: int | None = None
+        self,
+        dst: int,
+        prepared: Prepared,
+        caption: CaptionPolicy,
+        *,
+        topic: int | None = None,
+        reply_to: int | None = None,
     ) -> list[int]:
         """Posts the unit by the ids of its files. ``noforwards`` is not checked on purpose: the
         engine must never ask for this on a protected source, and a test can see that it did not."""
@@ -555,18 +586,24 @@ class FakeGateway:
         for msg, text in zip(prepared.unit.messages, texts, strict=True):
             new_id = self._alloc_id(dst)
             self.messages[dst].append(
-                replace(msg, id=new_id, grouped_id=gid, text=text, topic_id=topic)
+                replace(
+                    msg, id=new_id, grouped_id=gid, text=text, topic_id=topic, reply_to_id=reply_to
+                )
             )
             new_ids.append(new_id)
         return new_ids
 
-    async def send_text(self, dst: int, text: str, *, topic: int | None = None) -> int:
+    async def send_text(
+        self, dst: int, text: str, *, topic: int | None = None, reply_to: int | None = None
+    ) -> int:
         self._enter("send_text", dst, text, topic)
         if not self._channel(dst).can_post:
             raise NoPermission(f"cannot post to channel {dst}")
         new_id = self._alloc_id(dst)
         date = _EPOCH + timedelta(minutes=new_id)
-        self.messages[dst].append(SrcMessage(id=new_id, date=date, text=text, topic_id=topic))
+        self.messages[dst].append(
+            SrcMessage(id=new_id, date=date, text=text, topic_id=topic, reply_to_id=reply_to)
+        )
         return new_id
 
     # ---- internals --------------------------------------------------------------------------
@@ -625,12 +662,30 @@ def _rewrite(msg: SrcMessage, policy: CaptionPolicy) -> str:
     text/webpage) but never to self-contained media, which has none."""
     if msg.media in _SELF_CONTAINED:
         return msg.text
+    text = _relink(msg.text, msg, policy)
     if msg.media in _NO_FILE and not (policy.text_too and policy.rewrites):
-        text = msg.text  # plain text/webpage: the operations never touch it, the hashtag still
+        pass  # plain text/webpage: the operations never touch it, the hashtag still
     else:
-        text = _apply_ops(msg.text, policy)
+        text = _apply_ops(text, policy)
     if policy.hashtag:
         text = f"{text}\n{policy.hashtag}" if text else policy.hashtag
+    return text
+
+
+def _relink(text: str, msg: SrcMessage, policy: CaptionPolicy) -> str:
+    """``links: rewrite`` on plain text: ``t.me/<anything>/<id>`` of a message the transform has a
+    copy for (``msg.own_links`` says which of the links are into the source) becomes
+    ``https://<prefix>/<copy>``. The real gateway does it with entities (``test_transform.py``)."""
+    if policy.links is None:
+        return text
+    mapping = dict(policy.links.mapping)
+    for source_id in msg.own_links:
+        if source_id in mapping:
+            text = regex.sub(
+                rf"(?:https?://)?t\.me/(?:c/)?[\w]+/{source_id}\b",
+                f"https://{policy.links.prefix}/{mapping[source_id]}",
+                text,
+            )
     return text
 
 

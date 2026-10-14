@@ -179,6 +179,36 @@ async def done_ids(db: aiosqlite.Connection, mirror_id: int, ids: Sequence[int])
     return {r[0] for r in await cur.fetchall()}
 
 
+async def dst_id_of(db: aiosqlite.Connection, mirror_id: int, src_msg_id: int) -> int | None:
+    """The message in the destination that stands for ``src_msg_id``: its copy (``done``), or the
+    placeholder text posted in its place (``skipped`` with a ``dst_msg_id``). ``None`` for a
+    message this pair never settled, or one that failed or was left out with nothing posted."""
+    cur = await db.execute(
+        "SELECT dst_msg_id FROM msg_map WHERE mirror_id = ? AND src_msg_id = ? "
+        "AND status IN ('done', 'skipped') AND dst_msg_id IS NOT NULL",
+        (mirror_id, src_msg_id),
+    )
+    row = await cur.fetchone()
+    return None if row is None else int(row[0])
+
+
+async def dst_ids_of(
+    db: aiosqlite.Connection, mirror_id: int, src_msg_ids: Sequence[int]
+) -> dict[int, int]:
+    """``dst_id_of`` for several messages at once: source id -> destination id, for those the pair
+    has a copy (or a placeholder) of."""
+    if not src_msg_ids:
+        return {}
+    marks = ",".join("?" * len(src_msg_ids))
+    cur = await db.execute(
+        "SELECT src_msg_id, dst_msg_id FROM msg_map "  # noqa: S608
+        f"WHERE mirror_id = ? AND src_msg_id IN ({marks}) "
+        "AND status IN ('done', 'skipped') AND dst_msg_id IS NOT NULL",
+        (mirror_id, *src_msg_ids),
+    )
+    return {int(r[0]): int(r[1]) for r in await cur.fetchall()}
+
+
 async def last_done_dst_id(db: aiosqlite.Connection, mirror_id: int) -> int:
     cur = await db.execute(
         "SELECT COALESCE(MAX(dst_msg_id), 0) FROM msg_map WHERE mirror_id = ? AND status = 'done'",

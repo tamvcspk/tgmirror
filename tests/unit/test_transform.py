@@ -11,6 +11,7 @@ from tgmirror.core.gateway import (
     CaptionMode,
     CaptionPolicy,
     Clear,
+    LinkRewrite,
     RemoveHashtags,
     RemoveMentions,
     Replace,
@@ -19,7 +20,7 @@ from tgmirror.core.gateway import (
     Unit,
     ops_of_mode,
 )
-from tgmirror.core.telethon_gateway import _slice16, rewrite_caption
+from tgmirror.core.telethon_gateway import _plain_text, _slice16, rewrite_caption
 from tgmirror.engine import transform as tf
 from tgmirror.engine.transform import Transform, TransformError
 
@@ -82,9 +83,10 @@ def test_the_canonical_form_round_trips_and_an_empty_transform_is_empty_text() -
         ("caption: [{clear: true}, {text_too: true}]", "would empty every text message"),
         ("caption: {strip_links: all}", "list"),
         ("version: 2", "not supported"),
-        ("reply: keep", "not available yet"),
-        ("forward_header: keep", "not available yet"),
-        ("links: rewrite", "not available yet"),
+        ("reply: yes", "`keep`"),
+        ("reply: [keep]", "`keep`"),
+        ("forward_header: yes", "`keep`"),
+        ("links: yes", "`rewrite`"),
         ("colour: red", "not a transform key"),
     ],
 )
@@ -450,3 +452,122 @@ def test_operations_run_in_order_and_the_topic_hashtag_goes_last() -> None:
 
 def test_clear_then_nothing_to_append_to() -> None:
     assert rewrite_caption("abc", [], policy(Clear(), Append("x")), set()) == ("", [])
+
+
+# ---- replies (phase 19c) ----------------------------------------------------------------------
+
+
+def test_reply_keep_is_a_transform_of_its_own_and_round_trips() -> None:
+    kept = parse("reply: keep")
+
+    assert kept.keep_replies and not kept.is_empty
+    assert kept.rewrites and not kept.rewrites_content  # sent again, but no text changes
+    assert kept.to_data() == {"version": 1, "reply": "keep"}
+    assert Transform.from_json(kept.to_json()) == kept
+    assert Transform.from_json(
+        parse("reply: keep\ncaption: [{clear: true}]").to_json()
+    ).keep_replies
+
+
+def test_reply_drop_is_the_default_spelt_out() -> None:
+    assert parse("reply: drop").is_empty and parse("reply: drop") == Transform()
+    assert parse("reply:").is_empty
+
+
+def test_text_too_needs_a_caption_operation_not_just_a_reply() -> None:
+    """``text_too`` says which messages a caption operation touches; kept replies are not one."""
+    assert not parse("reply: keep\ncaption: [{text_too: true}]").rewrites_text
+    assert parse("reply: keep\ncaption: [{append: x}, {text_too: true}]").rewrites_text
+
+
+# ---- links to messages (phase 19c3) -----------------------------------------------------------
+
+
+def test_links_rewrite_is_a_transform_of_its_own_and_round_trips() -> None:
+    relinked = parse("links: rewrite")
+
+    assert relinked.rewrite_links and not relinked.is_empty
+    assert relinked.rewrites and not relinked.rewrites_content
+    assert relinked.to_data() == {"version": 1, "links": "rewrite"}
+    assert Transform.from_json(relinked.to_json()) == relinked
+    assert parse("links: keep").is_empty
+
+
+def test_links_rewrite_cannot_go_with_the_forward_header() -> None:
+    with pytest.raises(TransformError, match="`links: rewrite`"):
+        parse("forward_header: keep\nlinks: rewrite")
+
+
+def links(**mapping: int) -> LinkRewrite:
+    return LinkRewrite(
+        tuple((int(k.removeprefix("m")), v) for k, v in mapping.items()), "t.me/copy"
+    )
+
+
+def linking(**mapping: int) -> CaptionPolicy:
+    return CaptionPolicy(links=links(**mapping))
+
+
+def test_a_hyperlink_gets_the_address_of_the_copy_and_keeps_its_words() -> None:
+    text = "read the first part"
+    link = types.MessageEntityTextUrl(5, 9, url="https://t.me/news/12")
+
+    new_text, (kept,) = rewrite_caption(text, [link], linking(m12=7), {"news"})
+
+    assert new_text == text
+    assert kept.url == "https://t.me/copy/7" and (kept.offset, kept.length) == (5, 9)
+    assert link.url == "https://t.me/news/12"  # the source message's own entity is untouched
+
+
+def test_a_visible_link_is_rewritten_in_the_text_and_the_entities_after_it_move() -> None:
+    text = "see t.me/news/12 and #tag"
+    url = types.MessageEntityUrl(4, len("t.me/news/12"))
+    tag = hashtag(text, "#tag")
+
+    new_text, (new_url, new_tag) = rewrite_caption(text, [url, tag], linking(m12=1034), {"news"})
+
+    assert new_text == "see t.me/copy/1034 and #tag"
+    assert (new_url.offset, new_url.length) == (4, len("t.me/copy/1034"))
+    assert _slice16(new_text, new_tag.offset, new_tag.length) == "#tag"
+
+
+def test_only_links_into_the_source_that_have_a_copy_change() -> None:
+    text = "a t.me/news/1 b t.me/other/1 c t.me/news/2"
+    entities = [
+        types.MessageEntityUrl(2, len("t.me/news/1")),
+        types.MessageEntityUrl(16, len("t.me/other/1")),
+        types.MessageEntityUrl(31, len("t.me/news/2")),
+    ]
+
+    new_text, _ = rewrite_caption(text, entities, linking(m1=10), {"news"})
+
+    assert new_text == "a t.me/copy/10 b t.me/other/1 c t.me/news/2"  # 2 has no copy yet
+
+
+def test_the_links_are_rewritten_before_strip_links_looks_for_the_sources() -> None:
+    text = "see t.me/news/12 now"
+    url = types.MessageEntityUrl(4, len("t.me/news/12"))
+    both = CaptionPolicy(ops=(StripLinks("source"),), links=links(m12=7))
+
+    new_text, _ = rewrite_caption(text, [url], both, {"news"})
+
+    assert new_text == "see t.me/copy/7 now"  # not stripped: it no longer points at the source
+
+
+def test_a_text_message_has_its_links_rewritten_without_text_too() -> None:
+    text = "see t.me/news/12"
+    url = types.MessageEntityUrl(4, len("t.me/news/12"))
+
+    new_text, kept = _plain_text(text, [url], linking(m12=7), {"news"})
+
+    assert new_text == "see t.me/copy/7" and len(kept) == 1
+
+
+def test_the_link_in_a_text_goes_through_the_operations_of_text_too() -> None:
+    text = "see t.me/news/12 #ads"
+    both = CaptionPolicy(ops=(RemoveHashtags(("#ads",)),), text_too=True, links=links(m12=7))
+    entities = [types.MessageEntityUrl(4, len("t.me/news/12")), hashtag(text, "#ads")]
+
+    new_text, _ = _plain_text(text, entities, both, {"news"})
+
+    assert new_text == "see t.me/copy/7"
