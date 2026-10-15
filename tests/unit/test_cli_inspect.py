@@ -370,7 +370,7 @@ def test_plan_backup_writes_nothing(make_runtime: MakeRuntime, gateway: FakeGate
     )
 
     plan = json.loads(result.output)["plan"]
-    assert plan["write_calls"] == 0 and plan["days"] == 0
+    assert plan["write_calls"] == 0 and "days" not in plan
     assert _ways(json.loads(result.output))["download"]["units"] == 3
 
 

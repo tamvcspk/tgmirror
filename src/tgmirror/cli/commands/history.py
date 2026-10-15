@@ -23,6 +23,7 @@ from tgmirror.engine.runs import resolve_run
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store
 from tgmirror.store.runs import Run
+from tgmirror.ui.lines import flood_where
 from tgmirror.ui.messages import t
 
 DETAIL_FAILURES = 20  # failed messages listed in the detail view
@@ -159,7 +160,16 @@ async def _detail(store: Store, item: Run, as_json: bool) -> None:
             {"source_message": f.src_msg_id, "reason": f.reason} for f in failures
         ]
         record["flood_events"] = [
-            {"at": e.ts.isoformat(), "kind": e.kind, "seconds": e.seconds, "method": e.method}
+            {
+                "at": e.ts.isoformat(),
+                "kind": e.kind,
+                "seconds": e.seconds,
+                "method": e.method,
+                "action": e.action,
+                "destination": e.dst,
+                "sent_1h": e.sent_1h,
+                "sent_24h": e.sent_24h,
+            }
             for e in floods
         ]
         typer.echo(json.dumps(record, ensure_ascii=False, indent=2))
@@ -202,5 +212,6 @@ async def _detail(store: Store, item: Run, as_json: bool) -> None:
                     kind=e.kind,
                     seconds=e.seconds if e.seconds is not None else "-",
                     method=e.method or "",
+                    where=flood_where(e),
                 )
             )

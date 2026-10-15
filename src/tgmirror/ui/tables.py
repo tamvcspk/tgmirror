@@ -208,7 +208,6 @@ def print_plan(
     plan: Plan,
     options: PlanOptions,
     *,
-    cap: int,
     batch_size: int,
     protected: bool,
 ) -> None:
@@ -245,8 +244,6 @@ def print_plan(
                 calls=f"{plan.write_calls:,}",
                 batch=batch_size,
                 time=duration(timedelta(seconds=plan.pacing_seconds)),
-                days=max(plan.days, 1),
-                cap=f"{cap:,}",
             )
         )
     else:

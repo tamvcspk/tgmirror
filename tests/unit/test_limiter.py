@@ -6,8 +6,14 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from tgmirror.core.config import Limits
-from tgmirror.core.errors import DailyCapReached
-from tgmirror.core.limiter import DECAY_AFTER, FLOOD_WINDOW, Limiter, LimiterState
+from tgmirror.core.errors import BudgetReached
+from tgmirror.core.limiter import (
+    DECAY_AFTER,
+    FLOOD_WINDOW,
+    MIN_BUDGET,
+    Limiter,
+    LimiterState,
+)
 
 
 class FakeClock:
@@ -148,62 +154,184 @@ async def test_reads_have_their_own_bucket_and_the_first_one_is_free() -> None:
     assert sleeps.calls == [0.5, 1.5]
 
 
-async def test_reads_slow_down_together_with_writes() -> None:
+async def test_a_read_lane_slows_down_with_its_own_floods_not_with_the_writes() -> None:
     limits = Limits(min_delay=2.0, read_delay=0.5, jitter=0.0)
     limiter, sleeps, _ = make(limits)
     await limiter.acquire(1, "read")
-    limiter.on_flood()
-    limiter.on_flood()  # delay 8.0: four times the minimum
+    limiter.on_flood("send", 7)
+    limiter.on_flood("send", 7)  # the write lane is at 8.0: four times the minimum
 
     await limiter.acquire(1, "read")
+    assert sleeps.calls == [0.5]  # reads are not pushed back by a write flood
 
-    assert sleeps.calls == [2.0]
-
-
-# ---- daily cap ------------------------------------------------------------------------------
-
-
-async def test_the_daily_cap_stops_a_write_that_would_pass_it() -> None:
-    clock = FakeClock(datetime(2026, 3, 10, 23, 30).astimezone())
-    limiter, _, _ = make(Limits(daily_cap=10, jitter=0.0), clock=clock)
-    await write(limiter, cost=6)
-
-    with pytest.raises(DailyCapReached) as stop:
-        await limiter.acquire(5)  # 6 + 5 > 10
-
-    assert (stop.value.sent_today, stop.value.cap) == (6, 10)
-    assert stop.value.resume_at == datetime(2026, 3, 11, 0, 0).astimezone()
-    await limiter.acquire(4)  # exactly the cap is fine
+    limiter.on_flood("history")
+    limiter.on_flood("history")
+    await limiter.acquire(1, "read")
+    assert sleeps.calls == [0.5, 2.0]  # its own flood slows it by the same factor as before
 
 
-async def test_a_new_local_day_starts_again_from_zero() -> None:
-    clock = FakeClock(datetime(2026, 3, 10, 23, 59).astimezone())
-    limiter, _, _ = make(Limits(daily_cap=10, jitter=0.0), clock=clock)
-    await write(limiter, cost=10)
-    with pytest.raises(DailyCapReached):
-        await limiter.acquire(1)
-
-    clock.advance(minutes=2)  # past midnight
-    await limiter.acquire(10)
-
-    assert limiter.state.day == date(2026, 3, 11) and limiter.state.sent_today == 0
+# ---- budget, sliding window, cap warning (phase 19d2) --------------------------------------
 
 
-async def test_a_first_batch_bigger_than_the_cap_is_not_blocked_for_ever() -> None:
+async def put(limiter: Limiter, cost: int = 1, action: str = "forward", dst: int = 7) -> None:
+    await limiter.acquire(cost, action=action, dst=dst)
+    limiter.on_success(cost, action, dst)
+
+
+async def test_a_lane_that_never_met_a_long_flood_is_never_stopped() -> None:
     limiter, _, _ = make(Limits(daily_cap=3, jitter=0.0))
 
-    await write(limiter, cost=5)  # nothing sent yet today: it goes
+    for _ in range(10):
+        await put(limiter, 5)  # 50 messages, far over daily_cap: it only warns
 
-    with pytest.raises(DailyCapReached):
-        await limiter.acquire(1)
+    limiter.check_budget(100, "forward", 7)
 
 
-async def test_the_daily_cap_does_not_apply_to_reads() -> None:
-    limiter, _, _ = make(Limits(daily_cap=1, jitter=0.0))
-    await write(limiter, cost=1)
+async def test_a_long_flood_sets_the_budget_to_eighty_percent_of_what_the_lane_sent() -> None:
+    limiter, _, _ = make()
+    await put(limiter, 30)
 
-    await limiter.acquire(1, "read")
-    await limiter.acquire(1, "read")
+    budget = limiter.on_flood("forward", 7, seconds=3600)
+
+    assert budget is not None and (budget.amount, budget.window_hours) == (24, 1)
+    assert budget.flood_seconds == 3600
+    assert limiter.delay_of("forward", 7) == 2.0  # a quota is not a burst: the delay stays
+
+
+async def test_a_wait_longer_than_an_hour_names_the_24_hour_window() -> None:
+    limiter, _, _ = make()
+    await put(limiter, 100)
+
+    budget = limiter.on_flood("forward", 7, seconds=3601)
+
+    assert budget is not None and (budget.amount, budget.window_hours) == (80, 24)
+
+
+async def test_a_budget_never_falls_below_the_floor() -> None:
+    limiter, _, _ = make()
+    await put(limiter, 5)
+
+    budget = limiter.on_flood("forward", 7, seconds=7200)
+
+    assert budget is not None and budget.amount == MIN_BUDGET
+
+
+async def test_a_second_long_flood_halves_the_budget_and_keeps_its_window() -> None:
+    limiter, _, _ = make()
+    await put(limiter, 100)
+    limiter.on_flood("forward", 7, seconds=7200)  # 80 per 24 h
+
+    budget = limiter.on_flood("forward", 7, seconds=900)  # shorter now, but the window is set
+
+    assert budget is not None and (budget.amount, budget.window_hours) == (40, 24)
+
+
+async def test_a_short_flood_sets_no_budget_and_doubles_the_delay() -> None:
+    limiter, _, _ = make()
+    await put(limiter, 100)
+
+    budget = limiter.on_flood("forward", 7, seconds=30)
+
+    assert budget is None and limiter.budget_of("forward", 7) is None
+    assert limiter.delay_of("forward", 7) == 4.0
+
+
+async def test_a_wait_that_is_not_a_quota_sets_no_budget_however_long() -> None:
+    limiter, _, _ = make()
+    await put(limiter, 100)
+
+    budget = limiter.on_flood("forward", 7, seconds=7200, quota=False)  # slow mode, premium...
+
+    assert budget is None and limiter.budget_of("forward", 7) is None
+    assert limiter.delay_of("forward", 7) == 4.0
+
+
+async def test_a_read_lane_never_gets_a_budget() -> None:
+    limiter, _, _ = make()
+
+    assert limiter.on_flood("history", seconds=7200) is None
+    assert limiter.delay_of("history") == 4.0
+
+
+async def test_a_write_that_would_pass_the_budget_stops_with_when_the_window_lets_go() -> None:
+    limiter, _, clock = make()
+    await put(limiter, 30)
+    limiter.on_flood("forward", 7, seconds=3600)  # 24 per hour
+
+    with pytest.raises(BudgetReached) as stop:
+        await limiter.acquire(5, action="forward", dst=7)
+
+    err = stop.value
+    assert (err.sent, err.budget, err.window_hours) == (30, 24, 1)
+    assert clock() < err.resume_at <= clock() + timedelta(hours=2)
+    clock.now = err.resume_at
+    await limiter.acquire(5, action="forward", dst=7)  # the window has let them go
+
+
+async def test_another_destination_another_action_and_reads_are_not_held_by_it() -> None:
+    limiter, _, _ = make()
+    await put(limiter, 30)
+    limiter.on_flood("forward", 7, seconds=3600)
+
+    await limiter.acquire(5, action="forward", dst=8)
+    await limiter.acquire(5, action="send", dst=7)
+    await limiter.acquire(1, "read", action="history")
+
+
+async def test_a_first_batch_bigger_than_the_budget_is_not_blocked_for_ever() -> None:
+    limiter, _, _ = make()
+    limiter.on_flood("forward", 7, seconds=3600)  # nothing sent: the floor of 20 per hour
+
+    await limiter.acquire(25, action="forward", dst=7)  # nothing sent yet: it goes
+    limiter.on_success(25, "forward", 7)
+    with pytest.raises(BudgetReached):
+        await limiter.acquire(1, action="forward", dst=7)
+
+
+async def test_the_budget_grows_ten_percent_for_every_day_without_a_long_flood() -> None:
+    limiter, _, clock = make()
+    await put(limiter, 100)
+    limiter.on_flood("forward", 7, seconds=3600)  # 80 per hour
+    clock.advance(hours=23)
+    assert limiter.budget_of("forward", 7).amount == 80  # type: ignore[union-attr]
+
+    clock.advance(hours=2)  # a whole day since
+    assert limiter.budget_of("forward", 7).amount == 88  # type: ignore[union-attr]
+
+    clock.advance(days=1)
+    assert limiter.budget_of("forward", 7).amount == 97  # type: ignore[union-attr]
+
+
+async def test_a_budget_survives_a_restart() -> None:
+    limiter, _, clock = make()
+    await put(limiter, 100)
+    limiter.on_flood("forward", 7, seconds=7200)
+    saved = limiter.state
+
+    again, _, _ = make(state=saved, clock=clock)
+
+    assert again.budget_of("forward", 7) == limiter.budget_of("forward", 7)
+    assert again.sent_in("forward", 7, 24) == 100
+    with pytest.raises(BudgetReached):
+        await again.acquire(5, action="forward", dst=7)
+
+
+async def test_the_daily_cap_only_warns_at_one_and_at_two_times_it() -> None:
+    limiter, _, _ = make(Limits(daily_cap=10, jitter=0.0))
+    results = []
+    for cost in (9, 1, 5, 5, 100):
+        await put(limiter, cost)
+        results.append(limiter.cap_warning())
+
+    assert results == [None, 10, None, 20, None]  # each level once; nothing was ever stopped
+
+
+async def test_the_total_counts_every_write_lane_of_the_account() -> None:
+    limiter, _, _ = make()
+    await put(limiter, 3, "forward", 7)
+    await put(limiter, 4, "send", 8)
+
+    assert limiter.sent_total(24) == 7 and limiter.sent_in("send", 8, 1) == 4
 
 
 # ---- throttling -----------------------------------------------------------------------------
@@ -268,10 +396,8 @@ async def test_the_state_carries_the_delay_and_todays_count_into_a_new_limiter()
 
     again, sleeps, _ = make(Limits(daily_cap=10, jitter=0.0), state=saved, clock=clock)
 
-    assert again.delay == 4.0 and again.state.sent_today == 7
-    with pytest.raises(DailyCapReached):
-        await again.acquire(4)
-    await again.acquire(3)
+    assert again.delay == 4.0 and again.state.sent_today == 7 and again.sent_total(24) == 7
+    await again.acquire(4)  # past daily_cap, which only warns: nothing stops it
     await again.acquire(1)  # the first write of a run is free, the second waits the saved delay
     assert sleeps.calls == [4.0]
 
@@ -359,23 +485,112 @@ async def test_the_first_write_ignores_credit_and_still_goes_at_once() -> None:
     assert sleeps.calls == []
 
 
-# ---- checking the cap without spending anything -------------------------------------------------
+# ---- checking the budget without spending anything -------------------------------------------
 
 
-async def test_the_cap_can_be_checked_before_the_work_and_costs_nothing() -> None:
-    limits = Limits(min_delay=2.0, jitter=0.0, daily_cap=5, long_pause_every=10_000)
+async def test_the_budget_can_be_checked_before_the_work_and_costs_nothing() -> None:
+    limits = Limits(min_delay=2.0, jitter=0.0, long_pause_every=10_000)
     limiter, sleeps, _ = make(limits)
-    await write(limiter, cost=4)
+    await put(limiter, 30)
+    limiter.on_flood("forward", 7, seconds=3600)  # 24 per hour
 
-    limiter.check_cap(1)  # 4 + 1 fits
-    with pytest.raises(DailyCapReached):
-        limiter.check_cap(2)  # 4 + 2 does not
+    with pytest.raises(BudgetReached):
+        limiter.check_budget(1, "forward", 7)  # 30 sent: already past it
 
-    assert limiter.state.sent_today == 4 and sleeps.calls == []  # nothing was recorded or slept
+    assert limiter.state.sent_today == 30 and sleeps.calls == []  # nothing recorded or slept
 
 
-async def test_a_first_batch_bigger_than_the_cap_passes_the_check_too() -> None:
-    limits = Limits(min_delay=2.0, jitter=0.0, daily_cap=5, long_pause_every=10_000)
-    limiter, _, _ = make(limits)
+# ---- lanes (phase 19d1) ---------------------------------------------------------------------
 
-    limiter.check_cap(9)  # nothing sent today: never blocked for ever
+
+async def test_a_flood_backs_off_only_its_own_write_lane() -> None:
+    limiter, sleeps, _ = make()
+    await limiter.acquire(1, action="forward", dst=7)
+    limiter.on_success(1, "forward", 7)
+    limiter.on_flood("forward", 7)  # forward -> 7: 2 s becomes 4 s
+
+    assert limiter.delay_of("forward", 7) == 4.0
+    assert limiter.delay_of("send", 7) == 2.0  # another action
+    assert limiter.delay_of("forward", 8) == 2.0  # another destination
+    assert limiter.delay == 4.0  # what status reports: the highest write lane
+
+    await limiter.acquire(1, action="send", dst=7)
+    await limiter.acquire(1, action="forward", dst=7)
+
+    assert sleeps.calls == [2.0, 4.0]  # each write waits the delay of its own lane
+
+
+async def test_each_lane_decays_on_its_own_successes() -> None:
+    limiter, _, _ = make()
+    limiter.on_flood("forward", 7)
+    limiter.on_flood("send", 7)  # both at 4 s (two floods: no throttle yet)
+
+    for _ in range(DECAY_AFTER):
+        limiter.on_success(1, "forward", 7)
+
+    assert limiter.delay_of("forward", 7) == pytest.approx(3.6)
+    assert limiter.delay_of("send", 7) == 4.0  # forwarding well taught the send lane nothing
+
+
+async def test_slow_mode_is_a_hard_floor_for_posts_to_that_destination() -> None:
+    limits = Limits(min_delay=2.0, jitter=0.3, long_pause_every=10_000)
+    limiter, sleeps, _ = make(limits)
+    limiter.set_slow_mode(7, 30)
+
+    for _ in range(40):
+        await limiter.acquire(1, action="send", dst=7)
+        limiter.on_success(1, "send", 7)
+    await limiter.acquire(1, action="send", dst=8)  # no slow mode there
+
+    assert all(s >= 30 for s in sleeps.calls[:39]) and sleeps.calls[39] <= 2.6
+
+
+async def test_slow_mode_counts_the_time_already_spent_uploading() -> None:
+    limiter, sleeps, _ = make()
+    limiter.set_slow_mode(7, 30)
+    await limiter.acquire(1, action="send", dst=7)
+
+    await limiter.acquire(1, credit=12.0, action="send", dst=7)
+
+    assert sleeps.calls == [18.0]  # 30 s between the posts, 12 of them spent already
+
+
+async def test_messages_sent_are_counted_per_lane_in_hourly_buckets() -> None:
+    limiter, _, clock = make(clock=FakeClock(datetime(2026, 3, 10, 12, 0).astimezone()))
+    limiter.on_success(5, "forward", 7)
+    clock.advance(minutes=30)
+    limiter.on_success(3, "forward", 7)
+    limiter.on_success(9, "send", 7)  # another lane
+
+    assert limiter.sent_in("forward", 7, 1) == 8
+    assert limiter.sent_in("send", 7, 1) == 9
+
+    clock.advance(hours=2)  # the first two are now more than an hour, less than a day, old
+    assert limiter.sent_in("forward", 7, 1) == 0
+    assert limiter.sent_in("forward", 7, 24) == 8
+
+    clock.advance(hours=23)
+    assert limiter.sent_in("forward", 7, 24) == 0
+    assert limiter.state.hours == ()  # the old buckets are dropped
+
+
+async def test_lanes_and_buckets_survive_a_restart() -> None:
+    first, _, clock = make()
+    first.on_flood("forward", 7)
+    first.on_success(4, "forward", 7)
+    saved = first.state
+
+    second, _, _ = make(state=saved, clock=clock)
+
+    assert second.delay_of("forward", 7) == 4.0
+    assert second.delay_of("send", 7) == 2.0  # a lane with no row of its own: the base delay
+    assert second.sent_in("forward", 7, 1) == 4
+    assert second.state.lanes == saved.lanes and second.state.hours == saved.hours
+
+
+async def test_a_database_from_before_the_lanes_seeds_every_lane_with_its_one_delay() -> None:
+    old = LimiterState(delay=8.0, day=date(2026, 3, 10), sent_today=3)
+
+    limiter, _, _ = make(state=old, clock=FakeClock(datetime(2026, 3, 10, 12, 0).astimezone()))
+
+    assert limiter.delay_of("forward", 7) == limiter.delay_of("send", 9) == 8.0

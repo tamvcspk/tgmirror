@@ -56,7 +56,6 @@ class Plan:
     left_out: tuple[tuple[str, int], ...]  # (kind, units) it would leave out on purpose
     write_calls: int
     pacing_seconds: float  # the limiter's floor for those calls
-    days: int  # at the daily cap
     transfer_bytes: int  # what is downloaded (and uploaded again, for a reupload)
     largest_file: int
     # phase 19b: units by the destination topic a hashtag rule gives them (``None`` = no rule did:
@@ -153,7 +152,6 @@ class Preflight:
         calls = self._write_calls()
         if self.options.kind == "backup":
             calls = 0  # a backup writes nothing to Telegram
-        messages = sum(w.messages for w in sent)
         moves = ("download", Strategy.REUPLOAD.value)
         transfer = sum(w.bytes for w in sent if w.strategy in moves)
         return Plan(
@@ -163,9 +161,6 @@ class Preflight:
             left_out=tuple(sorted(self._left_out.items())),
             write_calls=calls,
             pacing_seconds=self._pacing(calls),
-            days=0
-            if self.options.kind == "backup"
-            else math.ceil(messages / self._limits.daily_cap),
             transfer_bytes=transfer,
             largest_file=self._largest,
             topics=tuple(sorted(self._topics.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))),
@@ -198,7 +193,6 @@ def plan_to_dict(plan: Plan) -> dict[str, object]:
         "left_out": dict(plan.left_out),
         "write_calls": plan.write_calls,
         "pacing_seconds": plan.pacing_seconds,
-        "days": plan.days,
         "transfer_bytes": plan.transfer_bytes,
         "largest_file": plan.largest_file,
         "topics": [{"topic": topic, "units": units} for topic, units in plan.topics],

@@ -10,6 +10,7 @@ import random
 import sqlite3
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -619,7 +620,8 @@ async def test_flood_wait_saves_the_run_as_waiting_and_forgets_the_refused_batch
     assert waiting.status is RunStatus.WAITING_FLOOD
     assert waiting.resume_at == now + timedelta(seconds=300)
     assert waiting.cursor_src_id == 0 and await store.pending_rows(run.id) == []
-    assert rig.recorder.codes == ["flood_stopped"]
+    # a 300 s wait is a quota, not a burst: the lane learns a budget (phase 19d2), then it stops
+    assert rig.recorder.codes == ["budget_learned", "flood_stopped"]
     assert rig.dst_texts == []
 
     # not before the wait is over, then it goes on without a duplicate
@@ -628,6 +630,25 @@ async def test_flood_wait_saves_the_run_as_waiting_and_forgets_the_refused_batch
     check_runnable(waiting, now + timedelta(seconds=301))
     final = await rig.runner(store).run(await rig.begin(store, after_wait=True))
     assert final.status is RunStatus.DONE and rig.dst_texts == rig.src_texts
+
+
+async def test_a_run_parked_by_the_budget_is_not_refused_by_its_resume_at(
+    rig: Rig, tmp_path: Path
+) -> None:
+    """A row left by the fixed ``daily_cap`` of before phase 19d2 (resume at midnight, no budget
+    learned) must not block a run: only the limiter's own state may stop a write."""
+    rig.fill(3)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    store = await rig.store(clock=lambda: now)
+    run = await rig.begin(store, batch_size=3)
+    parked = replace(
+        run,
+        status=RunStatus.WAITING_FLOOD,
+        fail_reason="daily_cap",
+        resume_at=now + timedelta(hours=12),
+    )
+
+    check_runnable(parked, now)  # does not raise
 
 
 async def test_flood_wait_is_logged_for_tuning(rig: Rig) -> None:

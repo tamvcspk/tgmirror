@@ -41,7 +41,7 @@ def test_a_plain_clone_forwards_everything_in_batches() -> None:
     copy = way(result, "copy")
     assert (copy.units, copy.messages) == (45, 45)
     assert result.write_calls == 3  # 20 + 20 + 5
-    assert result.transfer_bytes == 0 and result.days == 1
+    assert result.transfer_bytes == 0
 
 
 def test_a_rewritten_caption_sends_captioned_units_again_by_file_id() -> None:
@@ -97,21 +97,13 @@ def test_a_backup_downloads_everything_and_writes_nothing() -> None:
 
     assert way(result, "download").units == 2
     assert result.transfer_bytes == 3 * MB
-    assert result.write_calls == 0 and result.days == 0
+    assert result.write_calls == 0
 
 
 def test_a_restore_uploads_everything() -> None:
     result = plan([unit(msg("a", MediaKind.DOCUMENT, size=MB))], kind="restore")
 
     assert way(result, "reupload").bytes == MB and result.transfer_bytes == MB
-
-
-def test_the_daily_cap_sets_the_days() -> None:
-    units = [unit(msg(str(i))) for i in range(25)]
-
-    result = plan(units, Limits(daily_cap=10))
-
-    assert result.days == 3
 
 
 def test_pacing_is_the_limiters_floor_for_the_calls() -> None:

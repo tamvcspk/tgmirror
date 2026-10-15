@@ -10,6 +10,7 @@ pool on a stub client, under the real runner and store.
 
 import sqlite3
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +21,9 @@ from tests.integration.test_runner_reupload import begin, rows, runner
 from tests.unit.test_telethon_pool import POOL, PoolStub, big_video
 from tests.unit.test_telethon_reupload import NOW, message
 from tgmirror.core import telethon_gateway
-from tgmirror.core.errors import DailyCapReached, FloodWait
+from tgmirror.core.errors import BudgetReached, FloodWait
 from tgmirror.core.gateway import MediaKind
+from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState
 from tgmirror.core.telethon_gateway import TelethonGateway
 from tgmirror.store.runs import RunStatus
 
@@ -193,17 +195,24 @@ async def test_the_time_of_an_upload_never_shortens_a_long_pause(rig: Rig) -> No
     assert [paced(events, n) for n in range(4)] == pytest.approx([0, 0, 30.0, 0], abs=SLACK)
 
 
-# ---- the daily cap, flood and repeats ---------------------------------------------------
+# ---- the budget, flood and repeats ------------------------------------------------------
 
 
-async def test_a_unit_that_cannot_be_posted_today_is_not_uploaded(rig: Rig) -> None:
+async def test_a_unit_that_would_pass_the_budget_is_not_uploaded(rig: Rig) -> None:
     clips(rig, 3)
     rig.batch_size = 1
     store = await rig.store()
-    limits = LIMITS.model_copy(update={"daily_cap": 1})
+    now = datetime.now(UTC)
+    budget = LaneBudget(1, 1, now, now, 3600)  # one message per hour on the lane that re-sends
+    await store.save_limiter_state(
+        "default",
+        LimiterState(
+            2.0, now.astimezone().date(), 0, lanes=(LaneState("send", rig.dst.id, 2.0, budget),)
+        ),
+    )
 
-    with pytest.raises(DailyCapReached):
-        await runner(rig, store, limits=limits).run(await begin(rig, store))
+    with pytest.raises(BudgetReached):
+        await runner(rig, store).run(await begin(rig, store))
 
     assert len(rig.gw.calls_to("upload_prepared")) == 1  # the second unit's bytes were never sent
     assert [r[1] for r in rows(rig)] == ["done"]

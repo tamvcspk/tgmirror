@@ -531,6 +531,19 @@ class TelegramGateway(Protocol):
         """As ``MessageReader.get_messages``."""
         ...
 
+    async def slowmode_seconds(self, chat: int) -> int:
+        """The slow-mode interval of a supergroup (0: none, or a chat that has no such thing).
+
+        One request, part of a run's one-time setup like ``last_message_id``: the limiter never
+        posts to ``chat`` faster than this (phase 19d1).
+        """
+        ...
+
+    async def is_premium(self) -> bool:
+        """Whether the signed-in account has Telegram Premium (one request, run setup). It only
+        changes what a FLOOD_PREMIUM_WAIT means, and is logged next to every flood (19d1)."""
+        ...
+
     async def last_message_id(self, chat: int) -> int:
         """Id of the newest message in ``chat`` (0 when it has none). One cheap read.
 

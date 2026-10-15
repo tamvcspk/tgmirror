@@ -45,7 +45,7 @@ docker run --rm -v tgm-data:/data -v tgm-config:/config tgmirror run --yes
 - Credentials: `-e TGMIRROR_API_ID=... -e TGMIRROR_API_HASH=...`, or `-e TGMIRROR_API_ID_FILE=/run/secrets/api_id` pointing at a Docker/Kubernetes secret mount (the value never shows up in `docker inspect`). The image disables the OS keyring (`PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring`) since a container has none to use.
 - One `docker run` is one `tgmirror` command that copies once and exits — no daemon inside the image, matching the CLI itself; schedule repeat runs with your own cron/Kubernetes CronJob if you want that.
 - `docker stop` sends SIGTERM, which the container handles exactly like the first Ctrl+C (finishes the current batch, saves, exits) for `clone`/`run`/`retry`/`backup`/`restore`. Its default 10s grace period before `SIGKILL` can be too short for a batch plus a possible FloodWait; raise it with `docker stop -t 60 <container>` (or `stop_grace_period: 60s` in Compose). A `SIGKILL` mid-batch is still safe — the same write-ahead/reconcile that protects a killed local process covers it.
-- `daily_cap` is counted by the container's calendar day; the image defaults `TZ=UTC`, override with `-e TZ=...` if you want the cap's midnight to match your own.
+- `daily_cap` is a reminder over a sliding 24 hours (it never stops a run), so the container's time zone no longer matters for it. What does stop a run is the budget tgmirror learns from Telegram's own long waits, per destination and kind of call; `tgmirror status` shows it.
 
 ## Usage
 
@@ -165,7 +165,7 @@ tgmirror clone --src "@my_channel" --dst-new "Videos" --selection @last --yes   
 | `inspect --list [--limit N]` | also list the selected messages (default 50 shown) |
 | `inspect --csv FILE` | **every** selected message, one row each (UTF-8 with BOM, opens in Excel); not the tables |
 | `inspect --json` | the report, the plan and every selected message on stdout (progress goes to stderr) |
-| `inspect --plan clone\|backup\|restore` | pre-flight: units by way (forward / by file id / download + upload / left out), volume to move, write calls, the limiter's time floor, days at `daily_cap`, what would stop the run. Takes `--mode --caption --caption-text --reset-polls --ignore-unsupported --placeholder --topic-as-hashtag` like the real command; `restore` only for a backup directory |
+| `inspect --plan clone\|backup\|restore` | pre-flight: units by way (forward / by file id / download + upload / left out), volume to move, write calls, the limiter's time floor, what would stop the run. Takes `--mode --caption --caption-text --reset-polls --ignore-unsupported --placeholder --topic-as-hashtag` like the real command; `restore` only for a backup directory |
 | `inspect --refresh` | the first `inspect` of a source builds a local index of its messages (`<data dir>/index/<id>.db`); later ones read only what is newer and report from it. `--refresh` reads the whole source again (catches edited/deleted messages, view and reaction counts) |
 | `inspect --offline` | report from the index as it is: no account, no Telegram (the source by id, `@username` or exact title, once inspected before) |
 | `inspect --no-index` | read the source live and keep nothing |
@@ -270,7 +270,7 @@ Forum to forum with a transform file has been run against real Telegram. Not yet
 | `--force-takeover` | run although another process seems to hold the pair (only if it is dead) |
 | `--yes`, `-y` | skip the one confirmation question |
 
-Exit codes: `0` done (or stopped with `q`/`tgmirror stop`), `1` general error, `2` wrong usage (including a bad filter), `3` stopped by a FloodWait/PeerFlood/daily cap, `4` missing permission (including a source that restricts saving content), `130` Ctrl+C or `docker stop` (progress saved; `inspect` prints what it had read).
+Exit codes: `0` done (or stopped with `q`/`tgmirror stop`), `1` general error, `2` wrong usage (including a bad filter), `3` stopped by a FloodWait/PeerFlood/a used-up learned budget, `4` missing permission (including a source that restricts saving content), `130` Ctrl+C or `docker stop` (progress saved; `inspect` prints what it had read).
 
 ### Full-screen menu
 

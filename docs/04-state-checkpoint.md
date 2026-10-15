@@ -1,6 +1,6 @@
 # 04 — State, checkpoint, delta
 
-Một file SQLite (`WAL` mode, `foreign_keys=ON`, `busy_timeout=5000` để `pause`/`stop` từ process khác không bị lỗi khóa). Phiên bản schema nằm ở `PRAGMA user_version`; `store/schema.sql` là phiên bản 1, các thay đổi sau thêm migration đánh số đăng ký ở `store/db.py::default_migrations` (mỗi migration chạy trong một transaction, có test nâng cấp từ phiên bản trước). Phiên bản 2 (phase 8, 2026-09-25): thêm `mirrors.dst_kind`, backfill từ `src_kind` cho các cặp có sẵn. Phiên bản 3 (phase 11a, 2026-09-25): thêm bảng `backups` và cột `flood_log.backup_id` (xem "Backup (Phase 11a)" bên dưới).
+Một file SQLite (`WAL` mode, `foreign_keys=ON`, `busy_timeout=5000` để `pause`/`stop` từ process khác không bị lỗi khóa). Phiên bản schema nằm ở `PRAGMA user_version`; `store/schema.sql` là phiên bản 1, các thay đổi sau thêm migration đánh số đăng ký ở `store/db.py::default_migrations` (mỗi migration chạy trong một transaction, có test nâng cấp từ phiên bản trước). Phiên bản 2 (phase 8, 2026-09-25): thêm `mirrors.dst_kind`, backfill từ `src_kind` cho các cặp có sẵn. Phiên bản 3 (phase 11a, 2026-09-25): thêm bảng `backups` và cột `flood_log.backup_id` (xem "Backup (Phase 11a)" bên dưới). Phiên bản 4 (phase 19d1, 2026-10-15): thêm `flood_log.dst/action/sent_1h/sent_24h/premium` và hai bảng `limiter_lanes`, `sent_hours` (xem `05-chong-flood.md`, "Làn"). Phiên bản 5 (phase 19d2, 2026-10-15): `limiter_lanes` thêm `budget`, `window_hours`, `budget_since`, `flood_at`, `flood_seconds` (ngân sách học được của làn, `NULL` = chưa học).
 
 ## Hai thứ, chỉ một thứ người dùng thấy
 
@@ -79,11 +79,16 @@ CREATE TABLE flood_log (
   run_id    INTEGER,
   backup_id INTEGER,                        -- v3: loại trừ lẫn nhau với run_id (xem "Backup")
   ts        TEXT NOT NULL,
-  kind      TEXT NOT NULL,                  -- flood_wait|slow_mode|peer_flood
+  kind      TEXT NOT NULL,                  -- flood_wait|slow_mode|premium_wait|transport_429|peer_flood
   seconds   INTEGER,
   method    TEXT,
-  delay_ms  INTEGER,                        -- delay của limiter tại thời điểm đó
-  batch_size INTEGER
+  delay_ms  INTEGER,                        -- delay của làn tại thời điểm đó (trước khi tăng)
+  batch_size INTEGER,
+  action    TEXT,                           -- v4: làn: forward|send|history|file (NULL = hàng cũ)
+  dst       INTEGER,                        -- v4: đích của làn ghi (NULL cho làn đọc)
+  sent_1h   INTEGER,                        -- v4: tin làn ghi đã gửi trong 1 giờ qua (xô giờ)
+  sent_24h  INTEGER,                        -- v4: ... trong 24 giờ qua
+  premium   INTEGER                         -- v4: tài khoản có Premium (NULL = không biết)
 );
 
 CREATE TABLE backups (                      -- v3 (phase 11a): nhật ký backup, không có mirror/msg_map
@@ -108,10 +113,32 @@ CREATE INDEX backups_dir ON backups(dir);
 
 CREATE TABLE limiter_state (               -- persist AIMD giữa các lần chạy
   account   TEXT PRIMARY KEY,
-  delay_ms  INTEGER NOT NULL,
+  delay_ms  INTEGER NOT NULL,                 -- v4: delay cao nhất của các làn ghi
   day       TEXT NOT NULL,                  -- YYYY-MM-DD (local)
   sent_today INTEGER NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE limiter_lanes (               -- v4: delay AIMD riêng của từng làn
+  account  TEXT NOT NULL,
+  action   TEXT NOT NULL,                   -- forward|send (ghi), history|file (đọc)
+  dst      INTEGER NOT NULL,                -- đích của làn ghi; 0 cho làn đọc
+  delay_ms INTEGER NOT NULL,
+  budget   INTEGER,                         -- v5: tin/cửa sổ; NULL = chưa gặp flood dài, không chặn
+  window_hours INTEGER,                     -- v5: 1 hoặc 24
+  budget_since TEXT,                        -- v5: lần đổi cuối (cắt hay tăng 10%): đồng hồ tăng trưởng
+  flood_at  TEXT,                           -- v5: flood dài đã đặt/cắt nó
+  flood_seconds INTEGER,
+  PRIMARY KEY (account, action, dst)
+);
+
+CREATE TABLE sent_hours (                  -- v4: tin mỗi làn ghi đã gửi theo giờ UTC, giữ 24 giờ
+  account TEXT NOT NULL,
+  action  TEXT NOT NULL,
+  dst     INTEGER NOT NULL,
+  hour    INTEGER NOT NULL,                 -- unix time // 3600
+  sent    INTEGER NOT NULL,
+  PRIMARY KEY (account, action, dst, hour)
 );
 ```
 
@@ -148,7 +175,7 @@ Kết quả của một lời gọi copy:
 - `FloodWait` ngắn hơn `max_auto_wait`: chờ rồi gửi lại **đúng lời gọi đó**; `pending` giữ nguyên trong lúc chờ (Telegram từ chối nên chưa tạo gì; nếu process chết lúc đó thì reconcile lần sau thấy đích không có gì và gửi lại). `FloodWait` quá dài hoặc quá nhiều lần, `PeerFlood`, `NoPermission`, `ForwardsRestricted`, lỗi RPC khác, hoặc stop/Ctrl+C trong lúc chờ: Telegram chưa tạo gì → xóa `pending` của batch rồi kết thúc lần chạy (xem `01-kien-truc.md`, `05-chong-flood.md`).
 - **Hủy `pending`** (mọi chỗ trên nói "xóa `pending`": `discard_batch`, `discard_pending`): hàng `pending` chưa từng lỗi thì bị xóa, vì con trỏ sẽ đưa tin đó trở lại. Hàng từng `failed` (write-ahead giữ lại `reason` và `run_id` cũ của nó, xem `msgmap.insert_pending`) thì quay về `failed` với lý do và lần chạy cũ, **không** bị xóa: nó nằm dưới con trỏ, không ai đọc lại, nên xóa là mất dấu hẳn một tin chưa được sao chép. Đây là chỗ `retry` khác lần chạy thường (lỗi được phát hiện khi viết test kill giữa chừng cho retry). `run_id` chỉ chuyển sang lần chạy mới khi batch kết thúc (`finish_batch`) hoặc được reconcile xác nhận.
 - Chiến lược B: mỗi unit là một batch (`Batch.strategy = REUPLOAD`), nên `pending` của nó là đúng một unit và reconcile so được số tin, loại media và cấu trúc album như thường. `prepare` (đọc và tải) xảy ra **trước** write-ahead nên lỗi ở đó (`PerMessage`: tin đã xóa, loại không dựng lại được) không để lại `pending`: unit được ghi `failed` ngay (`begin_batch` + `commit_batch`). Sau khi upload thành công mà chưa commit thì kết quả như `Transient`: reconcile lần sau tìm bản sao ở đích. **Đẩy byte tách khỏi đăng tin (2026-09-20, người dùng duyệt)**: với unit là một tài liệu/video lớn, gateway `upload_prepared` đẩy byte lên **trước** (không tạo tin nào, nên chưa có `pending`; Telegram bỏ file đã đẩy mà không được đăng), rồi `pace` (thời gian đẩy byte được trừ vào khoảng cách, xem `05-chong-flood.md`), rồi write-ahead, rồi `send_prepared` chỉ *đăng* (một lời gọi ngắn), rồi `commit_batch`. Hệ quả cho crash-safety: cửa sổ `pending` của unit chỉ còn đúng lời gọi đăng; kill lúc đang đẩy byte **không để lại gì để reconcile** (lần sau đẩy lại từ đầu); quy tắc "không lời gọi nào tạo tin trước write-ahead" vẫn đúng vì chỉ lời gọi đăng tạo tin. `FloodWait` khi đẩy byte lặp lại `upload_prepared` (không có `pending`); `FloodWait` khi đăng lặp lại đúng lời gọi `send_prepared` với cùng file đã đẩy (không đẩy lại, không tải lại). Album, file nhỏ và unit không có file không đẩy trước được: `upload_prepared` trả nguyên unit và `send_prepared` làm tất cả như cũ.
-- Daily cap (`DailyCapReached`) xảy ra **trước** write-ahead (ở `limiter.acquire`), và với unit đẩy byte trước thì được kiểm **trước cả khi đẩy** (`Limiter.check_cap`, không tiêu thụ gì) để khỏi đẩy xong mới biết hết cap, nên không có gì để xóa: lần chạy `waiting_flood`, `fail_reason='daily_cap'`, `resume_at` = 00:00 ngày kế (giờ máy).
+- Ngân sách của làn (`BudgetReached`, trước 19d2 là `DailyCapReached` với mốc 00:00) xảy ra **trước** write-ahead (ở `limiter.acquire`), và với unit đẩy byte trước thì được kiểm **trước cả khi đẩy** (`Limiter.check_budget`, không tiêu thụ gì) để khỏi đẩy xong mới biết hết ngân sách, nên không có gì để xóa: lần chạy `waiting_flood`, `fail_reason='daily_cap'` (giữ tên cũ), `resume_at` = lúc cửa sổ trượt nhả đủ chỗ cho batch đó.
 - `Transient` (kết nối đứt sau khi gửi): kết quả **không rõ** → giữ nguyên `pending`, lần chạy `failed('transient')`; lần chạy sau reconcile.
 
 ## Resume và delta
@@ -209,7 +236,7 @@ Sở hữu:
 
 - Một cặp chỉ có một run sống: `start_run` (`BEGIN IMMEDIATE`) từ chối (`RunBusy`) khi run `running`/`paused` của mirror có heartbeat còn mới (dưới 2 phút) trừ khi `--force-takeover` (khi đó run cũ ghi `failed('taken_over')`). Run có heartbeat cũ hơn 2 phút được coi là đã chết: ghi `failed('interrupted')` (kết thúc lúc nó còn tín hiệu cuối) rồi mở run mới.
 - Runner ghi heartbeat `updated_at` mỗi 30 giây (task nền) và sau mỗi lần commit.
-- Từ chối chạy: `waiting_flood` trước `resume_at` (flood, hoặc `fail_reason='daily_cap'`); `failed(peer_flood)` trong 24 giờ kể từ khi kết thúc (`engine/runs.py::check_runnable`, đọc run gần nhất của cặp; kiểm trước khi kết nối Telegram). Run mới không mang `fail_reason`/`resume_at` của run cũ.
+- Từ chối chạy: `waiting_flood` trước `resume_at` của một FloodWait (không phải `fail_reason='daily_cap'`: dòng do ngân sách học được đặt chỉ ghi chú giờ cửa sổ nhả, không chặn; trạng thái limiter đã lưu mới là thẩm quyền và tự dừng bằng `BudgetReached` ở lần ghi đầu, nên dòng cũ của `daily_cap` cố định trước phase 19d2 không khóa run mãi); `failed(peer_flood)` trong 24 giờ kể từ khi kết thúc (`engine/runs.py::check_runnable`, đọc run gần nhất của cặp; kiểm trước khi kết nối Telegram). Run mới không mang `fail_reason`/`resume_at` của run cũ.
 - Trong một process, runner và task heartbeat dùng chung một connection SQLite; `Store` khóa mọi phương thức bằng một `asyncio.Lock` để task này không chạy lệnh giữa transaction của task kia.
 - Một session Telethon chỉ nên được dùng bởi một process cùng lúc (SQLite session sẽ khóa), do đó một account chạy một clone tại một thời điểm (`Store.active_run` cho `pause`/`stop`/`run` tìm ra nó).
 

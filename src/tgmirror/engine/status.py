@@ -24,6 +24,7 @@ Every figure is an estimate, and says so:
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from tgmirror.core.limiter import LimiterState, grow_budget, window_sent
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store
 from tgmirror.store.runs import FloodEvent, Run, RunStatus
@@ -49,12 +50,13 @@ class StatusReport:
     failed_now: int  # messages still ``failed`` from this run: what ``retry`` would send
     retry_left: int | None  # a retry: failed messages of the run it retries not handled yet
     delay: float | None  # the limiter's current delay between writes; ``None``: never ran
-    sent_today: int
-    daily_cap: int
+    sent_24h: int  # every write lane, sliding 24 hours (no calendar day since 19d2)
+    daily_cap: int  # the warning threshold on ``sent_24h``, never a stop
+    budgets: tuple["BudgetInfo", ...]  # learned budgets of this run's destination
     floods_24h: int
     last_flood: FloodEvent | None  # the run's own most recent rate-limit event
     left: int | None  # messages the run still has to look at (at most); ``None``: total not known
-    cap_days: int  # days of rest the daily cap will cost before that is done (0: it fits today)
+    cap_days: int  # days of rest the learned budget will cost before that is done (0: none)
 
 
 def _estimate(
@@ -147,9 +149,9 @@ async def build_report(store: Store, run: Run, *, now: datetime, daily_cap: int)
     retry_of = run.options.retry_of
     retry_left = await store.count_failed(retry_of) if retry_of is not None else None
     limiter = await store.load_limiter_state(run.account)
-    today = now.astimezone().date()
     floods = await store.flood_events(run.id)
-    sent_today = limiter.sent_today if limiter and limiter.day == today else 0
+    sent_24h = window_sent(limiter.hours, now, 24) if limiter else 0
+    budgets = _budgets(limiter, run.dst_id, now)
     left = _left(run, retry_left)
     return StatusReport(
         run=run,
@@ -160,13 +162,13 @@ async def build_report(store: Store, run: Run, *, now: datetime, daily_cap: int)
         failed_now=await store.count_failed(run.id),
         retry_left=retry_left,
         delay=limiter.delay if limiter else None,
-        # the count belongs to the day it was made; a new local day starts it over
-        sent_today=sent_today,
+        sent_24h=sent_24h,
         daily_cap=daily_cap,
+        budgets=budgets,
         floods_24h=await store.flood_count_since(now - FLOOD_WINDOW),
         last_flood=floods[-1] if floods else None,
         left=left,
-        cap_days=cap_days(left, daily_cap, sent_today) if left and (live or _waiting(run)) else 0,
+        cap_days=_rest_days(left, budgets) if left and (live or _waiting(run)) else 0,
     )
 
 
@@ -183,10 +185,43 @@ def _left(run: Run, retry_left: int | None) -> int | None:
     return None
 
 
-def cap_days(left: int, daily_cap: int, sent_today: int) -> int:
-    """Whole days of rest the daily cap costs for ``left`` messages, given what went out today."""
-    allowed_today = max(daily_cap - sent_today, 0)
-    return max(-(-(left - allowed_today) // daily_cap), 0)  # ceil, never negative
+@dataclass(frozen=True, slots=True)
+class BudgetInfo:
+    """A write lane's learned budget as ``status`` shows it (phase 19d2)."""
+
+    action: str
+    amount: int
+    window_hours: int
+    sent: int  # what the lane sent in its window now
+    flood_at: datetime  # the long flood that set or last cut it
+    flood_seconds: int
+
+
+def _budgets(limiter: LimiterState | None, dst: int, now: datetime) -> tuple[BudgetInfo, ...]:
+    if limiter is None:
+        return ()
+    found = []
+    for lane in limiter.lanes:
+        if lane.budget is None or lane.dst != dst:
+            continue
+        b = grow_budget(lane.budget, now)
+        sent = window_sent(limiter.hours, now, b.window_hours, action=lane.action, dst=dst)
+        found.append(
+            BudgetInfo(lane.action, b.amount, b.window_hours, sent, b.flood_at, b.flood_seconds)
+        )
+    return tuple(found)
+
+
+def _rest_days(left: int, budgets: tuple[BudgetInfo, ...]) -> int:
+    return max((cap_days(left, b.amount, b.sent, b.window_hours) for b in budgets), default=0)
+
+
+def cap_days(left: int, budget: int, sent: int, window_hours: int = 24) -> int:
+    """Whole days of rest a budget of ``budget`` messages per ``window_hours`` costs for ``left``
+    messages, given what the lane already sent in its window."""
+    allowed = max(budget - sent, 0)
+    windows = max(-(-(left - allowed) // budget), 0)  # ceil, never negative
+    return -(-(windows * window_hours) // 24)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +240,7 @@ class BackupStatusReport:
     abandoned: bool
     speed: float | None  # messages handled per second since it started; ``None``: too early
     delay: float | None
-    sent_today: int
+    sent_24h: int
     daily_cap: int
     floods_24h: int
     last_flood: FloodEvent | None
@@ -221,7 +256,6 @@ async def build_backup_report(
     elapsed = max((end - backup.started_at).total_seconds(), 0.0)
     speed = backup.handled / elapsed if elapsed >= MIN_SAMPLE and backup.handled else None
     limiter = await store.load_limiter_state(backup.account)
-    today = now.astimezone().date()
     floods = await store.backup_flood_events(backup.id)
     return BackupStatusReport(
         backup=backup,
@@ -230,7 +264,7 @@ async def build_backup_report(
         abandoned=holds and not live,
         speed=speed,
         delay=limiter.delay if limiter else None,
-        sent_today=limiter.sent_today if limiter and limiter.day == today else 0,
+        sent_24h=window_sent(limiter.hours, now, 24) if limiter else 0,
         daily_cap=daily_cap,
         floods_24h=await store.flood_count_since(now - FLOOD_WINDOW),
         last_flood=floods[-1] if floods else None,

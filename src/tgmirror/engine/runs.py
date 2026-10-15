@@ -90,7 +90,7 @@ class RunWaiting(RunError):
     def __init__(self, until: datetime, reason: str) -> None:
         super().__init__(f"the clone must wait until {until.isoformat()} ({reason})")
         self.until = until
-        self.reason = reason  # "flood" | "daily_cap" | "peer_flood"
+        self.reason = reason  # "flood" | "peer_flood"
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,14 +286,19 @@ async def resolve_run(store: Store, ref: str | None) -> Run:
 
 
 def check_runnable(last: Run, now: datetime) -> None:
-    """Refuse a run that Telegram already told us would be rejected. Raises ``RunWaiting``."""
+    """Refuse a run that Telegram already told us would be rejected. Raises ``RunWaiting``.
+
+    A run parked by the budget (``fail_reason == DAILY_CAP``) is *not* refused here: its
+    ``resume_at`` is only a note of when the window would let go. The limiter's saved state is the
+    authority and stops a write by itself (``BudgetReached``), so a row left by the old fixed
+    ``daily_cap`` (before phase 19d2, when no budget was learned) cannot block a run for ever."""
     if (
         last.status is RunStatus.WAITING_FLOOD
+        and last.fail_reason != DAILY_CAP
         and last.resume_at is not None
         and last.resume_at > now
     ):
-        reason = "daily_cap" if last.fail_reason == DAILY_CAP else "flood"
-        raise RunWaiting(last.resume_at, reason)
+        raise RunWaiting(last.resume_at, "flood")
     if last.status is RunStatus.FAILED and last.fail_reason == "peer_flood":
         until = (last.ended_at or last.updated_at) + PEER_FLOOD_COOLDOWN
         if until > now:

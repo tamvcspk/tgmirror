@@ -2,13 +2,15 @@
 at, recorded on the run so progress and ``status`` can say "x of y"."""
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from tests.integration.test_runner import LIMITS, Rig
-from tgmirror.core.errors import DailyCapReached, FloodWait, GatewayError
+from tests.integration.test_runner import Rig
+from tgmirror.core.errors import BudgetReached, FloodWait, GatewayError
 from tgmirror.core.gateway import NO_FILTER, MediaKind, ServerFilter
+from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState
 from tgmirror.filters.model import FilterSpec
 
 PHOTO, VIDEO = MediaKind.PHOTO, MediaKind.VIDEO
@@ -112,19 +114,26 @@ async def test_a_changed_filter_counts_what_the_pair_already_has_as_handled(rig:
     assert (final.done, final.already_done, final.handled) == (3, 3, 6)
 
 
-async def test_a_daily_cap_that_will_cost_days_is_said_up_front(rig: Rig) -> None:
+async def test_a_learned_budget_that_will_cost_days_is_said_up_front(rig: Rig) -> None:
     rig.fill(7)
     store = await rig.store()
-    limits = LIMITS.model_copy(update={"daily_cap": 3})
+    now = datetime.now(UTC)
+    budget = LaneBudget(3, 24, now, now, 7200)
+    await store.save_limiter_state(
+        "default",
+        LimiterState(
+            2.0, now.astimezone().date(), 0, lanes=(LaneState("forward", rig.dst.id, 2.0, budget),)
+        ),
+    )
 
-    with pytest.raises(DailyCapReached):
-        await rig.runner(store, limits=limits).run(await rig.begin(store, batch_size=3))
+    with pytest.raises(BudgetReached):
+        await rig.runner(store).run(await rig.begin(store, batch_size=3))
 
-    # 3 today, then 3 and 1 on the next two days
-    assert notices(rig, "cap_days") == [{"total": 7, "cap": 3, "days": 2}]
+    # 3 now, then 3 and 1 on the next two windows
+    assert notices(rig, "cap_days") == [{"total": 7, "budget": 3, "window": 24, "days": 2}]
 
 
-async def test_a_run_that_fits_in_the_day_says_nothing_about_the_cap(rig: Rig) -> None:
+async def test_a_run_with_no_learned_budget_says_nothing_about_days_of_rest(rig: Rig) -> None:
     rig.fill(7)
     store = await rig.store()
 

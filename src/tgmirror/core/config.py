@@ -36,7 +36,12 @@ class Limits(BaseModel):
     jitter: float = Field(0.3, ge=0, lt=1)
     long_pause_every: int = Field(200, ge=1)
     long_pause_range: tuple[float, float] = (30.0, 90.0)
+    # Since phase 19d2 only a warning threshold on the messages sent in the last 24 hours:
+    # what stops a run is the budget learned from Telegram's own long floods.
     daily_cap: int = Field(5000, ge=1)
+    # A FloodWait of more seconds than this is a quota, not a burst: it sets/cuts the
+    # lane's budget instead of doubling its delay (docs/05-chong-flood.md, phase 19d2).
+    short_flood: int = Field(60, ge=1)
     max_auto_wait: float = Field(900.0, ge=0)
     # units downloaded ahead while one uploads (0 = none). Default 0: measuring several files'
     # parts moving at once over the production connection shape (a small set of connections made

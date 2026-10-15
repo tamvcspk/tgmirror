@@ -98,13 +98,57 @@ _V3_BACKUPS = (
 )
 
 
+# Version 4 (phase 19d1): what a flood is logged with, and the state per limiter lane. A lane is
+# ``(action, dst)`` for a write and ``(action, 0)`` for a read (``core/limiter.py``): its own delay
+# (``limiter_lanes``) and the messages it sent per UTC hour (``sent_hours``, pruned to 24 hours),
+# so ``flood_log`` can say how much a lane had sent when Telegram pushed back. ``flood_log.premium``
+# is whether the account had Premium then (``NULL``: not known). ``limiter_state.delay_ms`` stays
+# the highest write-lane delay, so ``status`` and a database read by an older version still agree.
+_V4_LANES = (
+    "ALTER TABLE flood_log ADD COLUMN dst INTEGER;\n"
+    "ALTER TABLE flood_log ADD COLUMN action TEXT;\n"
+    "ALTER TABLE flood_log ADD COLUMN sent_1h INTEGER;\n"
+    "ALTER TABLE flood_log ADD COLUMN sent_24h INTEGER;\n"
+    "ALTER TABLE flood_log ADD COLUMN premium INTEGER;\n"
+    "CREATE TABLE limiter_lanes (\n"
+    "  account  TEXT NOT NULL,\n"
+    "  action   TEXT NOT NULL,\n"
+    "  dst      INTEGER NOT NULL,\n"
+    "  delay_ms INTEGER NOT NULL,\n"
+    "  PRIMARY KEY (account, action, dst)\n"
+    ");\n"
+    "CREATE TABLE sent_hours (\n"
+    "  account TEXT NOT NULL,\n"
+    "  action  TEXT NOT NULL,\n"
+    "  dst     INTEGER NOT NULL,\n"
+    "  hour    INTEGER NOT NULL,\n"
+    "  sent    INTEGER NOT NULL,\n"
+    "  PRIMARY KEY (account, action, dst, hour)\n"
+    ");\n"
+)
+
+
+# Version 5 (phase 19d2): a lane's learned budget, kept on its ``limiter_lanes`` row: the amount
+# per sliding window, the window (1 or 24 hours), when it last changed (the clock of its 10% daily
+# growth) and the long flood that set or cut it (what ``status`` says about it). ``NULL`` budget:
+# the lane never met a long flood, so nothing stops it. ``limiter_state.day``/``sent_today`` stay
+# written for a database an older version reads, but nothing blocks on them any more.
+_V5_BUDGETS = (
+    "ALTER TABLE limiter_lanes ADD COLUMN budget INTEGER;\n"
+    "ALTER TABLE limiter_lanes ADD COLUMN window_hours INTEGER;\n"
+    "ALTER TABLE limiter_lanes ADD COLUMN budget_since TEXT;\n"
+    "ALTER TABLE limiter_lanes ADD COLUMN flood_at TEXT;\n"
+    "ALTER TABLE limiter_lanes ADD COLUMN flood_seconds INTEGER;\n"
+)
+
+
 def default_migrations() -> tuple[str, ...]:
     """SQL scripts by version: ``migrations[i]`` upgrades ``user_version`` ``i`` to ``i + 1``.
 
     Version 1 is ``schema.sql``. A schema change appends a script here (never edits an earlier
     one) and gets a test that upgrades a database made by the previous version.
     """
-    return (_sql("schema.sql"), _V2_DST_KIND, _V3_BACKUPS)
+    return (_sql("schema.sql"), _V2_DST_KIND, _V3_BACKUPS, _V4_LANES, _V5_BUDGETS)
 
 
 def utc_now() -> datetime:
@@ -562,6 +606,11 @@ class Store:
         delay_ms: int | None,
         batch_size: int | None,
         backup_id: int | None = None,
+        action: str | None = None,
+        dst: int | None = None,
+        sent_1h: int | None = None,
+        sent_24h: int | None = None,
+        premium: bool | None = None,
     ) -> None:
         async with self._tx() as db:
             await floodlog.log_flood(
@@ -574,6 +623,11 @@ class Store:
                 method=method,
                 delay_ms=delay_ms,
                 batch_size=batch_size,
+                action=action,
+                dst=dst,
+                sent_1h=sent_1h,
+                sent_24h=sent_24h,
+                premium=premium,
             )
 
     async def load_limiter_state(self, account: str) -> LimiterState | None:

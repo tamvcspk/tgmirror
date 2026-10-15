@@ -42,6 +42,7 @@ TESTS = [
     "tests/unit/test_transfer.py",
     "tests/unit/test_status.py",
     "tests/unit/test_limiter.py",
+    "tests/integration/test_runner_flood.py",
     "tests/integration/test_runner_split.py",
     # Phase 15b, Đợt 1/2 mechanisms (N2/N3, N4, N7): whole small files where fast enough, else
     # only the specific test node that exercises the mechanism, to keep every run's cost down.
@@ -105,18 +106,8 @@ MUTATIONS = [
     Mutation(
         "D3: a run does not read the source again",
         "src/tgmirror/engine/runs.py",
-        "    if may_reupload(request.mode, request.caption, request.topic_as_hashtag):\n"
-        "        protected = (\n"
-        "            check_source_from_backup(manifest, request)\n"
-        "            if manifest is not None\n"
-        "            else await check_source(gateway, src, request)\n"
-        "        )",
-        "    if False:\n"
-        "        protected = (\n"
-        "            check_source_from_backup(manifest, request)\n"
-        "            if manifest is not None\n"
-        "            else await check_source(gateway, src, request)\n"
-        "        )",
+        "            else await check_source(gateway, src, request)\n        )\n    previous = await store.latest_run(src.id, dst.id)",
+        "            else False\n        )\n    previous = await store.latest_run(src.id, dst.id)",
     ),
     Mutation(
         "D3: a protected source is copied without the user's word",
@@ -166,13 +157,13 @@ MUTATIONS = [
     Mutation(
         "a strategy change does not end the batch",
         "src/tgmirror/engine/batcher.py",
-        "wanted is not strategy or item.topic_id != topic or count + len(item.messages) > limit",
-        "item.topic_id != topic or count + len(item.messages) > limit",
+        "            wanted is not strategy\n            or where != (topic, dst_topic)\n",
+        "            where != (topic, dst_topic)\n",
     ),
     Mutation(
-        "a flood while fetching is not waited out",
+        "a flood during a read (fetch, prepare, ...) is not waited out",
         "src/tgmirror/engine/flood.py",
-        '                await self._guard.flooded("prepare", exc, give_up=floods >= MAX_FLOODS_PER_CALL)',
+        "                await guard.flooded(method, exc, give_up=floods >= MAX_FLOODS_PER_CALL)",
         "                raise",
     ),
     Mutation(
@@ -217,8 +208,8 @@ MUTATIONS = [
     Mutation(
         "append adds to a caption that does not exist",
         "src/tgmirror/core/telethon_gateway.py",
-        'text, kept = (f"{text}\\n\\n{policy.text}" if text else text), list(entities)',
-        'text, kept = (f"{text}\\n\\n{policy.text}" if text else policy.text), list(entities)',
+        'text = f"{text}\\n\\n{op.text}" if text else text',
+        'text = f"{text}\\n\\n{op.text}" if text else op.text',
     ),
     Mutation(
         "a video is forced to a file",
@@ -254,8 +245,8 @@ MUTATIONS = [
     Mutation(
         "placeholder id not kept on the skipped row",
         "src/tgmirror/engine/reupload.py",
-        "        return left_out(unit, action, await gateway.send_text(dst, text, topic=topic))",
-        "        await gateway.send_text(dst, text, topic=topic)\n        return left_out(unit, action)",
+        "        sent = await gateway.send_text(dst, text, topic=topic, reply_to=reply_to)\n        return left_out(unit, action, sent)",
+        "        await gateway.send_text(dst, text, topic=topic, reply_to=reply_to)\n        return left_out(unit, action)",
     ),
     Mutation(
         "D3: a protected source is sent by file id",
@@ -347,10 +338,53 @@ MUTATIONS = [
         "            credit = 0.0",
     ),
     Mutation(
-        "the daily cap is not checked before the bytes go up",
+        "the lane's budget is not checked before the bytes go up",
         "src/tgmirror/engine/runner.py",
-        "            self._guard.check_cap(todo.size)  # do not upload what cannot be posted today",
+        "            self._guard.check_budget(todo.size, _lane(todo))  # do not upload in vain",
         "            pass",
+    ),
+    # Phase 19d1/19d2: lanes, slow mode, budget (docs/05-chong-flood.md)
+    Mutation(
+        "a long flood sets no budget",
+        "src/tgmirror/core/limiter.py",
+        "            cut = self._cut_budget(lane, seconds, now)",
+        "            cut = None",
+    ),
+    Mutation(
+        "a budget never binds",
+        "src/tgmirror/core/limiter.py",
+        "        used = self.sent_in(action, dst, budget.window_hours)",
+        "        used = 0",
+    ),
+    Mutation(
+        "a budget never grows back",
+        "src/tgmirror/core/limiter.py",
+        "    days = (now - budget.since) // GROW_EVERY",
+        "    days = 0 * ((now - budget.since) // GROW_EVERY)",
+    ),
+    Mutation(
+        "the run rests until a moment that is already past",
+        "src/tgmirror/core/limiter.py",
+        "            expiry = hour + budget.window_hours + 1",
+        "            expiry = hour",
+    ),
+    Mutation(
+        "slow mode is not a floor under the pace",
+        "src/tgmirror/core/limiter.py",
+        "            wait = max(max(pace, self._slow.get(dst, 0)) - credit, 0.0)  # slow mode: a hard floor",
+        "            wait = max(pace - credit, 0.0)",
+    ),
+    Mutation(
+        "slow mode, transport and Premium waits can set a budget",
+        "src/tgmirror/engine/flood.py",
+        "        quota = not (exc.slow_mode or exc.transport or exc.premium)",
+        "        quota = True",
+    ),
+    Mutation(
+        "going over daily_cap says nothing",
+        "src/tgmirror/core/limiter.py",
+        "        if level > self._cap_level:",
+        "        if False:",
     ),
     Mutation(
         "a credit shortens the long pause too",

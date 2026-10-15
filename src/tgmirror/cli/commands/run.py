@@ -94,8 +94,10 @@ def run_clone(
     continue. With one pair, or no terminal, the latest run is picked without asking, as before.
 
     A FloodWait up to [limits] max_auto_wait seconds is waited out and the same batch is sent
-    again. A longer one ends the run as waiting (exit code 3) unless --wait is given. The daily
-    cap ([limits] daily_cap) always ends it until the next midnight.
+    again. A longer one ends the run as waiting (exit code 3) unless --wait is given. A long
+    wait also teaches the limiter a budget for that destination: when the sliding window has
+    used it up the run rests until the window lets go (exit code 3). [limits] daily_cap only
+    warns.
 
     To change the filter, use `tgmirror clone` with the same --src/--dst and the new filter.
     --fresh starts the pair over instead (see `tgmirror clone --help`).

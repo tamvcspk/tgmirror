@@ -27,6 +27,7 @@ from tgmirror.engine.status import (
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store, utc_now
 from tgmirror.store.runs import Run, RunStatus
+from tgmirror.ui.lines import budget_lines, flood_kind
 from tgmirror.ui.messages import t
 from tgmirror.ui.progress import duration
 
@@ -144,24 +145,16 @@ def _text(report: StatusReport) -> str:
         t("history.line_counts", done=run_.done, failed=run_.failed, skipped=run_.skipped_filter)
     )
 
-    if report.cap_days > 0 and report.left:
-        lines.append(
-            t(
-                "status.line_cap",
-                left=report.left,
-                cap=report.daily_cap,
-                days=report.cap_days,
-            )
-        )
     if report.delay is not None:
         lines.append(
             t(
                 "status.line_limiter",
                 delay=f"{report.delay:.1f}",
-                sent=report.sent_today,
+                sent=report.sent_24h,
                 cap=report.daily_cap,
             )
         )
+    lines.extend(budget_lines(report))
     if report.floods_24h == 0:
         lines.append(t("status.line_floods_none"))
     else:
@@ -170,7 +163,7 @@ def _text(report: StatusReport) -> str:
             last = t(
                 "status.last_flood",
                 ago=duration(report.now - report.last_flood.ts),
-                kind=report.last_flood.kind,
+                kind=flood_kind(report.last_flood),
                 seconds=report.last_flood.seconds if report.last_flood.seconds is not None else "-",
             )
         lines.append(t("status.line_floods", count=report.floods_24h, last=last))
@@ -212,8 +205,19 @@ def _record(report: StatusReport) -> dict[str, object]:
         if report.delay is None
         else {
             "delay_seconds": report.delay,
-            "sent_today": report.sent_today,
+            "sent_24h": report.sent_24h,
             "daily_cap": report.daily_cap,
+            "budgets": [
+                {
+                    "action": b.action,
+                    "budget": b.amount,
+                    "window_hours": b.window_hours,
+                    "sent": b.sent,
+                    "flood_seconds": b.flood_seconds,
+                    "flood_at": b.flood_at.isoformat(),
+                }
+                for b in report.budgets
+            ],
         },
         "floods_24h": report.floods_24h,
         "last_flood": None
@@ -246,7 +250,7 @@ def _backup_text(report: BackupStatusReport) -> str:
             t(
                 "status.line_limiter",
                 delay=f"{report.delay:.1f}",
-                sent=report.sent_today,
+                sent=report.sent_24h,
                 cap=report.daily_cap,
             )
         )
@@ -258,7 +262,7 @@ def _backup_text(report: BackupStatusReport) -> str:
             last = t(
                 "status.last_flood",
                 ago=duration(report.now - report.last_flood.ts),
-                kind=report.last_flood.kind,
+                kind=flood_kind(report.last_flood),
                 seconds=report.last_flood.seconds if report.last_flood.seconds is not None else "-",
             )
         lines.append(t("status.line_floods", count=report.floods_24h, last=last))
@@ -288,7 +292,7 @@ def _backup_record(report: BackupStatusReport) -> dict[str, object]:
         if report.delay is None
         else {
             "delay_seconds": report.delay,
-            "sent_today": report.sent_today,
+            "sent_24h": report.sent_24h,
             "daily_cap": report.daily_cap,
         },
         "floods_24h": report.floods_24h,

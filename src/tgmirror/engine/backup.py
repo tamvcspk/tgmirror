@@ -33,7 +33,7 @@ from tgmirror.core.gateway import ChannelInfo, ChatKind, MessageReader, Telegram
 from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.engine import backupdir, planner
 from tgmirror.engine.endpoints import SourceRestricted
-from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted
+from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted, learn_context
 from tgmirror.engine.planner import Skip
 from tgmirror.engine.runner import RunControl
 from tgmirror.engine.runs import check_runnable
@@ -241,6 +241,7 @@ class BackupWriter:
         media_dir = backupdir.media_dir(directory)
         media_dir.mkdir(parents=True, exist_ok=True)
         try:
+            await learn_context(guard, self._gateway)  # Premium, for the flood log (phase 19d1)
             cursor = backupdir.last_id(directory)
             spec = FilterSpec.from_json(manifest.filters_json)
             plan = plan_read(spec, cursor, pushdown=pushdown)

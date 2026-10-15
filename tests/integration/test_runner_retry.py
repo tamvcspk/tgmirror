@@ -67,7 +67,11 @@ async def test_a_retry_sends_only_what_failed_and_does_not_scan_the_source(rig: 
 
     assert rig.dst_texts == ["m1", "m2", "m4", "m5", "m3"]  # nothing twice; the late one at the end
     # the pair is known, so begin_run reads nothing but the failed ids and one copy call
-    assert [c.method for c in rig.gw.calls[calls_before:]] == ["get_messages", "copy_messages"]
+    assert [c.method for c in rig.gw.calls[calls_before:]] == [
+        "is_premium",  # run setup (phase 19d1)
+        "get_messages",
+        "copy_messages",
+    ]
     assert rig.gw.calls_to("get_messages")[0].args[1] == [3]
     assert (final.status, final.stats) == (RunStatus.DONE, {"done": 1, "failed": 0})
     assert final.options.retry_of == first.id

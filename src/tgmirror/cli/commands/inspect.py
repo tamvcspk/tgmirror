@@ -830,7 +830,6 @@ async def _inspect(source: Source, job: _Job, control: RunControl) -> None:
                 console,
                 preflight.plan(),
                 job.plan,
-                cap=job.limits.daily_cap,
                 batch_size=job.limits.batch_size,
                 protected=source.protected,
             )

@@ -610,3 +610,10 @@ async def test_media_counters_asks_once_and_keeps_only_the_kinds_it_knows() -> N
     asked = {type(f) for f in request.filters}
     assert types.InputMessagesFilterContacts not in asked  # the server drops these anyway
     assert types.InputMessagesFilterPhotos in asked and types.InputMessagesFilterGeo in asked
+
+
+def test_flood_premium_wait_is_a_flood_wait_that_says_so() -> None:
+    mapped = map_exception(errors.FloodPremiumWaitError(None, capture=40))
+
+    assert isinstance(mapped, FloodWait)
+    assert (mapped.seconds, mapped.premium, mapped.slow_mode) == (40, True, False)

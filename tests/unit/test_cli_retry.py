@@ -238,7 +238,7 @@ def test_status_of_the_latest_run_when_nothing_is_running(
     assert "Run 1: Source → Copy" in out and "Status:      done" in out
     assert "Progress:    ~100% (5 / at most 5 messages)" in out
     assert "5 copied, 0 failed, 0 left out by the filter" in out
-    assert "5/5000 messages sent today" in out
+    assert "5 messages sent in the last 24 hours" in out
     assert "not limited once in the last 24 hours" in out
     assert "tgmirror retry" not in out
 
@@ -316,7 +316,7 @@ def test_status_of_a_run_waiting_out_a_flood(
 
     assert "waiting (flood)" in result.output and "Waiting until:" in result.output
     assert "limited 1 times in the last 24 hours; latest" in result.output
-    assert "(flood_wait, 3600s)" in result.output
+    assert "(flood_wait/forward, 3600s)" in result.output  # kind/lane (19d1)
 
 
 def test_status_of_a_retry_counts_the_failed_messages(

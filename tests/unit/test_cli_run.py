@@ -10,6 +10,7 @@ import json
 import signal
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from tgmirror.cli.keys import KeyProvider, apply_key
 from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.core.errors import FloodWait
 from tgmirror.core.gateway import ChatKind
+from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentHour
 from tgmirror.engine.runner import RunControl, Runner
 from tgmirror.store.backups import Backup, BackupSpec
 from tgmirror.store.runs import Control, Run, RunSpec, RunStatus
@@ -987,29 +989,43 @@ def test_wait_sits_out_a_flood_the_run_would_otherwise_stop_for(
     assert texts(gateway, dst) == ["m1", "m2", "m3"] and slept.total >= 3601
 
 
-def test_the_daily_cap_ends_the_run_with_exit_3_until_the_next_day(
+def test_a_used_up_budget_ends_the_run_with_exit_3_until_the_window_lets_go(
     make_runtime: MakeRuntime, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, dst = source_with_messages(gateway, count=6)
     rt = make_runtime(gateway=gateway)
     rt.paths.ensure()
     rt.paths.config_file.write_text(
-        "[limits]\nbatch_size = 2\ndaily_cap = 4\nmin_delay = 0.01\nlong_pause_range = [0, 0]\n",
+        "[limits]\nbatch_size = 2\nmin_delay = 0.01\nlong_pause_range = [0, 0]\n",
         encoding="utf-8",
     )
     instant_runner(monkeypatch)
+    now = datetime.now(UTC)
+    learned = LimiterState(
+        2.0,
+        now.astimezone().date(),
+        0,
+        lanes=(LaneState("forward", dst, 2.0, LaneBudget(4, 24, now, now, 7200)),),
+        hours=(SentHour("forward", dst, int(now.timestamp() // 3600), 4),),
+    )
+
+    async def seed() -> None:
+        async with opened_store(rt) as store:
+            await store.save_limiter_state("default", learned)
+
+    asyncio.run(seed())
 
     first = runner.invoke(app, CLONE, obj=rt)
     second = runner.invoke(app, ["run"], obj=rt)
 
     assert first.exit_code == 3
-    assert "4 messages sent today" in first.output and "daily cap (4)" in first.output
-    (run,) = saved_runs(rt)
-    assert (run.status, run.fail_reason, run.cursor_src_id) == (
-        RunStatus.WAITING_FLOOD,
-        "daily_cap",
-        4,
-    )
-    assert texts(gateway, dst) == ["m1", "m2", "m3", "m4"]
-    assert second.exit_code == 3 and "daily limit on messages sent" in second.output
-    assert len(gateway.calls_to("copy_messages")) == 2  # the second run never got to Telegram
+    assert "4 messages sent in the last 24 hours" in first.output
+    assert "budget of 4 messages per 24 hours" in first.output
+    # the saved row does not refuse the second run by itself: the limiter's state does, at once
+    runs = saved_runs(rt)
+    assert [(r.status, r.fail_reason, r.cursor_src_id) for r in runs] == [
+        (RunStatus.WAITING_FLOOD, "daily_cap", 0)
+    ] * 2
+    assert texts(gateway, dst) == []
+    assert second.exit_code == 3 and "budget of 4 messages per 24 hours" in second.output
+    assert len(gateway.calls_to("copy_messages")) == 0  # nothing was ever sent past the budget

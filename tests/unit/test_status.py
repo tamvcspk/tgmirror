@@ -8,7 +8,7 @@ import pytest
 
 from tests.fakes import FakeGateway
 from tgmirror.core.gateway import ChatKind, MediaKind, SrcMessage, Unit
-from tgmirror.core.limiter import LimiterState
+from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentHour
 from tgmirror.engine.status import MIN_SAMPLE, backup_estimate, build_report, cap_days, estimate
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store
@@ -103,8 +103,18 @@ def test_a_run_without_a_count_still_uses_the_source_id() -> None:
         (500, 5000, 6000, 1),  # today is used up (a first batch may have overshot)
     ],
 )
-def test_days_of_rest_the_daily_cap_costs(left: int, cap: int, sent_today: int, days: int) -> None:
+def test_days_of_rest_a_24_hour_budget_costs(
+    left: int, cap: int, sent_today: int, days: int
+) -> None:
     assert cap_days(left, cap, sent_today) == days
+
+
+@pytest.mark.parametrize(
+    ("left", "days"),
+    [(40, 0), (41, 1), (1000, 1), (1001, 2)],  # 40 per hour: 24 windows are a day
+)
+def test_a_one_hour_window_costs_hours_not_days(left: int, days: int) -> None:
+    assert cap_days(left, 40, 0, 1) == days
 
 
 # ---- an ordinary run: by source message id ---------------------------------------------------
@@ -288,7 +298,16 @@ async def test_the_report_of_a_live_run(clocked: tuple[Store, Clock]) -> None:
     )
     await store.commit_batch(run.id, batch, [MessageResult(1, 11), MessageResult(2, None, "x")], 50)
     clock.now = NOW + timedelta(seconds=10)
-    await store.save_limiter_state("default", LimiterState(2.4, clock.now.astimezone().date(), 120))
+    hour = int(clock.now.timestamp() // 3600)
+    await store.save_limiter_state(
+        "default",
+        LimiterState(
+            2.4,
+            clock.now.astimezone().date(),
+            0,
+            hours=(SentHour("forward", run.dst_id, hour, 120),),
+        ),
+    )
     await store.log_flood(
         run.id, kind="flood_wait", seconds=30, method="m", delay_ms=1, batch_size=1
     )
@@ -299,7 +318,8 @@ async def test_the_report_of_a_live_run(clocked: tuple[Store, Clock]) -> None:
 
     assert (report.live, report.abandoned) == (True, False)
     assert report.estimate.fraction == 0.5 and report.failed_now == 1 and report.retry_left is None
-    assert (report.delay, report.sent_today, report.daily_cap) == (2.4, 120, 5000)
+    assert (report.delay, report.sent_24h, report.daily_cap) == (2.4, 120, 5000)
+    assert report.budgets == ()  # no long flood so far: nothing learned
     assert report.floods_24h == 1 and report.last_flood is not None
     assert report.last_flood.kind == "flood_wait"
 
@@ -312,11 +332,47 @@ async def test_the_report_tells_how_much_is_left_and_what_the_cap_costs(
     batch = await store.begin_batch(run.id, [Unit((SrcMessage(1, NOW, media=MediaKind.TEXT),))])
     current = await store.commit_batch(run.id, batch, [MessageResult(1, 11)], 1)
     clock.now = NOW + timedelta(seconds=10)
+    budget = LaneBudget(5000, 24, NOW, NOW, 7200)
+    await store.save_limiter_state(
+        "default",
+        LimiterState(
+            2.0, NOW.astimezone().date(), 0, lanes=(LaneState("forward", run.dst_id, 2.0, budget),)
+        ),
+    )
 
     report = await build_report(store, current, now=clock.now, daily_cap=5000)
 
     assert report.left == 11999
-    assert report.cap_days == 2  # 5000 today, 5000 and 1999 on the next two days
+    assert report.cap_days == 2  # 5000 now, 5000 and 1999 on the next two windows
+    assert [(b.action, b.amount, b.window_hours) for b in report.budgets] == [("forward", 5000, 24)]
+
+
+async def test_without_a_learned_budget_the_report_estimates_no_days_of_rest(
+    clocked: tuple[Store, Clock],
+) -> None:
+    store, clock = clocked
+    run = (await store.start_run(pair_spec(total_items=12000))).run
+    clock.now = NOW + timedelta(seconds=10)
+
+    report = await build_report(store, run, now=clock.now, daily_cap=5000)
+
+    assert report.left is not None and report.left > 5000  # more than daily_cap, which only warns
+    assert report.cap_days == 0 and report.budgets == ()
+
+
+async def test_a_budget_of_another_destination_is_not_this_runs(
+    clocked: tuple[Store, Clock],
+) -> None:
+    store, clock = clocked
+    run = (await store.start_run(pair_spec(total_items=12000))).run
+    other = LaneState("forward", run.dst_id - 1, 2.0, LaneBudget(10, 1, NOW, NOW, 60))
+    await store.save_limiter_state(
+        "default", LimiterState(2.0, NOW.astimezone().date(), 0, lanes=(other,))
+    )
+
+    report = await build_report(store, run, now=clock.now, daily_cap=5000)
+
+    assert report.budgets == () and report.cap_days == 0
 
 
 async def test_a_finished_run_has_nothing_left_to_cost_days(clocked: tuple[Store, Clock]) -> None:
@@ -366,17 +422,26 @@ async def test_a_finished_run_is_neither(clocked: tuple[Store, Clock]) -> None:
     assert (report.live, report.abandoned, report.delay) == (False, False, None)
 
 
-async def test_yesterdays_count_of_sent_messages_does_not_show_today(
+async def test_what_was_sent_more_than_a_day_ago_is_not_in_the_window(
     clocked: tuple[Store, Clock],
 ) -> None:
     store, clock = clocked
     run = (await store.start_run(pair_spec())).run
-    yesterday = (clock.now - timedelta(days=1)).astimezone().date()
-    await store.save_limiter_state("default", LimiterState(3.0, yesterday, 4999))
+    old = int((clock.now - timedelta(hours=26)).timestamp() // 3600)
+    recent = int((clock.now - timedelta(hours=2)).timestamp() // 3600)
+    await store.save_limiter_state(
+        "default",
+        LimiterState(
+            3.0,
+            clock.now.astimezone().date(),
+            0,
+            hours=(SentHour("forward", run.dst_id, old, 4999), SentHour("send", 9, recent, 7)),
+        ),
+    )
 
     report = await build_report(store, run, now=clock.now, daily_cap=5000)
 
-    assert (report.delay, report.sent_today) == (3.0, 0)
+    assert (report.delay, report.sent_24h) == (3.0, 7)  # a sliding 24 hours, every write lane
 
 
 async def test_floods_older_than_a_day_are_not_counted(clocked: tuple[Store, Clock]) -> None:

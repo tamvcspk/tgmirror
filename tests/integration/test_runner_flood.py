@@ -8,18 +8,23 @@ No test really waits: sleeps are recorded, and every sleep is one whole wait (``
 
 import sqlite3
 from collections.abc import AsyncIterator
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.integration.test_runner import LIMITS, Rig
-from tgmirror.core.config import Limits
-from tgmirror.core.errors import DailyCapReached, FloodWait, PeerFlood
-from tgmirror.core.gateway import NO_FILTER, MediaKind, ServerFilter, SrcMessage, Unit
+from tgmirror.core.errors import BudgetReached, FloodWait, PeerFlood
+from tgmirror.core.gateway import (
+    NO_FILTER,
+    ChatKind,
+    MediaKind,
+    ServerFilter,
+    SrcMessage,
+    Unit,
+)
 from tgmirror.engine.runner import RunControl, RunnerTiming
-from tgmirror.engine.runs import RunWaiting, check_runnable
 from tgmirror.store.runs import Control, RunStatus
 
 WHOLE = RunnerTiming(poll_interval=1000.0, heartbeat_interval=3600)  # one sleep call per wait
@@ -354,78 +359,145 @@ async def test_what_the_limiter_learned_is_kept_for_the_next_run(rig: Rig) -> No
     rig.fill(6)
     store = await rig.store()
     run = await rig.begin(store, batch_size=3)
-    rig.gw.fail_next("copy_messages", FloodWait(3600))
+    rig.gw.fail_next("copy_messages", FloodWait(30))  # a burst: the delay doubles, no budget
+    final = await rig.runner(store, timing=WHOLE).run(run)
+    assert final.status is RunStatus.DONE
+    assert query(rig, "SELECT delay_ms FROM limiter_state") == [(4000,)]  # the lesson is saved
+    rig.delays.clear()
+
+    await rig.runner(store, timing=WHOLE).run(
+        await rig.begin(store, after_wait=True)
+    )  # new process
+
+    assert query(rig, "SELECT action, delay_ms, budget FROM limiter_lanes") == [
+        ("forward", 4000, None)
+    ]
+    assert rig.delays == []  # nothing new to send, nothing to wait for
+
+
+# ---- budget, sliding window, cap warning (phase 19d2) ----------------------------------------
+
+
+def hour_after(clock: Clock, hours: int) -> datetime:
+    """The first moment, ``hours`` hours on, that is the start of a UTC hour."""
+    moment = clock.now + timedelta(hours=hours)
+    return moment.replace(minute=0, second=0, microsecond=0)
+
+
+async def test_a_short_flood_sets_no_budget_and_a_long_one_sets_the_lanes_alone(rig: Rig) -> None:
+    rig.fill(30)
+    store = await rig.store()
+    run = await rig.begin(store, batch_size=10)
+    copy, calls = rig.gw.copy_messages, 0
+
+    async def third_batch_meets_a_quota(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise FloodWait(7200)  # more than an hour: the 24-hour window
+        return await copy(*args, **kwargs)
+
+    rig.gw.copy_messages = third_batch_meets_a_quota  # type: ignore[method-assign]
+
     with pytest.raises(FloodWait):
         await rig.runner(store, timing=WHOLE).run(run)
-    assert query(rig, "SELECT delay_ms, sent_today FROM limiter_state") == [(4000, 0)]
 
-    final = await rig.runner(store, timing=WHOLE).run(
-        await rig.begin(store, after_wait=True)
-    )  # a new process, same account
-
-    assert final.status is RunStatus.DONE
-    assert rig.delays == [4.0]  # the doubled delay between its two batches
-    assert query(rig, "SELECT delay_ms, sent_today FROM limiter_state") == [(4000, 6)]
-
-
-# ---- daily cap ------------------------------------------------------------------------------
+    # 20 sent by then: 80% is 16, below the floor of MIN_BUDGET messages, so the floor
+    assert query(rig, "SELECT action, dst, budget, window_hours FROM limiter_lanes") == [
+        ("forward", rig.dst.id, 20, 24)
+    ]
+    assert query(rig, "SELECT delay_ms FROM limiter_state") == [(2000,)]  # the delay did not double
+    assert (
+        "budget_learned",
+        {"action": "forward", "budget": 20, "window": 24, "seconds": 7200},
+    ) in (rig.recorder.notices)
 
 
-def midnight_after(clock: Clock) -> datetime:
-    return datetime.combine(clock().date() + timedelta(days=1), time.min).astimezone()
-
-
-async def test_the_daily_cap_rests_the_run_until_midnight_and_then_it_finishes(rig: Rig) -> None:
-    clock = Clock()
-    limits = Limits(min_delay=2.0, jitter=0.0, long_pause_every=10_000, daily_cap=6)
-    rig.fill(9)
-    store = await rig.store(clock=clock)
+async def test_a_long_slow_mode_or_premium_wait_is_not_a_quota(rig: Rig) -> None:
+    rig.fill(3)
+    store = await rig.store()
     run = await rig.begin(store, batch_size=3)
+    rig.gw.fail_next("copy_messages", FloodWait(7200, slow_mode=True))
 
-    with pytest.raises(DailyCapReached) as stop:
-        await rig.runner(store, limits=limits, clock=clock, timing=WHOLE).run(run)
+    with pytest.raises(FloodWait):
+        await rig.runner(store, timing=WHOLE).run(run)
 
-    assert (stop.value.sent_today, stop.value.cap) == (6, 6)
-    rested = await store.get_run(run.id)
-    assert rested is not None
-    assert (rested.status, rested.fail_reason) == (RunStatus.WAITING_FLOOD, "daily_cap")
-    assert rested.resume_at == midnight_after(clock) == stop.value.resume_at
-    assert rested.cursor_src_id == 6 and await store.pending_rows(run.id) == []
-    assert rig.dst_texts == [f"m{i}" for i in range(1, 7)]
-    with pytest.raises(RunWaiting) as refused:
-        check_runnable(rested, clock())
-    assert refused.value.reason == "daily_cap"
+    # the lane's delay doubled as for any burst, and no budget was set from a wait that says
+    # something about the chat's rules, not about how much the account may send
+    assert query(rig, "SELECT action, delay_ms, budget FROM limiter_lanes") == [
+        ("forward", 4000, None)
+    ]
 
-    # the same day, even without check_runnable: the count is remembered
-    with pytest.raises(DailyCapReached):
-        await rig.runner(store, limits=limits, clock=clock, timing=WHOLE).run(
+
+async def test_the_next_run_rests_until_the_window_lets_go_and_then_goes_on(rig: Rig) -> None:
+    clock = Clock()
+    rig.fill(60)
+    store = await rig.store(clock=clock)
+    run = await rig.begin(store, batch_size=10)
+    copy, calls = rig.gw.copy_messages, 0
+
+    async def fourth_batch_meets_a_quota(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise FloodWait(3600)  # up to an hour: the 1-hour window
+        return await copy(*args, **kwargs)
+
+    rig.gw.copy_messages = fourth_batch_meets_a_quota  # type: ignore[method-assign]
+    with pytest.raises(FloodWait):
+        await rig.runner(store, clock=clock, timing=WHOLE).run(run)
+    # 30 sent in the hour: 80% = 24, a budget of 24 per 1 hour
+    assert query(rig, "SELECT budget, window_hours FROM limiter_lanes") == [(24, 1)]
+
+    with pytest.raises(BudgetReached) as stop:
+        await rig.runner(store, clock=clock, timing=WHOLE).run(
             await rig.begin(store, after_wait=True)
         )
-    assert len(rig.copy_calls()) == 2
 
-    clock.now += timedelta(hours=3)  # past midnight
-    check_runnable(rested, clock())
-    final = await rig.runner(store, limits=limits, clock=clock, timing=WHOLE).run(
-        await rig.begin(store, after_wait=True)
-    )
+    assert (stop.value.sent, stop.value.budget, stop.value.window_hours) == (30, 24, 1)
+    rested = await store.latest_run()
+    assert rested is not None
+    assert (rested.status, rested.fail_reason) == (RunStatus.WAITING_FLOOD, "daily_cap")
+    assert rested.resume_at == stop.value.resume_at
+    assert stop.value.resume_at > clock() and stop.value.resume_at <= clock() + timedelta(hours=2)
+    assert len(rig.dst_texts) == 30 and rested.cursor_src_id == 30
+
+    clock.now = stop.value.resume_at + timedelta(minutes=1)  # the window has let them go
+    with pytest.raises(BudgetReached) as again:  # 24 per window: it takes two batches, then rests
+        await rig.runner(store, clock=clock, timing=WHOLE).run(
+            await rig.begin(store, after_wait=True)
+        )
+
+    assert (again.value.sent, again.value.budget) == (20, 24)
+    assert len(rig.dst_texts) == 50
+    assert again.value.resume_at > clock.now
+
+
+async def test_going_over_the_daily_cap_only_warns_and_the_run_goes_on(rig: Rig) -> None:
+    limits = LIMITS.model_copy(update={"daily_cap": 3})
+    rig.fill(9)
+    store = await rig.store()
+    run = await rig.begin(store, batch_size=3)
+
+    final = await rig.runner(store, limits=limits, timing=WHOLE).run(run)
 
     assert final.status is RunStatus.DONE and rig.dst_texts == rig.src_texts
-    assert query(rig, "SELECT sent_today FROM limiter_state") == [(3,)]  # a new day, counted anew
+    warnings = [p for code, p in rig.recorder.notices if code == "cap_warning"]
+    assert warnings == [{"sent": 3, "cap": 3}, {"sent": 6, "cap": 3}]  # at 1x and at twice
 
 
-async def test_the_daily_cap_does_not_stop_reads_or_a_run_with_nothing_to_send(rig: Rig) -> None:
-    clock = Clock()
-    limits = Limits(min_delay=2.0, jitter=0.0, long_pause_every=10_000, daily_cap=3)
-    rig.fill(3)
-    store = await rig.store(clock=clock)
-    run = await rig.begin(store, batch_size=3)
-    await rig.runner(store, limits=limits, clock=clock, timing=WHOLE).run(run)  # exactly the cap
+async def test_a_lane_that_never_met_a_long_flood_is_never_stopped_by_what_it_sent(
+    rig: Rig,
+) -> None:
+    limits = LIMITS.model_copy(update={"daily_cap": 1})
+    rig.fill(30)
+    store = await rig.store()
 
-    final = await rig.runner(store, limits=limits, clock=clock, timing=WHOLE).run(
-        await rig.begin(store, after_wait=True)
+    final = await rig.runner(store, limits=limits, timing=WHOLE).run(
+        await rig.begin(store, batch_size=10)
     )
 
-    assert final.status is RunStatus.DONE  # nothing new: nothing to hold back
+    assert final.status is RunStatus.DONE and len(rig.dst_texts) == 30
 
 
 # ---- unchanged behaviour --------------------------------------------------------------------
@@ -433,3 +505,86 @@ async def test_the_daily_cap_does_not_stop_reads_or_a_run_with_nothing_to_send(r
 
 def test_the_shared_test_limits_have_the_auto_wait_these_tests_rely_on() -> None:
     assert LIMITS.max_auto_wait == 60.0 and LIMITS.read_delay == 0.5 and LIMITS.jitter == 0.0
+
+
+# ---- lanes, context and slow mode (phase 19d1) -----------------------------------------------
+
+
+async def test_a_flood_is_logged_with_its_lane_and_what_the_lane_had_sent(rig: Rig) -> None:
+    rig.fill(6)
+    rig.gw.premium = True
+    store = await rig.store()
+    run = await rig.begin(store, batch_size=3)
+    copy, calls = rig.gw.copy_messages, 0
+
+    async def second_batch_is_refused(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise FloodWait(40)
+        return await copy(*args, **kwargs)
+
+    rig.gw.copy_messages = second_batch_is_refused  # type: ignore[method-assign]
+
+    await rig.runner(store, timing=WHOLE).run(run)
+
+    assert query(
+        rig, "SELECT kind, method, action, dst, sent_1h, sent_24h, premium FROM flood_log"
+    ) == [("flood_wait", "copy_messages", "forward", rig.dst.id, 3, 3, 1)]  # 3 sent by then
+
+
+async def test_a_read_flood_is_logged_against_its_read_lane_without_a_destination(
+    rig: Rig,
+) -> None:
+    rig.fill(3)
+    store = await rig.store()
+    run = await rig.begin(store, batch_size=3)
+    rig.gw.fail_next("count", FloodWait(10))
+
+    await rig.runner(store, timing=WHOLE).run(run)
+
+    assert query(rig, "SELECT method, action, dst, sent_1h, sent_24h, premium FROM flood_log") == [
+        ("count", "history", None, None, None, 0)
+    ]
+    lanes = query(rig, "SELECT action, dst, delay_ms FROM limiter_lanes ORDER BY action")
+    assert lanes == [("history", 0, 4000)]  # the read lane backed off; no write lane was touched
+
+
+async def test_a_premium_wait_is_logged_apart(rig: Rig) -> None:
+    rig.fill(3)
+    store = await rig.store()
+    run = await rig.begin(store, batch_size=3)
+    rig.gw.fail_next("copy_messages", FloodWait(20, premium=True))
+
+    final = await rig.runner(store, timing=WHOLE).run(run)
+
+    assert final.status is RunStatus.DONE and rig.dst_texts == rig.src_texts
+    assert query(rig, "SELECT kind, seconds FROM flood_log") == [("premium_wait", 20)]
+
+
+async def test_a_destination_with_slow_mode_is_never_posted_to_faster_than_it_allows(
+    rig: Rig,
+) -> None:
+    rig.dst = rig.gw.add_channel("Group", kind=ChatKind.SUPERGROUP)
+    rig.gw.slow_mode[rig.dst.id] = 45
+    rig.fill(9)
+    store = await rig.store()
+    run = await rig.begin(store, batch_size=3)
+
+    final = await rig.runner(store, timing=WHOLE).run(run)
+
+    assert final.status is RunStatus.DONE and rig.dst_texts == rig.src_texts
+    assert rig.copy_calls() == [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    assert [d >= 45 for d in rig.delays] == [True, True]  # the gaps between the three posts
+    assert ("slow_mode", {"seconds": 45}) in rig.recorder.notices
+
+
+async def test_slow_mode_is_not_asked_of_a_broadcast_channel(rig: Rig) -> None:
+    rig.fill(3)
+    store = await rig.store()
+    run = await rig.begin(store, batch_size=3)
+
+    await rig.runner(store, timing=WHOLE).run(run)
+
+    assert rig.gw.calls_to("slowmode_seconds") == []
+    assert len(rig.gw.calls_to("is_premium")) == 1

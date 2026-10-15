@@ -5,8 +5,9 @@ the full-screen menu (``ui/menu/run_screen.py``/``backup_screen.py``, appended t
 list of lines) never drift apart from writing the same thing twice.
 """
 
+from tgmirror.engine.status import StatusReport, cap_days
 from tgmirror.store.backups import Backup
-from tgmirror.store.runs import FilterChange, Run, RunStatus, StartedRun
+from tgmirror.store.runs import FilterChange, FloodEvent, Run, RunStatus, StartedRun
 from tgmirror.ui.messages import t
 
 
@@ -100,4 +101,56 @@ def backup_result_lines(final: Backup) -> list[str]:
         lines.append(t("retry.gone", count=final.gone))
     if final.status is RunStatus.STOPPED:
         lines.append(t("backup.continue_hint", dir=final.dir))
+    return lines
+
+
+def flood_kind(event: FloodEvent) -> str:
+    """A flood's kind with the limiter lane it hit (phase 19d1): ``flood_wait/forward``."""
+    return f"{event.kind}/{event.action}" if event.action else event.kind
+
+
+def flood_where(event: FloodEvent) -> str:
+    """What a flood was logged with, for ``history``: the destination and how much the lane had
+    sent in the last hour and 24 hours. Empty for a row from before phase 19d1."""
+    parts = []
+    if event.action:
+        parts.append(f"{event.action} -> {event.dst}" if event.dst is not None else event.action)
+    if event.sent_1h is not None and event.sent_24h is not None:
+        parts.append(f"{event.sent_1h}/1h {event.sent_24h}/24h")
+    return f" [{', '.join(parts)}]" if parts else ""
+
+
+def budget_lines(report: StatusReport) -> list[str]:
+    """What ``status`` says about the budgets learned for the run's destination (phase 19d2): the
+    rest they cost, then one line per lane with its window, what it sent and the wait that set
+    it; or that nothing was learned yet (only pacing and FloodWait limit the run)."""
+    lines: list[str] = []
+    if report.cap_days > 0 and report.left:
+        binding = max(
+            report.budgets,
+            key=lambda b: cap_days(report.left or 0, b.amount, b.sent, b.window_hours),
+        )
+        lines.append(
+            t(
+                "status.line_cap",
+                left=report.left,
+                cap=binding.amount,
+                window=binding.window_hours,
+                days=report.cap_days,
+            )
+        )
+    for b in report.budgets:
+        lines.append(
+            t(
+                "status.line_budget",
+                action=b.action,
+                budget=b.amount,
+                window=b.window_hours,
+                sent=b.sent,
+                seconds=b.flood_seconds,
+                at=b.flood_at.astimezone().strftime("%Y-%m-%d %H:%M"),
+            )
+        )
+    if not report.budgets and report.delay is not None:
+        lines.append(t("status.line_budget_none"))
     return lines

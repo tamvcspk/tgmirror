@@ -149,6 +149,9 @@ VI: dict[str, str] = {
         "Telegram giới hạn liên tiếp: tạm thời chỉ gửi {batch_size} tin mỗi lần và nghỉ "
         "{delay}s giữa các lần, cho tới khi yên ổn trở lại."
     ),
+    "run.slow_mode": (
+        "Đích bật chế độ chậm {seconds}s: mỗi lần đăng vào đó cách nhau ít nhất {seconds}s."
+    ),
     # backup (phase 11a)
     "backup.pick_dir": "Thư mục backup (tạo mới nếu chưa có)",
     "backup.pick_dir_empty": "Đường dẫn không được để trống.",
@@ -326,12 +329,9 @@ VI: dict[str, str] = {
         "chạy lại với --force-takeover."
     ),
     "err.run_waiting_flood": "Telegram đã yêu cầu chờ; chưa chạy lại được trước {until}.",
-    "err.run_waiting_daily_cap": (
-        "Hôm nay đã gửi đủ số tin cho phép (daily_cap); chưa chạy lại được trước {until}."
-    ),
     "err.daily_cap": (
-        "Hôm nay đã gửi {sent} tin, chạm giới hạn ngày ({cap}). Tiến độ đã lưu; chạy "
-        "lại `tgmirror run` sau {until}."
+        "Đã gửi {sent} tin trong {window} giờ qua, chạm ngân sách {budget} tin/{window} giờ "
+        "mà Telegram đã buộc ta học. Tiến độ đã lưu; chạy lại `tgmirror run` sau {until}."
     ),
     "err.run_waiting_peer_flood": (
         "Telegram đánh dấu tài khoản là spam (PEER_FLOOD) ở lần chạy trước. Nghỉ đến "
@@ -540,7 +540,7 @@ VI: dict[str, str] = {
     "history.failed_line": "  · tin nguồn {id}: {reason}",
     "history.failed_more": "  … và còn nữa; xem bằng --json",
     "history.floods_title": "Giới hạn từ Telegram:",
-    "history.flood_line": "  · {ts} {kind} {seconds}s ({method})",
+    "history.flood_line": "  · {ts} {kind} {seconds}s ({method}){where}",
     "history.still_running": "đang chạy",
     "err.run_not_found": "Không có lần chạy «{ref}». Xem `tgmirror history`.",
     "err.run_none": "Chưa clone gì cả. Bắt đầu bằng `tgmirror clone`.",
@@ -567,8 +567,16 @@ VI: dict[str, str] = {
         "Ước tính: tối đa {total} tin cần xem xét (số đếm của Telegram, chưa trừ filter)."
     ),
     "run.cap_days": (
-        "Cap {cap} tin/ngày: với {total} tin, cần nghỉ thêm khoảng {days} ngày trước khi xong "
-        "(tăng [limits] daily_cap nếu muốn nhanh hơn, xem docs/05-chong-flood.md)."
+        "Ngân sách học được {budget} tin/{window} giờ: với {total} tin, cần nghỉ thêm khoảng "
+        "{days} ngày trước khi xong (xem docs/05-chong-flood.md)."
+    ),
+    "run.cap_warning": (
+        "Đã gửi {sent} tin trong 24 giờ qua, vượt ngưỡng nhắc daily_cap ({cap}). Chỉ là nhắc: "
+        "chỉ ngân sách học được từ flood dài của Telegram mới dừng lần chạy."
+    ),
+    "run.budget_learned": (
+        "Telegram bắt chờ {seconds}s: ngân sách của làn {action} giờ là {budget} tin/{window} giờ "
+        "(tăng dần 10% mỗi 24 giờ không bị chặn)."
     ),
     "run.progress_total": (
         "Lần chạy {id}: {handled}/{total} tin (~{percent}%): {done} đã sao chép, "
@@ -603,14 +611,23 @@ VI: dict[str, str] = {
     "status.line_progress_unknown": "Tiến độ:     tin nguồn tới id {cursor} (chưa biết tổng)",
     "status.line_progress_items": ("Tiến độ:     ~{percent}% ({handled} / tối đa {total} tin)"),
     "status.line_cap": (
-        "Cap ngày:    còn tối đa {left} tin, cap {cap}/ngày: cần nghỉ thêm khoảng {days} ngày"
+        "Ngân sách:   còn tối đa {left} tin, ngân sách {cap} tin/{window} giờ: cần nghỉ thêm "
+        "khoảng {days} ngày"
+    ),
+    "status.line_budget": (
+        "Ngân sách:   {action}: {budget} tin/{window} giờ (đã gửi {sent}); đặt sau flood "
+        "{seconds}s lúc {at}"
+    ),
+    "status.line_budget_none": (
+        "Ngân sách:   chưa học (chưa gặp flood dài nào; chỉ pacing và FloodWait giới hạn)"
     ),
     "status.line_speed": "Tốc độ:      {speed} tin/giây (trung bình từ lúc bắt đầu){eta}",
     "status.line_speed_unknown": "Tốc độ:      chưa đủ dữ liệu",
     "status.eta": ", còn khoảng {eta}",
     "status.line_resume": "Chờ đến:     {at}{note}",
     "status.line_limiter": (
-        "Giới hạn:    nghỉ {delay}s giữa các lần gửi; hôm nay đã gửi {sent}/{cap} tin"
+        "Giới hạn:    nghỉ {delay}s giữa các lần gửi; đã gửi {sent} tin trong 24 giờ qua "
+        "(ngưỡng nhắc {cap})"
     ),
     "status.line_floods": "Telegram:    {count} lần bị giới hạn trong 24 giờ qua{last}",
     "status.line_floods_none": "Telegram:    chưa bị giới hạn lần nào trong 24 giờ qua",
@@ -800,8 +817,7 @@ VI: dict[str, str] = {
     "inspect.way.download": "tải xuống đĩa",
     "inspect.way.left_out": "bỏ qua",
     "inspect.plan_writes": (
-        "{calls} lời gọi ghi lên Telegram; limiter đợi tối thiểu {time} giữa chúng, tức "
-        "ít nhất {days} ngày ở trần {cap} tin/ngày."
+        "{calls} lời gọi ghi lên Telegram (batch {batch}); limiter đợi tối thiểu {time} giữa chúng."
     ),
     "inspect.plan_no_writes": "Không ghi gì lên Telegram.",
     "inspect.plan_transfer": (
@@ -971,6 +987,9 @@ EN: dict[str, str] = {
     "run.throttled": (
         "Telegram limited us repeatedly: for now batches are {batch_size} messages and the pause "
         "between them is {delay}s, until things calm down."
+    ),
+    "run.slow_mode": (
+        "The destination has slow mode on ({seconds}s): posts to it are at least {seconds}s apart."
     ),
     # backup (phase 11a)
     "backup.pick_dir": "Directory to back up into (created if missing)",
@@ -1150,13 +1169,10 @@ EN: dict[str, str] = {
         "with --force-takeover."
     ),
     "err.run_waiting_flood": "Telegram asked to wait; the clone must not run again before {until}.",
-    "err.run_waiting_daily_cap": (
-        "The daily limit on messages sent (daily_cap) is used up; the clone must not run "
-        "again before {until}."
-    ),
     "err.daily_cap": (
-        "{sent} messages sent today, the daily cap ({cap}) is reached. Progress is "
-        "saved; run `tgmirror run` again after {until}."
+        "{sent} messages sent in the last {window} hours, the budget of {budget} messages per "
+        "{window} hours that Telegram's long wait taught us is reached. Progress is saved; "
+        "run `tgmirror run` again after {until}."
     ),
     "err.run_waiting_peer_flood": (
         "Telegram flagged the account as spam (PEER_FLOOD) on the previous run. Rest "
@@ -1369,7 +1385,7 @@ EN: dict[str, str] = {
     "history.failed_line": "  · source message {id}: {reason}",
     "history.failed_more": "  … and more; see --json",
     "history.floods_title": "Limits from Telegram:",
-    "history.flood_line": "  · {ts} {kind} {seconds}s ({method})",
+    "history.flood_line": "  · {ts} {kind} {seconds}s ({method}){where}",
     "history.still_running": "running",
     "err.run_not_found": "No run '{ref}'. See `tgmirror history`.",
     "err.run_none": "Nothing has been cloned yet. Start with `tgmirror clone`.",
@@ -1397,8 +1413,16 @@ EN: dict[str, str] = {
         "Estimate: up to {total} messages to look at (Telegram's count, the filter not subtracted)."
     ),
     "run.cap_days": (
-        "Cap of {cap} messages/day: with {total} messages the run has to rest about {days} more "
-        "day(s) before it is done (raise [limits] daily_cap for more, see docs/05-chong-flood.md)."
+        "Learned budget of {budget} messages per {window} hours: with {total} messages the run "
+        "has to rest about {days} more day(s) before it is done (see docs/05-chong-flood.md)."
+    ),
+    "run.cap_warning": (
+        "{sent} messages sent in the last 24 hours, past the daily_cap reminder ({cap}). Only a "
+        "reminder: nothing stops the run but the budget learned from Telegram's long waits."
+    ),
+    "run.budget_learned": (
+        "Telegram asked to wait {seconds}s: the {action} lane's budget is now {budget} messages "
+        "per {window} hours (it grows 10% per 24 hours without a block)."
     ),
     "run.progress_total": (
         "Run {id}: {handled}/{total} messages (~{percent}%): {done} copied, "
@@ -1435,14 +1459,23 @@ EN: dict[str, str] = {
         "Progress:    ~{percent}% ({handled} / at most {total} messages)"
     ),
     "status.line_cap": (
-        "Daily cap:   up to {left} messages left, cap {cap}/day: about {days} more day(s) of rest"
+        "Budget:      up to {left} messages left, budget {cap} per {window} h: about {days} more "
+        "day(s) of rest"
+    ),
+    "status.line_budget": (
+        "Budget:      {action}: {budget} messages per {window} h ({sent} sent); set after a "
+        "{seconds}s wait at {at}"
+    ),
+    "status.line_budget_none": (
+        "Budget:      not learned yet (no long wait so far; only pacing and FloodWait limit it)"
     ),
     "status.line_speed": "Speed:       {speed} messages/s (average since it began){eta}",
     "status.line_speed_unknown": "Speed:       not enough data yet",
     "status.eta": ", about {eta} left",
     "status.line_resume": "Waiting until: {at}{note}",
     "status.line_limiter": (
-        "Limits:      {delay}s between sends; {sent}/{cap} messages sent today"
+        "Limits:      {delay}s between sends; {sent} messages sent in the last 24 hours "
+        "(reminder at {cap})"
     ),
     "status.line_floods": "Telegram:    limited {count} times in the last 24 hours{last}",
     "status.line_floods_none": "Telegram:    not limited once in the last 24 hours",
@@ -1638,8 +1671,8 @@ EN: dict[str, str] = {
     "inspect.way.download": "downloaded to disk",
     "inspect.way.left_out": "left out",
     "inspect.plan_writes": (
-        "{calls} write calls to Telegram; the limiter waits at least {time} between them, so "
-        "at least {days} day(s) at the cap of {cap} messages/day."
+        "{calls} write calls to Telegram (batch {batch}); the limiter waits at least {time} "
+        "between them."
     ),
     "inspect.plan_no_writes": "Nothing is written to Telegram.",
     "inspect.plan_transfer": (

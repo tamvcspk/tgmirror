@@ -8,6 +8,7 @@ from rich.text import Text
 from tgmirror.cli.keys import MenuKey
 from tgmirror.store.backups import Backup
 from tgmirror.store.runs import FailedMessage, FloodEvent, Run
+from tgmirror.ui.lines import flood_where
 from tgmirror.ui.menu.context import AppContext
 from tgmirror.ui.menu.screen import Screen, ScreenResult
 from tgmirror.ui.menu.widgets import SelectList
@@ -151,6 +152,7 @@ class HistoryDetailScreen(Screen):
                         kind=e.kind,
                         seconds=e.seconds if e.seconds is not None else "-",
                         method=e.method or "",
+                        where=flood_where(e),
                     )
                 )
         return Group(*(Text(line) for line in lines))

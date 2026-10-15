@@ -33,8 +33,9 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 - [x] Phase 18a — `tgmirror inspect`, metadata/predicate mới, pre-flight, file selection, `--selection` (2026-10-12; đã thử trên Telegram thật phần lớn, còn vài mục nhỏ ở spike 14, xem "Phase 18a — ghi chú")
 - [x] Phase 19 — Transform khi sao chép (caption, hashtag ↔ topic, `topic_map`, reply, link nội bộ). **Làm theo ba lát cắt** (2026-10-13, xem "Phase 19 — ghi chú"): **19a xong code 2026-10-13** (chuỗi thao tác caption, `--transform`, `transform:` trong selection, nhớ theo cặp, pre-flight; **người dùng đã thử trên kênh thật 2026-10-13, mọi bước pass**); **19b và 19b1 xong code 2026-10-13** (hashtag → topic, `topic_map`, `hashtag_format`, `strip`, cờ `--topic-map`/`--topic-default`/`--strip-routing-hashtag`; **người dùng thử forum → forum bằng file transform 2026-10-13: chạy được** sau khi sửa lỗi khóa `topics` để trống bị lờ đi; các trường hợp còn lại chưa thử, xem "Phase 19 — ghi chú"); **19c1 (giữ reply: `reply: keep`, `--keep-replies`) xong code và đã thử trên Telegram thật 2026-10-14**; **19c2 (`forward_header: keep`, `--keep-forward-header`) xong code 2026-10-14; album và tin thường đã thử trên Telegram thật, forward vào topic chưa**; **19c3 (link nội bộ lùi: `links: rewrite`, `--rewrite-links`) xong code và đã thử trên Telegram thật 2026-10-14: viết lại thành công** — hết lát cắt của Phase 19
 - [x] Phase 18b — Chỉ mục metadata cục bộ, `inspect --quick`, màn hình "Khám phá" (xong code 2026-10-14, sau spike 1 và một sửa phân loại media; **chưa thử trên Telegram thật**, xem "Phase 18b — ghi chú")
+- [ ] Phase 19d — Rate limit thích nghi: limiter theo từng khóa `(account, hành động, đích)`, phân loại FloodWait theo `X`, ngân sách cửa sổ trượt tự học thay cho `daily_cap` cố định (**duyệt hướng 2026-10-15; 19d1 (làn, sàn slow mode, `flood_log` đủ ngữ cảnh) xong code 2026-10-15, chưa thử trên Telegram thật; 19d2 (ngân sách tự học, cửa sổ trượt, `daily_cap` chỉ cảnh báo) xong code 2026-10-15, chưa thử trên Telegram thật**; người dùng chốt 2026-10-15 rằng 19d1 + 19d2 thuộc **0.2.0**; xem "Phase 19d — kế hoạch" và `05-chong-flood.md`, "Kế hoạch: rate limit thích nghi")
 
-**Chuẩn bị phát hành 0.2.0 (2026-10-14)**: `pyproject.toml`/`uv.lock` lên `0.2.0`, README đổi đoạn Status, `uv build` ra đúng `tgmirror-0.2.0` (wheel + sdist). **Còn lại là việc của người dùng**: push `main`, đợi CI xanh trên GitHub Actions (hai workflow cho tới nay chỉ chạy được thật ở Phase 16), tag `v0.2.0` (hoặc `v0.2.0rc1` trước, theo "Phase 13 — ghi chú": rc lên TestPyPI và không có `:latest`); `release.yml` kiểm tag khớp `version`. Chưa thử trên Telegram thật (không chặn, nêu trong README): màn hình "Khám phá" và `inspect --quick` (18b), forward giữ header vào topic (19c2).
+**Chuẩn bị phát hành 0.2.0 (2026-10-14)**: `pyproject.toml`/`uv.lock` lên `0.2.0`, README đổi đoạn Status, `uv build` ra đúng `tgmirror-0.2.0` (wheel + sdist). **Tag đợi Phase 19d2** (người dùng chốt 2026-10-15: 19d thuộc 0.2.0). Sau đó, **còn lại là việc của người dùng**: push `main`, đợi CI xanh trên GitHub Actions (hai workflow cho tới nay chỉ chạy được thật ở Phase 16), tag `v0.2.0` (hoặc `v0.2.0rc1` trước, theo "Phase 13 — ghi chú": rc lên TestPyPI và không có `:latest`); `release.yml` kiểm tag khớp `version`. Chưa thử trên Telegram thật (không chặn, nêu trong README): màn hình "Khám phá" và `inspect --quick` (18b), forward giữ header vào topic (19c2).
 
 **0.3.0 — Thao tác tại chỗ (D10)**
 
@@ -43,7 +44,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 
 ## Lộ trình
 
-Thứ tự làm tiếp (18a, 18b, 19 đã xong code): **18a ✓ → 19 (19a, 19b, 19b1, 19c1, 19c2, 19c3 ✓) → 18b ✓ → 20 → 17** (giữ số phase cũ để các tham chiếu không lệch). Phase 14 (các kênh phân phối còn lại) làm xen khi cần, không chặn release nào.
+Thứ tự làm tiếp (18a, 18b, 19 đã xong code): **18a ✓ → 19 (19a, 19b, 19b1, 19c1, 19c2, 19c3 ✓) → 18b ✓ → 19d → 20 → 17** (giữ số phase cũ để các tham chiếu không lệch). Phase 14 (các kênh phân phối còn lại) làm xen khi cần, không chặn release nào.
 
 | Phase | Nội dung | Hoàn thành khi |
 |---|---|---|
@@ -55,6 +56,7 @@ Thứ tự làm tiếp (18a, 18b, 19 đã xong code): **18a ✓ → 19 (19a, 19b
 | 18a | **0.2.0** — `inspect` (sống + thư mục backup), metadata/predicate mới (forward, reply, link, ...), pre-flight, file selection (`--save`/`--freeze`/`@last`), `--selection` cho `clone`/`backup`/`restore` | Inspect kênh thật rồi `clone --selection @last` sao chép đúng số tin inspect đã báo; pre-flight khớp số unit theo chiến lược của lần chạy thật |
 | 19 | **0.2.0** — Transform: chuỗi thao tác caption, hashtag → topic, `topic_map`, giữ reply, header forward, link nội bộ (lùi); cho cả `clone` và `restore` | Clone kênh thường sang forum với hashtag → topic: đúng topic, đúng thứ tự trong từng topic; restore cùng transform cho cùng kết quả |
 | 18b | **0.2.0** — Chỉ mục metadata, `inspect --quick`, màn hình "Khám phá" | Lọc lặp lại trên kênh 100k tin không gọi Telegram; từ Khám phá bấm `c` ra đúng wizard clone với filter điền sẵn |
+| 19d | **0.2.0** — Rate limit thích nghi: limiter theo làn, phân loại FloodWait theo `X`, sàn slow mode, ngân sách cửa sổ trượt có AIMD, `daily_cap` chỉ cảnh báo | `flood_log` đủ ngữ cảnh để phân tích (19d1 ✓ 2026-10-15); vượt `daily_cap` chỉ cảnh báo; một flood dài chỉ đặt/cắt ngân sách của đúng làn bị chặn, và lần chạy kế tiếp không vượt ngân sách đó, tiếp tục khi cửa sổ trượt nhả chỗ (19d2) |
 | 20 | **0.3.0** — `delete`/`edit`/`repost`/`undo` (D10), `ops`/`op_items` | Kill giữa `delete` 1000 tin rồi chạy lại: không sót, không xoá ngoài plan; `edit` rồi `undo` trả đúng text + định dạng gốc |
 | 17 | **0.3.x** — Đồng bộ edit/delete | Theo nhu cầu |
 
@@ -1067,6 +1069,64 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 
 **Chưa kiểm trên Telegram thật** (người dùng chạy): cập nhật chỉ mục delta khi tin đã được sửa; màn hình Khám phá trên kênh lớn (thời gian nạp và đếm lại ở ~100.000 tin — bộ đếm chạy trên luồng chính, có thể thấy khựng); spike 6 (cỡ chỉ mục và thời gian quét 100.000 tin).
 
+### Phase 19d — kế hoạch (duyệt hướng 2026-10-15; 19d1 và 19d2 xong code 2026-10-15, 19d3 chưa)
+
+Thay `daily_cap` cố định bằng rate limit gắn với các yếu tố ảnh hưởng tới nó. Thiết kế, bảng yếu tố, đánh đổi và các phương án đã loại nằm ở `05-chong-flood.md`, "Kế hoạch: rate limit thích nghi". Không đổi D1–D10. Ba lát cắt, mỗi lát một commit chạy được. **19d1 và 19d2 nằm trong release 0.2.0** (người dùng chốt 2026-10-15: với 5000 tin và mốc 00:00, trải nghiệm hiện tại gần như không dùng được), nên 19d2 không đợi dữ liệu thật của 19d1. Nó dùng ngưỡng tạm, và dữ liệu `flood_log` sau phát hành sẽ chỉnh ngưỡng ở bản vá. 19d3 vẫn tùy chọn, không thuộc 0.2.0.
+
+**19d1 — đo trước, không đổi hành vi giới hạn** (rẻ, gần như không rủi ro). **Xong code 2026-10-15**, chi tiết cài đặt ở cuối mục này ("19d1 — đã cài"):
+
+- Migration: `flood_log` thêm `dst`, `action`, `sent_1h`, `sent_24h`, `premium`. `kind` thêm `premium_wait` (`FLOOD_PREMIUM_WAIT_X`, trước đây rơi vào `flood_wait`).
+- Đếm tin đã gửi theo xô giờ cho mỗi khóa `(account, action, dst)`, để biết `sent_1h`/`sent_24h` lúc bị flood. Cap vẫn tính như cũ.
+- Đọc `slowmode_seconds` của đích trong phần chuẩn bị một lần của lần chạy (`gateway.channel_info` hoặc một lời gọi mới, chọn khi cài), và dùng làm sàn delay ghi cho đích đó.
+- Tách delay theo loại hành động (`forward`/`send` cho ghi; `history`/`file` cho đọc). Đọc có delay AIMD riêng, không còn nhân theo delay ghi.
+- `tgmirror history n` và `status` hiện thêm cột hành động/đích của các lần flood.
+- Chạm: `core/limiter.py`, `engine/flood.py` (mỗi lời gọi khai báo `action`), `core/gateway.py` + `telethon_gateway.py` (slow mode, Premium, `FLOOD_PREMIUM_WAIT` trong `map_exception`), `store/schema.sql` + migration, `store/floodlog.py`, `store/limiterstate.py`, `engine/status.py`, test limiter/flood/store.
+- **Hoàn thành khi**: mỗi dòng `flood_log` mới đủ ngữ cảnh để trả lời "flood dài xảy ra sau bao nhiêu tin trong 1 giờ/24 giờ, ở hành động nào, đích nào"; một đích có slow mode 30 s không bao giờ bị ghi nhanh hơn 30 s; toàn bộ test cũ vẫn xanh.
+- **Sau 19d1, việc của người dùng** (không còn chặn 19d2, xem trên): dùng bình thường rồi gửi lại `flood_log` (hoặc `tgmirror history`) để chỉnh ngưỡng `short_flood` và kiểm hai giả thuyết (giới hạn ghi tính theo từng đích; `X` dài ứng với hạn mức cửa sổ). Nếu dữ liệu bác bỏ giả thuyết thì sửa ở bản vá sau 0.2.0.
+
+**19d1 — đã cài (2026-10-15)**:
+
+- Migration 4 (`store/db.py::_V4_LANES`): `flood_log` thêm `dst`, `action`, `sent_1h`, `sent_24h`, `premium`; bảng `limiter_lanes` (delay từng làn) và `sent_hours` (xô giờ UTC, giữ 24 giờ). `limiter_state` giữ nguyên, `delay_ms` giờ là delay cao nhất của các làn ghi. Có test nâng cấp từ v3.
+- `core/limiter.py`: `Limiter` có làn `(action, dst)` cho ghi, `action` cho đọc; `acquire(..., action=, dst=)`, `on_success(cost, action, dst)`, `on_read_success`, `on_flood(action, dst)`, `delay_of`, `set_slow_mode`, `sent_in`. Gọi không có `action` thì là làn `send`/`history` mặc định, nên cách dùng cũ vẫn chạy. Throttle (ba flood/10 phút) và `daily_cap` vẫn là của cả account.
+- `engine/flood.py`: `LANES` ánh xạ phương thức → làn; `FloodOwner.dst` (đích của lần chạy); `FloodGuard.pace(cost, credit, action)`; `_GuardedReader` rút gọn về một `_call` chung và báo `read_done`; `learn_context` đọc Premium và slow mode của đích một lần ở đầu lần chạy (`Runner.run`, `BackupWriter.run` chỉ Premium).
+- Gateway: `slowmode_seconds(chat)` (`GetFullChannelRequest`, 0 cho kênh broadcast/nhóm cũ — runner không gọi cho các loại đó) và `is_premium()` (`get_me().premium`); `FLOOD_PREMIUM_WAIT_X` map thành `FloodWait(premium=True)`, `kind = premium_wait`.
+- Hiển thị: `history n` (và JSON) có làn, đích, `sent_1h`/`sent_24h`; `status` ghi `loại/làn` (`ui/lines.py::flood_kind`, `flood_where`). Thông báo `run.slow_mode` một lần khi đích có slow mode.
+- **Khác bản kế hoạch**: (1) khóa đọc là `(action)` không theo đích, như đề xuất; (2) `premium_wait` hiện vẫn *tăng delay* của làn như mọi flood (kế hoạch muốn không đụng delay ghi và giảm `RequestBudget`; việc đó chạm vào pool truyền file, để 19d2 sau khi có dữ liệu); (3) sàn slow mode áp cả khi tài khoản là admin; (4) `sent_1h`/`sent_24h` xấp xỉ theo xô giờ (xô cũ nhất tính theo phần còn nằm trong cửa sổ), đủ để phân tích nhưng không phải số đếm chính xác theo phút; (5) hai lời gọi mới là một-lần ở đầu lần chạy (ngoại lệ của luật 1, như `last_message_id`), một lần chạy trên đích broadcast tốn thêm đúng một request (`is_premium`); (6) `scripts/mutation_check.py` chưa thêm cơ chế mới (làm ở 19d2 cùng ngân sách).
+- **Chưa kiểm trên Telegram thật**: `slowmode_seconds` trên supergroup/forum có slow mode thật (chỉ đọc `full_chat.slowmode_seconds`, chưa thử), `get_me().premium`, tên lỗi `FLOOD_PREMIUM_WAIT` khớp `FloodPremiumWaitError`.
+
+**19d2 — ngân sách tự học, cửa sổ trượt, `daily_cap` chỉ cảnh báo** (thuộc 0.2.0; theo câu trả lời của người dùng 2026-10-15, dưới):
+
+- **Phân loại FloodWait theo `X`**, ngưỡng `short_flood` tạm là 60 s (khóa `[limits]` mới để chỉnh được mà không cần bản mới): ngắn thì AIMD delay của làn đó, như 19d1; dài thì cắt ngân sách cửa sổ của làn đó.
+- **Ngân sách cửa sổ trượt theo làn ghi là cái phanh duy nhất chặn lần chạy.** Một làn **chưa có ngân sách cho tới khi gặp flood dài đầu tiên**: lúc đó chỉ pacing (delay, jitter, nghỉ dài) và FloodWait giới hạn nó. Gặp flood dài thì ngân sách = khoảng 80% số tin làn đó đã gửi trong cửa sổ tương ứng (`X` ≤ 1 giờ là cửa sổ 1 giờ, dài hơn là cửa sổ 24 giờ; giả thuyết, kiểm bằng dữ liệu sau phát hành). Flood dài lần sau trên làn đã có ngân sách thì × 0,5. Cứ 24 giờ liền không có flood dài thì +10%, có sàn. Lưu theo làn (cột mới của `limiter_lanes` hoặc bảng mới, migration 5). Xô giờ `sent_hours` của 19d1 là bộ đếm của cửa sổ.
+- **Cửa sổ trượt thay cho mốc 00:00** (bỏ hẳn `day`/`sent_today` khỏi việc chặn): batch mà `sent_in(cửa sổ) + cost > ngân sách` thì lần chạy dừng ở `waiting_flood`, `resume_at` = lúc cửa sổ nhả đủ chỗ cho batch đó. Giữ `fail_reason='daily_cap'` (đổi tên ngoại lệ thành `BudgetReached` được, nhưng không đổi giá trị trong DB) để không vỡ `history` cũ. Vẫn giữ luật "batch đầu tiên lớn hơn ngân sách vẫn đi" để không kẹt vĩnh viễn.
+- **`daily_cap` thành trần an toàn chỉ cảnh báo, không chặn**: khi `sent_24h` của account (mọi làn ghi cộng lại, cửa sổ trượt) vượt `daily_cap`, in một cảnh báo (một lần cho mỗi lần chạy, và một lần nữa nếu vượt gấp đôi), ghi vào dòng kết quả của lần chạy, rồi chạy tiếp. Mặc định giữ 5000 (bây giờ nó chỉ là ngưỡng để nhắc). `check_cap` cũ trước khi đẩy byte chuyển sang kiểm ngân sách của làn.
+- **Hiển thị**: `status`, dòng mở đầu lần chạy và pre-flight nói số tin đã gửi trong 24 giờ qua (không còn "hôm nay"), ngân sách hiện hành của từng làn (hay "chưa học") và lần flood dài đã đặt ra nó. `cap_days` tính theo ngân sách đã học; một làn chưa có ngân sách thì không ước lượng số ngày, chỉ ước lượng thời gian theo pacing. Pre-flight của `inspect --plan` cũng vậy.
+- Cập nhật `05` (mô tả limiter hiện hành; bỏ đoạn "Daily cap" kiểu cũ), `04-state-checkpoint.md` (schema, `resume_at`), `02-cli-ux.md` (`status`, `config`, mã thoát 3 khi hết ngân sách), README (dòng `daily_cap` theo ngày lịch của container: không còn đúng), skill `flood-safety` và `checkpoint-state`, `CLAUDE.md` (mục `core/limiter.py`), `scripts/mutation_check.py` (cơ chế mới: ngân sách, cửa sổ trượt).
+- **Hoàn thành khi** (đồng hồ giả): gửi quá `daily_cap` chỉ in cảnh báo và lần chạy vẫn tiếp; một làn chưa từng gặp flood dài không bao giờ bị chặn vì ngân sách; một flood dài chỉ đặt/cắt ngân sách của đúng làn bị chặn, ghi vào đích khác hay đọc không bị chậm theo; lần chạy kế tiếp không vượt ngân sách đã học, và `resume_at` là lúc cửa sổ nhả chỗ (không phải nửa đêm); 24 giờ không flood dài thì ngân sách tăng lại; DB cũ (v4, có `sent_today`) nâng cấp được; `mutation_check` không còn cơ chế mới nào mà test không nhận ra.
+
+**19d2 — đã cài (2026-10-15)**:
+
+- `core/config.py`: `[limits] short_flood` (int, mặc định 60). `daily_cap` giữ 5000 nhưng chỉ là ngưỡng nhắc.
+- `core/limiter.py`: `LaneBudget` (`amount`, `window_hours`, `since`, `flood_at`, `flood_seconds`), `LaneState.budget`; `on_flood(action, dst, seconds=, quota=)` đặt/cắt ngân sách (80%, ×0,5, sàn `MIN_BUDGET` = 20, cửa sổ 1 giờ nếu `X` ≤ 3600 s) thay vì nhân đôi delay cho `FLOOD_WAIT` dài trên làn ghi; `check_budget(cost, action, dst)` thay `check_cap` và dựa vào `window_sent` trên xô giờ; `_resume_at` (xô cũ nhất hết hạn đủ chỗ); `grow_budget` (+10% mỗi 24 giờ, hàm thuần, `status` cũng dùng); `cap_warning` (1× và 2× `daily_cap` trên tổng 24 giờ của account); `budget_of`, `budgets_for`, `sent_total`.
+- `core/errors.py`: `DailyCapReached` đổi tên `BudgetReached(resume_at, sent, budget, window_hours, action, dst)`; `fail_reason` vẫn là `daily_cap`.
+- Migration 5 (`_V5_BUDGETS`): các cột ngân sách trên `limiter_lanes`; `limiterstate` đọc/ghi chúng. `limiter_state.day`/`sent_today` vẫn được ghi (DB cũ, `LimiterState` cũ), nhưng không còn chặn gì và `status` không dùng.
+- `engine/flood.py`: `FloodGuard.check_budget`, thông báo `cap_warning` và `budget_learned` (ngân sách học được ngay khi gặp flood dài); slow mode/transport/premium không bao giờ là hạn mức.
+- `engine/runner.py`: `_rest` (ngày nghỉ theo ngân sách của đích, bỏ qua làn chưa học) thay `_cap_days`; `check_budget` trước khi đẩy byte.
+- `engine/status.py`: `sent_24h`, `budgets`, `BudgetInfo`, `cap_days(left, budget, sent, window_hours)`; `ui/lines.py::budget_lines` cho `status` (CLI và menu); JSON `limiter.sent_24h`, `limiter.budgets`. Pre-flight bỏ `days` (không có đích thì không có ngân sách).
+- `scripts/mutation_check.py`: 8 cơ chế mới (ngân sách không đặt/không chặn/không tăng lại, `resume_at` đã qua, sàn slow mode, `quota`, cảnh báo cap) và `test_runner_flood.py` vào danh sách test.
+- **Khác bản kế hoạch**: (1) cảnh báo `daily_cap` chỉ là thông báo trên luồng, không ghi vào dòng kết quả của lần chạy; (2) `premium_wait` vẫn tăng delay của làn (chưa giảm `RequestBudget`); (3) `short_flood` mặc định 60 s là con số tạm, chưa có dữ liệu thật; (4) cắt ngân sách dựa trên số tin của đúng làn trong cửa sổ, nên một làn `send` và một làn `forward` học riêng; (5) một lần flood dài với `--wait` vẫn đặt ngân sách rồi ngủ tiếp, lần chạy sau bị giới hạn bởi nó.
+- **Chưa kiểm trên Telegram thật**: giả thuyết `X` ≤ 1 giờ ↔ cửa sổ 1 giờ, `X` dài ↔ 24 giờ; giả thuyết giới hạn ghi theo từng đích; `resume_at` khớp với lúc Telegram nhả thật. Người dùng gửi lại `flood_log`/`history` sau một thời gian để chỉnh `short_flood` và 80%/×0,5/+10%.
+
+**19d3 — Takeout cho phía đọc (tùy chọn, làm khi cần)**: đọc của `backup`/`inspect`/chỉ mục đi qua `invokeWithTakeout` trong gateway, vẫn qua `FloodGuard`. Phải xử lý được `TAKEOUT_INIT_DELAY_X` (người dùng xác nhận trên thiết bị khác, hoặc chờ) và lùi về đọc thường khi bị từ chối. Không dùng cho phía ghi của clone. Trước khi code cần một spike (`scripts/spike_takeout.py`, người dùng chạy) đo xem `getHistory` qua Takeout có ít flood hơn thật không.
+
+**Người dùng trả lời (2026-10-15)**:
+
+1. **`daily_cap` thành trần an toàn: cảnh báo khi chạm tới, không chặn.** Cái phanh chặn lần chạy chỉ còn là ngân sách học được từ flood dài của chính Telegram (19d2 ở trên).
+2. **Cửa sổ trượt 24 giờ** thay cho mốc 00:00 giờ máy.
+3. **Release 0.2.0**: 19d1 và 19d2 đều thuộc 0.2.0, trước khi tag.
+
+**Chọn lựa đề xuất** (người dùng không cần quyết, nêu để sửa nếu không hợp): khóa đọc không gồm nguồn (giới hạn đọc giả định theo account); ngưỡng `short_flood` tạm là 60 s cho tới khi có dữ liệu; Premium chỉ ảnh hưởng truyền file; làn chưa gặp flood dài thì không có ngân sách (không lấy 5000 làm điểm xuất phát, vì như vậy sẽ chặn đúng như hôm nay, trái với câu trả lời 1).
+
 ### Đã chốt (người dùng duyệt 2026-09-25)
 
 1. **Phase 11, restore một backup có lời tuyên bố D3**: restore **hỏi lại lời tuyên bố** (cờ `--yes-i-administer-this-channel`, hoặc câu gõ nguyên văn khi tương tác), dù nội dung đã nằm trên đĩa, cho nhất quán "không bao giờ âm thầm"; `begin_run` **bỏ qua** bước đọc lại nguồn khi nguồn là thư mục backup (kênh gốc có thể đã mất — đó chính là lúc cần restore), thay vào đó đọc cờ `noforwards` và lời tuyên bố ghi trong `backup.json`. Đây là cách áp D3 cho một đường mới, không đổi nội dung D3.
@@ -1085,7 +1145,7 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 3. `iter_messages(..., reverse=True, search=..., filter=...)` kết hợp `min_id` cho kết quả đúng thứ tự tăng dần? *(đọc mã Telethon 1.45: `min_id` thành `offset_id = min_id + 1`, `max_id` **loại trừ**; `search`/`filter` chuyển thành `messages.search` với `add_offset` âm, và `offset_date` trở thành `max_date` nên hỏng khi `reverse=True`, vì vậy ngày được đổi thành id bằng một lời gọi riêng. **Chưa thử trên Telegram thật**: chạy cùng một job với `--pushdown` và `--no-pushdown` rồi so số tin đã sao chép)*
 4. Hành vi thực tế của quyền để xác định `can_post` và `is_admin` (broadcast, supergroup, group). **Phase 1** suy từ entity (`creator`, `admin_rights`, `banned_rights`, `default_banned_rights`, có xét `until_date`) thay vì `get_permissions`, vì gọi `get_permissions` cho từng dialog là một request mỗi kênh; đã khớp trên account thật với kênh broadcast, còn cần đối chiếu supergroup/group/forum trước khi tick.
 5. Cách phát hiện `noforwards` đáng tin cậy (`Channel.noforwards`, và `Message.noforwards`). Phase 1 đọc `Channel.noforwards`/`Chat.noforwards` trong `channel_info`; `Message.noforwards` chưa dùng.
-6. Số tin/lời gọi và delay nào chạy êm trên một account thử (đo, không đoán). *(Phase 4 đã có `flood_log` và `limiter_state` để đo; chưa có số liệu thật, các mặc định vẫn là điểm khởi đầu bảo thủ.)*
+6. Số tin/lời gọi và delay nào chạy êm trên một account thử (đo, không đoán). *(Phase 4 đã có `flood_log` và `limiter_state` để đo; chưa có số liệu thật, các mặc định vẫn là điểm khởi đầu bảo thủ. Phase 19d1 (kế hoạch 2026-10-15) thêm ngữ cảnh vào `flood_log` để câu hỏi này trả lời được theo từng hành động/đích.)*
 7. Với `drop_author=True`, Telegram xử lý thế nào các loại poll, quiz, location, contact, game, invoice khi forward (giữ, lỗi, hay đổi thành tin khác)? Quyết định chiến lược A có cần tiền kiểm theo loại tin hay không.
 8. Quiz: admin/creator của nguồn có thấy đáp án đúng khi chưa trả lời không? (Telethon chỉ dựng lại được quiz khi có `results.results`.) Kiểm tra `poll.id`, `close_date`, `public_voters` có được chấp nhận khi gửi lại `InputMediaPoll`.
 9. **Đã cài ở phase 8 (2026-09-25), chưa kiểm chứng trên Telegram thật.** Forum: `ForwardMessagesRequest(top_msg_id=...)` có đưa tin vào đúng topic đích không; `CreateForumTopicRequest` (icon, General); `iter_messages` trả `reply_to.forum_topic`/`reply_to_top_id` đủ để định tuyến topic (và có đúng là tin ở General **không** có `reply_to` như đã giả định không); `ToggleForumRequest` để tạo đích forum; danh sách topic (`GetForumTopicsRequest`) và topic đã đóng/ẩn; một tin không có `top_msg_id` có được Telegram tự định tuyến vào General không. Xem "Phase 8 — ghi chú".
@@ -1097,7 +1157,7 @@ Chi tiết thiết kế đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02
 
 ## Câu hỏi mở
 
-Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đã được trả lời (bảng dưới).
+Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đã được trả lời (bảng dưới; ba câu của Phase 19d trả lời 2026-10-15, ở "Phase 19d — kế hoạch").
 
 ## Câu hỏi đã trả lời (2026-09-19)
 
@@ -1116,6 +1176,11 @@ Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đ�
 ## Nhật ký quyết định
 
 Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và lý do ở đây.
+
+- 2026-10-15: **Phase 19d2 xong code** (ngân sách tự học theo làn ghi, cửa sổ trượt, `daily_cap` chỉ cảnh báo, `BudgetReached` thay `DailyCapReached`, migration 5, `[limits] short_flood`); cùng `19d1`, thuộc 0.2.0. Chi tiết và chỗ khác bản kế hoạch ở "19d2 — đã cài". Tag `v0.2.0` còn chờ người dùng thử trên Telegram thật.
+- 2026-10-15: Người dùng trả lời ba câu hỏi của Phase 19d: `daily_cap` chỉ còn là trần an toàn **cảnh báo, không chặn**; **cửa sổ trượt 24 giờ** thay cho mốc 00:00; **19d1 + 19d2 thuộc release 0.2.0** ("5000 tin và 00:00 làm trải nghiệm như không xài được"). Hệ quả ghi vào kế hoạch: 19d2 không đợi dữ liệu thật của 19d1 (ngưỡng `short_flood` tạm 60 s, chỉnh ở bản vá); một làn chưa gặp flood dài thì không có ngân sách; tag `v0.2.0` đợi 19d2. Không đổi D1–D10.
+
+- 2026-10-15: **Thêm Phase 19d — rate limit thích nghi** vào lộ trình, theo yêu cầu người dùng ("rate limit thông minh hơn thay vì cứng 5000 tin/ngày, gắn với các yếu tố ảnh hưởng"). Đề xuất ba phương án (A profile tĩnh, B ngân sách tự học theo khóa, C chỉ phản ứng); người dùng yêu cầu ghi kế hoạch theo B trước, chưa code. Không đổi D1–D10 (D6 giữ nguyên). Thiết kế ở `05-chong-flood.md`, lát cắt và ba câu hỏi còn mở ở "Phase 19d — kế hoạch". Cùng lúc ghi lại kết quả đối chiếu một bản tổng hợp "rate limit chính thức" mà người dùng đưa (part tải lên 512 KB chứ không phải 1 MB; "3–5 kết nối" và "phạt lũy tiến" không có trong docs chính thức; Takeout chỉ giúp phía đọc).
 
 - 2026-10-12: **Phase 18a bắt đầu và xong code** theo yêu cầu người dùng ("bắt đầu phase 18"): `tgmirror inspect`, metadata/predicate mới, pre-flight, file selection, `--selection`/`--exact`, wizard "dùng kết quả khám phá". Không đổi D1–D10; những chỗ khác với đề xuất `07` (hai cờ cho link, `link` không đẩy xuống server, `--exact` bằng predicate `message_ids`, `@last` luôn kèm id, ...) ghi ở "Phase 18a — ghi chú". Chi tiết thiết kế đã chuyển sang `01`–`03` như `07` dặn. Người dùng thử trên Telegram thật cùng ngày (reply/forward/duplicate/reactions/thời gian quét): đạt; xem spike 14.
 - 2026-10-12: Người dùng xác nhận **Đợt 4 của Phase 15b xong** (phần thử thật: restore backup thật, dừng/tiếp trong menu, kill giữa backup, hai terminal → `SessionBusy`, dời thư mục backup) → Phase 15b xong; Phase 16 đã ghi xong từ trước (2026-09-28). Theo yêu cầu người dùng, **rút gọn "Trạng thái hiện tại" và bảng "Lộ trình"** thành một dòng mỗi phase (chi tiết vẫn nằm nguyên ở các mục "Phase N — ghi chú"), chia theo release (0.1.x đã phát hành, 0.2.0, 0.3.0) và thêm Phase 18a/19/18b/20 cùng thứ tự làm. Nhân tiện tick ô N2+N3 của Đợt 1 (đã làm 2026-09-27, kiểm lại trong code, chỉ quên tick). Không đổi D1–D10.

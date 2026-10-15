@@ -93,6 +93,8 @@ class FakeGateway:
         self.topics: dict[int, list[TopicInfo]] = {}  # channel -> topics (General is implicit)
         self._next_topic_id: dict[int, int] = defaultdict(lambda: 2)  # 1 is always General
         self._export_extra: dict[tuple[int, int], _ExportExtra] = {}  # (channel, msg_id) -> extra
+        self.slow_mode: dict[int, int] = {}  # channel -> slowmode_seconds (phase 19d1)
+        self.premium = False
 
     # ---- test setup -------------------------------------------------------------------------
 
@@ -352,6 +354,15 @@ class FakeGateway:
     def delete_message(self, channel: int, msg_id: int) -> None:
         """The message disappears from the channel (a later read no longer finds it)."""
         self.messages[channel] = [m for m in self.messages[channel] if m.id != msg_id]
+
+    async def slowmode_seconds(self, chat: int) -> int:
+        self._enter("slowmode_seconds", chat)
+        self._channel(chat)
+        return self.slow_mode.get(chat, 0)
+
+    async def is_premium(self) -> bool:
+        self._enter("is_premium")
+        return self.premium
 
     async def last_message_id(self, chat: int) -> int:
         self._enter("last_message_id", chat)

@@ -19,8 +19,8 @@ from tgmirror.core.errors import (
     AppDataSchemaNewer,
     BackupBusy,
     BadApiCredentials,
+    BudgetReached,
     ConfigError,
-    DailyCapReached,
     ExportBusy,
     FloodWait,
     ForwardsRestricted,
@@ -108,9 +108,15 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.flood", seconds=exc.seconds)
         case PeerFlood():
             return t("err.peer_flood")
-        case DailyCapReached():
+        case BudgetReached():
             until = exc.resume_at.astimezone().strftime("%Y-%m-%d %H:%M")
-            return t("err.daily_cap", sent=exc.sent_today, cap=exc.cap, until=until)
+            return t(
+                "err.daily_cap",
+                sent=exc.sent,
+                budget=exc.budget,
+                window=exc.window_hours,
+                until=until,
+            )
         case SourceRestricted():
             return t("err.source_restricted", title=exc.src.title)
         case DestinationNotWritable():
@@ -195,7 +201,7 @@ def describe(exc: TgMirrorError) -> str:
 
 
 def exit_code(exc: TgMirrorError) -> int:
-    if isinstance(exc, FloodWait | PeerFlood | DailyCapReached | RunWaiting):
+    if isinstance(exc, FloodWait | PeerFlood | BudgetReached | RunWaiting):
         return 3
     if isinstance(
         exc, NoPermission | ForwardsRestricted | SourceRestricted | DestinationNotWritable

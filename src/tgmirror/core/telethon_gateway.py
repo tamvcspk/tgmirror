@@ -29,7 +29,11 @@ from telethon.errors.common import InvalidBufferError
 from telethon.extensions import html as tl_html
 from telethon.network import MTProtoSender
 from telethon.tl import custom
-from telethon.tl.functions.channels import CreateChannelRequest, ToggleForumRequest
+from telethon.tl.functions.channels import (
+    CreateChannelRequest,
+    GetFullChannelRequest,
+    ToggleForumRequest,
+)
 from telethon.tl.functions.messages import (
     CreateForumTopicRequest,
     ForwardMessagesRequest,
@@ -169,6 +173,8 @@ def map_exception(exc: BaseException) -> GatewayError | None:
             return FloodWait(int(exc.seconds))
         case errors.SlowModeWaitError():  # handled like a FloodWait (docs/05), logged apart
             return FloodWait(int(exc.seconds), slow_mode=True)
+        case errors.FloodPremiumWaitError():  # FLOOD_PREMIUM_WAIT_x: a transfer, non-Premium
+            return FloodWait(int(exc.seconds), premium=True)
         case errors.PeerFloodError():
             return PeerFlood("PEER_FLOOD")
         case errors.PasswordHashInvalidError():
@@ -1332,6 +1338,19 @@ class TelethonGateway:
             if isinstance(update, types.UpdateMessageID):
                 return update.id
         raise GatewayError("Telegram returned no id for the new topic")
+
+    async def slowmode_seconds(self, chat: int) -> int:
+        peer = await self._peer(chat)
+        if not isinstance(peer, types.InputPeerChannel):  # only a supergroup can have slow mode
+            return 0
+        with mapped_errors():
+            full = await self._client(GetFullChannelRequest(peer))
+        return int(getattr(full.full_chat, "slowmode_seconds", 0) or 0)
+
+    async def is_premium(self) -> bool:
+        with mapped_errors():
+            me = await self._client.get_me()
+        return bool(getattr(me, "premium", False))
 
     async def last_message_id(self, chat: int) -> int:
         peer = await self._peer(chat)

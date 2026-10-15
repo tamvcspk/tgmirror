@@ -15,6 +15,7 @@ from tgmirror.engine.status import (
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store, utc_now
 from tgmirror.store.runs import Run, RunStatus
+from tgmirror.ui.lines import budget_lines, flood_kind
 from tgmirror.ui.menu.context import AppContext
 from tgmirror.ui.menu.screen import Screen, ScreenResult
 from tgmirror.ui.messages import t
@@ -128,19 +129,16 @@ def _lines(report: StatusReport) -> list[str]:
     lines.append(
         t("history.line_counts", done=run_.done, failed=run_.failed, skipped=run_.skipped_filter)
     )
-    if report.cap_days > 0 and report.left:
-        lines.append(
-            t("status.line_cap", left=report.left, cap=report.daily_cap, days=report.cap_days)
-        )
     if report.delay is not None:
         lines.append(
             t(
                 "status.line_limiter",
                 delay=f"{report.delay:.1f}",
-                sent=report.sent_today,
+                sent=report.sent_24h,
                 cap=report.daily_cap,
             )
         )
+    lines.extend(budget_lines(report))
     if report.floods_24h == 0:
         lines.append(t("status.line_floods_none"))
     else:
@@ -149,7 +147,7 @@ def _lines(report: StatusReport) -> list[str]:
             last = t(
                 "status.last_flood",
                 ago=duration(report.now - report.last_flood.ts),
-                kind=report.last_flood.kind,
+                kind=flood_kind(report.last_flood),
                 seconds=report.last_flood.seconds if report.last_flood.seconds is not None else "-",
             )
         lines.append(t("status.line_floods", count=report.floods_24h, last=last))
@@ -183,7 +181,7 @@ def _backup_lines(report: BackupStatusReport) -> list[str]:
             t(
                 "status.line_limiter",
                 delay=f"{report.delay:.1f}",
-                sent=report.sent_today,
+                sent=report.sent_24h,
                 cap=report.daily_cap,
             )
         )
@@ -195,7 +193,7 @@ def _backup_lines(report: BackupStatusReport) -> list[str]:
             last = t(
                 "status.last_flood",
                 ago=duration(report.now - report.last_flood.ts),
-                kind=report.last_flood.kind,
+                kind=flood_kind(report.last_flood),
                 seconds=report.last_flood.seconds if report.last_flood.seconds is not None else "-",
             )
         lines.append(t("status.line_floods", count=report.floods_24h, last=last))

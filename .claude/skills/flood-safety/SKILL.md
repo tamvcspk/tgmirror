@@ -1,6 +1,6 @@
 ---
 name: flood-safety
-description: Rate limiting and anti-spam rules for tgmirror — the AIMD limiter, FloodWait/SlowMode/PeerFlood handling, daily caps, jitter and long pauses. Use when touching core/limiter.py, the runner loop, retry logic, batch sizing, or any code that makes Telegram write calls.
+description: Rate limiting and anti-spam rules for tgmirror — the AIMD limiter per lane, learned budgets, FloodWait/SlowMode/PeerFlood handling, the daily_cap reminder, jitter and long pauses. Use when touching core/limiter.py, the runner loop, retry logic, batch sizing, or any code that makes Telegram write calls.
 ---
 
 # Flood safety
@@ -13,19 +13,23 @@ Source docs: `docs/05-chong-flood.md` (numbers, rationale) and `docs/01-kien-tru
 2. The client has `flood_sleep_threshold=0`. Every `FloodWaitError` must reach `limiter.on_flood(seconds)`. Never catch it and `await asyncio.sleep` locally.
 3. A FloodWait retry re-sends the **same batch** (already `pending` in `msg_map`). Never rebuild the batch, never advance the cursor.
 4. `PeerFloodError` ⇒ end the run (`failed`, `peer_flood`), exit code 3. No retry, no delay reset, no "try again in a minute".
-5. Users may slow the tool down but never below `min_delay`, and never disable jitter or the daily cap without an explicit, documented flag that prints a warning.
+5. Users may slow the tool down but never below `min_delay`, and never disable jitter or the learned budget without an explicit, documented flag that prints a warning. `daily_cap` is a reminder only (Phase 19d2): never turn it back into a hard stop on its own.
 6. Sleeping is interruptible: pause/stop/Ctrl+C must work during a flood wait (use `asyncio.wait` on a stop event, not a bare `sleep`).
 
-**Where things live:** `core/limiter.py` (`Limiter`: AIMD, jitter, long pause, daily cap, read bucket, throttle; pure, injected `clock`/`sleep`), `engine/flood.py` (`FloodGuard`: logging, waiting, retrying, giving up), `store/limiterstate.py` (persistence; `commit_batch(limiter=...)` saves it with the batch). The runner's `_nap` raises `Interrupted` on pause/stop, so nothing sent after a request. Design and numbers: `docs/05-chong-flood.md`; what was chosen in phase 4: `docs/06-lo-trinh.md`.
+**Where things live:** `core/limiter.py` (`Limiter`: AIMD per lane, jitter, long pause, daily cap, read bucket, slow-mode floor, hourly sent buckets, throttle; pure, injected `clock`/`sleep`), `engine/flood.py` (`FloodGuard`: logging, waiting, retrying, giving up), `store/limiterstate.py` (persistence; `commit_batch(limiter=...)` saves it with the batch). The runner's `_nap` raises `Interrupted` on pause/stop, so nothing sent after a request. Design and numbers: `docs/05-chong-flood.md`; what was chosen in phase 4: `docs/06-lo-trinh.md`.
 
 ## Limiter behaviour (spec)
 
-- `delay` starts at `min_delay`; on flood `delay = min(delay*2, max_delay)`; after 20 consecutive successes `delay = max(delay*0.9, min_delay)`.
+- `delay` starts at `min_delay`; on flood `delay = min(delay*2, max_delay)`; after 20 consecutive successes `delay = max(delay*0.9, min_delay)`. **Per lane (Phase 19d1)**: a write lane is `(action, destination)` with `action` `forward` (`copy_messages`) or `send` (`send_prepared`/`send_text`/`send_by_reference`/`upload_prepared`/`create_topic`); a read lane is `history` (`iter_messages`, `get_messages`, `count`, `list_topics`, `media_counters`, `fetch`) or `file` (`prepare`, `export_unit`). The table is `engine/flood.py::LANES`: a **new gateway method must be added there**, or it counts as a `send`. A flood backs off only its lane (`limiter.on_flood(action, dst)`); reads no longer follow the write delay. The throttle (3 floods / 10 min → halve `batch_size`) and the daily cap stay account-wide. `FloodGuard.pace(cost, credit, action)` is told the lane by the runner (`runner._lane(batch)`: `Strategy.COPY` is `forward`, anything else `send`).
+- **Slow mode**: `learn_context` (run setup) reads the destination's `slowmode_seconds` (supergroup/forum only) and `limiter.set_slow_mode(dst, s)` makes `s` a hard floor under the jittered delay for every post there (the upload `credit` still counts). Premium is read once and logged next to every flood. Both reads are the documented one-shot setup exception and a failure just leaves the fact unknown.
 - Actual wait = `delay * uniform(1-jitter, 1+jitter)`.
 - Every `long_pause_every` messages: sleep `uniform(*long_pause_range)`.
-- Daily cap: when reached, the run ends in `waiting_flood` with `resume_at` = next local midnight and `reason=daily_cap`. This is not an error.
+- `flood_log` rows carry the lane (`action`, `dst` for writes), `sent_1h`/`sent_24h` of that write lane (hourly UTC buckets in `sent_hours`, 24 h kept; approximate) and `premium`. `kind` is `flood_wait`/`slow_mode`/`premium_wait`/`transport_429`/`peer_flood`. Nothing acts on `sent_*` yet (19d2 will); do not present them as a budget.
+- **Quota vs burst (Phase 19d2)**: a plain `FLOOD_WAIT` of more than `[limits] short_flood` seconds (default 60) on a *write* lane is a quota: `limiter.on_flood(action, dst, seconds=, quota=)` does not double the delay but sets the lane's **budget** — 80% of what that lane sent in the window `X` names (≤ 3600 s: 1 hour, else 24 hours), floor `MIN_BUDGET` 20 — or halves it if it has one; +10% for every 24 hours without such a wait (`grow_budget`). Slow mode, `transport_429` and `premium_wait` are never a quota (`FloodGuard.flooded` passes `quota=False`); read lanes only ever double their delay.
+- **A lane with no budget is never stopped** by how much it sent: only pacing and FloodWait limit it. A write that would pass the budget (`used + cost > amount`, and `used > 0` so a first big batch still goes) raises `BudgetReached` *before* the write-ahead and before the bytes go up (`check_budget`); the run ends `waiting_flood`, `fail_reason='daily_cap'` (name kept for `history`), `resume_at` = when the sliding window has let enough hour buckets go. Not an error, exit 3.
+- `daily_cap` only warns: when the account's 24-hour total (all write lanes) passes it, once per run and again at twice, the guard emits the `cap_warning` notice and the run goes on.
 - ≥3 floods in 10 minutes ⇒ halve `batch_size` and raise `min_delay` temporarily (log it).
-- State (`delay`, `sent_today`, day) is persisted in `limiter_state` so a restart does not forget lessons.
+- State is persisted so a restart does not forget lessons: `limiter_state` (`delay` = highest write-lane delay, `sent_today`, day), `limiter_lanes` (each lane's delay) and `sent_hours`, written with the batch (`commit_batch(limiter=...)`). A `LimiterState` with no `lanes` (a database from before 19d1) seeds every lane from its one `delay`.
 - Time comes from an injected `clock`. Tests use a fake clock; no real `sleep` in unit tests. `Limiter.acquire` may raise from `sleep` (`Interrupted`): it must record nothing before its sleep returns.
 
 ## FloodWait handling checklist
@@ -57,7 +61,8 @@ When adding or changing a code path that can raise flood errors:
 - `PeerFlood` → run `failed`, no retry.
 - 20 successes → delay decays but never below `min_delay`.
 - Stop event during a flood sleep → returns promptly, state saved.
-- Daily cap reached → `waiting_flood`, resumes next day (fake clock).
+- A long flood sets only its own lane's budget; the next write that would pass it stops the run with `resume_at` when the window lets go (not midnight); a lane that never met a long flood is never stopped; going over `daily_cap` only warns (fake clock).
+- A flood backs off only its own lane (another action, another destination, a read lane are untouched); a slow-mode destination is never paced below `slowmode_seconds` even with jitter; `flood_log` gets lane, destination and `sent_1h`/`sent_24h` (`tests/unit/test_limiter.py`, `tests/integration/test_runner_flood.py`).
 
 - **`tgmirror inspect` (Phase 18a)** reads through `FloodGuard` like a run's source, with `FloodOwner.of_inspect()` (neither `run_id` nor `backup_id` in `flood_log`); a FloodWait longer than `max_auto_wait` ends the scan with the partial report and exit code 3. It is a long scan, so it is *not* in the one-shot exception list.
 

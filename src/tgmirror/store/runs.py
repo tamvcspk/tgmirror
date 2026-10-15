@@ -254,6 +254,11 @@ class FloodEvent:
     kind: str
     seconds: int | None
     method: str | None
+    # phase 19d1: the limiter lane that was pushed back, and what it had sent by then
+    action: str | None = None
+    dst: int | None = None
+    sent_1h: int | None = None
+    sent_24h: int | None = None
 
 
 RUN_SELECT = (

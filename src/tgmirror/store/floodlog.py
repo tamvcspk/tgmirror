@@ -18,14 +18,37 @@ async def log_flood(
     delay_ms: int | None,
     batch_size: int | None,
     backup_id: int | None = None,
+    action: str | None = None,
+    dst: int | None = None,
+    sent_1h: int | None = None,
+    sent_24h: int | None = None,
+    premium: bool | None = None,
 ) -> None:
     """``run_id``/``backup_id`` are mutually exclusive: a run's flood events and a backup's
     (phase 11) share this table but never the same row, so ``events_of_run`` never mixes the two
-    even though the ``runs`` and ``backups`` tables number their rows independently."""
+    even though the ``runs`` and ``backups`` tables number their rows independently.
+
+    Phase 19d1 adds the context a flood is understood by: the limiter lane (``action``/``dst``),
+    how many messages that lane had sent in the last hour and 24 hours (writes only), and whether
+    the account had Premium (``None``: not known)."""
     await db.execute(
-        "INSERT INTO flood_log(run_id, backup_id, ts, kind, seconds, method, delay_ms, batch_size) "
-        "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        (run_id, backup_id, ts, kind, seconds, method, delay_ms, batch_size),
+        "INSERT INTO flood_log(run_id, backup_id, ts, kind, seconds, method, delay_ms, batch_size, "
+        "action, dst, sent_1h, sent_24h, premium) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            run_id,
+            backup_id,
+            ts,
+            kind,
+            seconds,
+            method,
+            delay_ms,
+            batch_size,
+            action,
+            dst,
+            sent_1h,
+            sent_24h,
+            None if premium is None else int(premium),
+        ),
     )
 
 
@@ -37,21 +60,19 @@ async def count_since(db: aiosqlite.Connection, since: datetime) -> int:
     return int(row[0])
 
 
+_EVENT = "SELECT ts, kind, seconds, method, action, dst, sent_1h, sent_24h FROM flood_log"
+
+
+def _event(row: aiosqlite.Row) -> FloodEvent:
+    return FloodEvent(datetime.fromisoformat(row[0]), *row[1:8])
+
+
 async def events_of_run(db: aiosqlite.Connection, run_id: int) -> list[FloodEvent]:
-    cur = await db.execute(
-        "SELECT ts, kind, seconds, method FROM flood_log WHERE run_id = ? ORDER BY id", (run_id,)
-    )
-    return [
-        FloodEvent(datetime.fromisoformat(r[0]), r[1], r[2], r[3]) for r in await cur.fetchall()
-    ]
+    cur = await db.execute(f"{_EVENT} WHERE run_id = ? ORDER BY id", (run_id,))
+    return [_event(r) for r in await cur.fetchall()]
 
 
 async def events_of_backup(db: aiosqlite.Connection, backup_id: int) -> list[FloodEvent]:
     """As ``events_of_run``, for a backup (T1, Phase 15b: ``tgmirror status`` showing one)."""
-    cur = await db.execute(
-        "SELECT ts, kind, seconds, method FROM flood_log WHERE backup_id = ? ORDER BY id",
-        (backup_id,),
-    )
-    return [
-        FloodEvent(datetime.fromisoformat(r[0]), r[1], r[2], r[3]) for r in await cur.fetchall()
-    ]
+    cur = await db.execute(f"{_EVENT} WHERE backup_id = ? ORDER BY id", (backup_id,))
+    return [_event(r) for r in await cur.fetchall()]

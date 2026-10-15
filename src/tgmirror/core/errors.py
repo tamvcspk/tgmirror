@@ -26,36 +26,69 @@ class GatewayError(TgMirrorError):
 class FloodWait(GatewayError):
     """FLOOD_WAIT_x (or SLOWMODE_WAIT_x): Telegram asks us to wait ``seconds`` before the next call.
 
-    All three kinds are handled the same way; ``slow_mode`` and ``transport`` only tell them
-    apart in ``flood_log``. ``transport`` is not a wait Telegram named: it is the HTTP 429 the
+    All four kinds are handled the same way; ``slow_mode``, ``premium`` and ``transport`` only
+    tell them apart in ``flood_log``. ``premium`` is FLOOD_PREMIUM_WAIT_x: the wait a transfer
+    gets on an account without Telegram Premium (phase 19d1). ``transport`` is not a wait
+    Telegram named: it is the HTTP 429 the
     server sent on the connection while files were moving (spike 12, and the first real run),
     and ``seconds`` is how long we choose to rest.
     """
 
-    def __init__(self, seconds: int, *, slow_mode: bool = False, transport: bool = False) -> None:
-        label = "TRANSPORT_429" if transport else ("SLOWMODE_WAIT" if slow_mode else "FLOOD_WAIT")
+    def __init__(
+        self,
+        seconds: int,
+        *,
+        slow_mode: bool = False,
+        transport: bool = False,
+        premium: bool = False,
+    ) -> None:
+        label = (
+            "TRANSPORT_429"
+            if transport
+            else "SLOWMODE_WAIT"
+            if slow_mode
+            else "FLOOD_PREMIUM_WAIT"
+            if premium
+            else "FLOOD_WAIT"
+        )
         super().__init__(f"{label} {seconds}s")
         self.seconds = seconds
         self.slow_mode = slow_mode
         self.transport = transport
+        self.premium = premium
 
 
 class PeerFlood(GatewayError):
     """PEER_FLOOD: the account is flagged for spam-like behaviour. Never retried."""
 
 
-class DailyCapReached(TgMirrorError):
-    """Today's ``daily_cap`` is used up: not a failure, the run rests until ``resume_at``.
+class BudgetReached(TgMirrorError):
+    """A lane's learned budget is used up: not a failure, the run rests until ``resume_at``, when
+    the sliding window has let enough of what it sent go (phase 19d2).
 
-    It is our own budget (docs/05-chong-flood.md), not something Telegram said, so it is not a
-    ``GatewayError``.
+    It is our own budget (docs/05-chong-flood.md), learned from a long FloodWait, not something
+    Telegram said now, so it is not a ``GatewayError``. A run parked by it keeps the stored
+    ``fail_reason`` ``daily_cap`` of the days when it was the fixed daily cap.
     """
 
-    def __init__(self, resume_at: datetime, sent_today: int, cap: int) -> None:
-        super().__init__(f"daily cap of {cap} messages reached ({sent_today} sent today)")
+    def __init__(
+        self,
+        resume_at: datetime,
+        sent: int,
+        budget: int,
+        window_hours: int,
+        action: str = "send",
+        dst: int = 0,
+    ) -> None:
+        super().__init__(
+            f"budget of {budget} messages per {window_hours} h reached on {action} ({sent} sent)"
+        )
         self.resume_at = resume_at
-        self.sent_today = sent_today
-        self.cap = cap
+        self.sent = sent
+        self.budget = budget
+        self.window_hours = window_hours
+        self.action = action
+        self.dst = dst
 
 
 class NoPermission(GatewayError):

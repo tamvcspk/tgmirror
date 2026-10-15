@@ -63,10 +63,12 @@ def test_the_runner_reaches_telegram_only_through_the_flood_guard() -> None:
     """Hard rule 1: every read and write of a run is paced and flood-handled by ``FloodGuard``."""
     lines = (SRC / "engine" / "runner.py").read_text(encoding="utf-8").splitlines()
 
+    # ``learn_context`` is the documented one-shot setup (Premium, the destination's slow mode)
+    guarded = ("guard.reader(", "guard.write(", "guard.transfer(", "learn_context(")
     for number, line in enumerate(lines):
         if "self._gateway" in line and "def " not in line and "self._gateway = " not in line:
             nearby = " ".join(lines[max(number - 6, 0) : number + 1])
-            assert any(f"guard.{how}(" in nearby for how in ("reader", "write", "transfer")), (
+            assert any(how in nearby for how in guarded), (
                 f"runner.py line {number + 1} uses the gateway outside the flood guard"
             )
 

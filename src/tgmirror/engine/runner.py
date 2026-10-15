@@ -20,7 +20,7 @@ write and sits out a FloodWait of up to ``max_auto_wait`` by repeating the same 
 this module is what cannot be waited out. A FloodWait that is too long, or repeated too often, is
 forgotten by the batch that hit it (Telegram created nothing), the run becomes ``waiting_flood``
 with ``resume_at`` and the error is re-raised (exit code 3); the daily cap does the same with
-``DailyCapReached``. PeerFlood fails the run and is never retried.
+``BudgetReached``. PeerFlood fails the run and is never retried.
 """
 
 import asyncio
@@ -39,7 +39,7 @@ from typing import Protocol
 
 from tgmirror.core.config import Limits
 from tgmirror.core.errors import (
-    DailyCapReached,
+    BudgetReached,
     FloodWait,
     GatewayError,
     PeerFlood,
@@ -57,11 +57,11 @@ from tgmirror.core.gateway import (
     TelegramGateway,
     Unit,
 )
-from tgmirror.core.limiter import Limiter, Sleep
+from tgmirror.core.limiter import FORWARD, SEND, Limiter, Sleep
 from tgmirror.engine import planner
 from tgmirror.engine.batcher import Batch, batches
 from tgmirror.engine.copy import copy_batch
-from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted
+from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted, learn_context
 from tgmirror.engine.planner import Skip
 from tgmirror.engine.reconcile import Outcome, judge
 from tgmirror.engine.reupload import (
@@ -77,6 +77,7 @@ from tgmirror.engine.reupload import (
     send_unit_by_reference,
 )
 from tgmirror.engine.runs import DAILY_CAP
+from tgmirror.engine.status import cap_days
 from tgmirror.engine.strategy import Strategy, may_reupload, router
 from tgmirror.engine.topics import TopicResolver, TopicRoute
 from tgmirror.engine.transfer import Transfer, TransferTracker
@@ -160,6 +161,12 @@ class RunnerTiming:
     heartbeat_interval: float = 30.0  # must stay well below the store's 2-minute timeout
 
 
+def _lane(batch: Batch) -> str:
+    """The limiter lane a batch's post counts against: a server-side copy is a ``forward``,
+    anything sent again (by file id or re-uploaded) is a ``send``."""
+    return FORWARD if batch.strategy is Strategy.COPY else SEND
+
+
 class Runner:
     def __init__(
         self,
@@ -236,6 +243,8 @@ class Runner:
         heartbeat = asyncio.create_task(self._heartbeat(run.id))
         await self._clear_tmp()  # what a killed run left behind
         try:
+            # the slow mode of the destination and Premium: one setup read each (phase 19d1)
+            await learn_context(self._guard, self._gateway, dst=run.dst_id, dst_kind=run.dst_kind)
             await self._reconcile(run)
             run = await self._analyze(run)
             status = await self._loop(run)
@@ -245,7 +254,7 @@ class Runner:
         except FloodWait as exc:
             await self._stop_on_flood(run, exc)
             raise
-        except DailyCapReached as exc:  # our own budget: a rest, not a failure
+        except BudgetReached as exc:  # our own budget: a rest, not a failure
             await self._store.finish(
                 run.id, RunStatus.WAITING_FLOOD, fail_reason=DAILY_CAP, resume_at=exc.resume_at
             )
@@ -310,16 +319,22 @@ class Runner:
             total = min(total, max(head - plan.min_id, 0))
         run = await self._store.set_total(run.id, total)
         self._reporter.notice("analyzed", total=total)
-        if (days := self._cap_days(total)) > 0:
-            self._reporter.notice("cap_days", total=total, cap=self._limits.daily_cap, days=days)
+        if (rest := self._rest(run, total)) is not None:
+            budget, window, days = rest
+            self._reporter.notice("cap_days", total=total, budget=budget, window=window, days=days)
         return run
 
-    def _cap_days(self, total: int) -> int:
-        """Whole days the run would have to rest for the daily cap if it had to send ``total``."""
+    def _rest(self, run: Run, total: int) -> tuple[int, int, int] | None:
+        """``(budget, window hours, whole days)`` of the lane of this destination that would cost
+        the most rest if the run had to send ``total`` messages — or ``None`` when no lane has a
+        learned budget (nothing then says how long a run would take) or none costs a day."""
         assert self._limiter is not None
-        cap = self._limits.daily_cap
-        left = max(cap - self._limiter.state.sent_today, 0)
-        return max(-(-(total - left) // cap), 0)  # ceil((total - left) / cap), never negative
+        worst: tuple[int, int, int] | None = None
+        for _, budget, used in self._limiter.budgets_for(run.dst_id):
+            days = cap_days(total, budget.amount, used, budget.window_hours)
+            if days > 0 and (worst is None or days > worst[2]):
+                worst = (budget.amount, budget.window_hours, days)
+        return worst
 
     # ---- the loop -------------------------------------------------------------------------
 
@@ -455,14 +470,14 @@ class Runner:
         if ready.prepared is not None and todo.strategy is Strategy.REUPLOAD:
             # The bytes go up first: no message is created, so nothing is pending yet and the
             # time they take counts towards the gap before the post (docs/04, docs/05).
-            self._guard.check_cap(todo.size)  # do not upload what cannot be posted today
+            self._guard.check_budget(todo.size, _lane(todo))  # do not upload in vain
             prepared, started = ready.prepared, self._mono()
             ready.prepared = await self._guard.transfer(
                 "upload_prepared",
                 lambda: self._gateway.upload_prepared(prepared, self._tracker.update),
             )
             credit = self._mono() - started
-        await self._guard.pace(todo.size, credit)
+        await self._guard.pace(todo.size, credit, _lane(todo))
         if not await self._gate(run):  # arrived while sleeping
             return False
         await self._send(run, todo, ready)
@@ -689,7 +704,7 @@ class Runner:
         for i, unit in enumerate(batch.units):
             if not await self._gate(run):
                 return  # the units not sent yet are read again on the next run
-            await self._guard.pace(len(unit.messages))
+            await self._guard.pace(len(unit.messages), action=_lane(batch))
             # the filter count and the cursor past the skipped messages go with the last unit
             alone = (
                 replace(batch, units=(unit,))
