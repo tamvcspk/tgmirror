@@ -8,8 +8,8 @@ import pytest
 
 from tests.fakes import FakeGateway
 from tgmirror.core.gateway import ChatKind, MediaKind, SrcMessage, Unit
-from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentHour
-from tgmirror.engine.status import MIN_SAMPLE, backup_estimate, build_report, cap_days, estimate
+from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentBucket
+from tgmirror.engine.status import MIN_SAMPLE, backup_estimate, build_report, estimate, rest_hours
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store
 from tgmirror.store.msgmap import MessageResult
@@ -106,15 +106,20 @@ def test_a_run_without_a_count_still_uses_the_source_id() -> None:
 def test_days_of_rest_a_24_hour_budget_costs(
     left: int, cap: int, sent_today: int, days: int
 ) -> None:
-    assert cap_days(left, cap, sent_today) == days
+    assert rest_hours(left, cap, sent_today) == days * 24
 
 
 @pytest.mark.parametrize(
-    ("left", "days"),
-    [(40, 0), (41, 1), (1000, 1), (1001, 2)],  # 40 per hour: 24 windows are a day
+    ("left", "hours"),
+    [(40, 0), (41, 1), (1000, 24), (1001, 25)],  # 40 per hour: one hour of rest per 40 over
 )
-def test_a_one_hour_window_costs_hours_not_days(left: int, days: int) -> None:
-    assert cap_days(left, 40, 0, 1) == days
+def test_a_one_hour_window_costs_hours_not_a_rounded_up_day(left: int, hours: int) -> None:
+    assert rest_hours(left, 40, 0, 1) == hours
+
+
+def test_the_run_that_stopped_on_a_one_hour_budget_needs_two_hours_not_a_day() -> None:
+    # 3082 messages left on a budget of 1506 per hour, none sent in the window now (2026-10-17)
+    assert rest_hours(3082, 1506, 0, 1) == 2
 
 
 # ---- an ordinary run: by source message id ---------------------------------------------------
@@ -298,14 +303,14 @@ async def test_the_report_of_a_live_run(clocked: tuple[Store, Clock]) -> None:
     )
     await store.commit_batch(run.id, batch, [MessageResult(1, 11), MessageResult(2, None, "x")], 50)
     clock.now = NOW + timedelta(seconds=10)
-    hour = int(clock.now.timestamp() // 3600)
+    bucket = int(clock.now.timestamp() // 300)
     await store.save_limiter_state(
         "default",
         LimiterState(
             2.4,
             clock.now.astimezone().date(),
             0,
-            hours=(SentHour("forward", run.dst_id, hour, 120),),
+            buckets=(SentBucket("forward", run.dst_id, bucket, 120),),
         ),
     )
     await store.log_flood(
@@ -343,8 +348,55 @@ async def test_the_report_tells_how_much_is_left_and_what_the_cap_costs(
     report = await build_report(store, current, now=clock.now, daily_cap=5000)
 
     assert report.left == 11999
-    assert report.cap_days == 2  # 5000 now, 5000 and 1999 on the next two windows
+    assert report.cap_rest_hours == 48  # 5000 now, 5000 and 1999 on the next two windows
     assert [(b.action, b.amount, b.window_hours) for b in report.budgets] == [("forward", 5000, 24)]
+
+
+async def test_the_report_carries_ok_bad_and_when_the_limit_was_last_tested(
+    clocked: tuple[Store, Clock],
+) -> None:
+    store, clock = clocked
+    run = (await store.start_run(pair_spec(total_items=100))).run
+    clock.now = NOW + timedelta(seconds=10)
+    budget = LaneBudget(1506, 1, NOW, NOW, 1800, ok=1506, bad=1882, bad_at=NOW, checked_at=NOW)
+    await store.save_limiter_state(
+        "default",
+        LimiterState(
+            2.0, NOW.astimezone().date(), 0, lanes=(LaneState("forward", run.dst_id, 2.0, budget),)
+        ),
+    )
+
+    report = await build_report(store, run, now=clock.now, daily_cap=5000)
+
+    (info,) = report.budgets
+    assert (info.ok, info.bad, info.checked_at) == (1506, 1882, NOW)
+
+
+async def test_the_budget_status_shows_has_grown_by_the_clock_up_to_95_percent_of_bad(
+    clocked: tuple[Store, Clock],
+) -> None:
+    store, clock = clocked
+    run = (await store.start_run(pair_spec(total_items=100))).run
+    budget = LaneBudget(1506, 1, NOW, NOW, 1800, ok=1506, bad=1882, bad_at=NOW, checked_at=NOW)
+    await store.save_limiter_state(
+        "default",
+        LimiterState(
+            2.0, NOW.astimezone().date(), 0, lanes=(LaneState("forward", run.dst_id, 2.0, budget),)
+        ),
+    )
+
+    clock.now = NOW + timedelta(days=1, hours=1)
+    after_a_day = await build_report(store, run, now=clock.now, daily_cap=5000)
+    clock.now = NOW + timedelta(days=6)
+    after_six = await build_report(store, run, now=clock.now, daily_cap=5000)
+    clock.now = NOW + timedelta(days=6)
+    expired = await build_report(
+        store, run, now=clock.now, daily_cap=5000, bad_ttl=timedelta(days=2)
+    )
+
+    assert after_a_day.budgets[0].amount == 1657  # +10%
+    assert after_six.budgets[0].amount == 1787  # 95% of 1882: the clock never goes past it
+    assert expired.budgets[0].amount == 1506  # bad is too old to bound anything: no growth at all
 
 
 async def test_without_a_learned_budget_the_report_estimates_no_days_of_rest(
@@ -357,7 +409,7 @@ async def test_without_a_learned_budget_the_report_estimates_no_days_of_rest(
     report = await build_report(store, run, now=clock.now, daily_cap=5000)
 
     assert report.left is not None and report.left > 5000  # more than daily_cap, which only warns
-    assert report.cap_days == 0 and report.budgets == ()
+    assert report.cap_rest_hours == 0 and report.budgets == ()
 
 
 async def test_a_budget_of_another_destination_is_not_this_runs(
@@ -372,7 +424,7 @@ async def test_a_budget_of_another_destination_is_not_this_runs(
 
     report = await build_report(store, run, now=clock.now, daily_cap=5000)
 
-    assert report.budgets == () and report.cap_days == 0
+    assert report.budgets == () and report.cap_rest_hours == 0
 
 
 async def test_a_finished_run_has_nothing_left_to_cost_days(clocked: tuple[Store, Clock]) -> None:
@@ -384,7 +436,7 @@ async def test_a_finished_run_has_nothing_left_to_cost_days(clocked: tuple[Store
 
     report = await build_report(store, finished, now=clock.now, daily_cap=5000)
 
-    assert report.cap_days == 0  # it is not going to run again by itself
+    assert report.cap_rest_hours == 0  # it is not going to run again by itself
 
 
 async def test_the_total_is_recorded_on_the_run_and_stays_off_the_pairs_memory(
@@ -427,15 +479,18 @@ async def test_what_was_sent_more_than_a_day_ago_is_not_in_the_window(
 ) -> None:
     store, clock = clocked
     run = (await store.start_run(pair_spec())).run
-    old = int((clock.now - timedelta(hours=26)).timestamp() // 3600)
-    recent = int((clock.now - timedelta(hours=2)).timestamp() // 3600)
+    old = int((clock.now - timedelta(hours=26)).timestamp() // 300)
+    recent = int((clock.now - timedelta(hours=2)).timestamp() // 300)
     await store.save_limiter_state(
         "default",
         LimiterState(
             3.0,
             clock.now.astimezone().date(),
             0,
-            hours=(SentHour("forward", run.dst_id, old, 4999), SentHour("send", 9, recent, 7)),
+            buckets=(
+                SentBucket("forward", run.dst_id, old, 4999),
+                SentBucket("send", 9, recent, 7),
+            ),
         ),
     )
 

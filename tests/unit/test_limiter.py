@@ -11,8 +11,11 @@ from tgmirror.core.limiter import (
     DECAY_AFTER,
     FLOOD_WINDOW,
     MIN_BUDGET,
+    LaneBudget,
+    LaneState,
     Limiter,
     LimiterState,
+    grow_budget,
 )
 
 
@@ -298,8 +301,115 @@ async def test_the_budget_grows_ten_percent_for_every_day_without_a_long_flood()
     clock.advance(hours=2)  # a whole day since
     assert limiter.budget_of("forward", 7).amount == 88  # type: ignore[union-attr]
 
-    clock.advance(days=1)
-    assert limiter.budget_of("forward", 7).amount == 97  # type: ignore[union-attr]
+    clock.advance(days=1)  # 97 would pass 95% of the 100 that drew the flood: it stops there
+    assert limiter.budget_of("forward", 7).amount == 95  # type: ignore[union-attr]
+
+
+async def test_growth_by_the_clock_stops_at_95_percent_of_bad_and_stays_there() -> None:
+    limiter, _, clock = make()
+    await put(limiter, 1000)
+    limiter.on_flood("forward", 7, seconds=3600)  # 800 per hour; 1000 drew the flood
+    budget = limiter.budget_of("forward", 7)
+    assert budget is not None and (budget.amount, budget.bad) == (800, 1000)
+
+    for _ in range(10):  # ten days: 800 * 1.1**10 would be 2075
+        clock.advance(days=1)
+        grown = limiter.budget_of("forward", 7)
+        assert grown is not None and grown.amount <= 950
+
+    assert grown is not None and grown.amount == 950 and grown.bad == 1000
+
+
+async def test_a_bad_older_than_probe_after_hours_no_longer_lets_the_budget_grow() -> None:
+    limiter, _, clock = make(Limits(jitter=0.0, probe_after_hours=24))
+    await put(limiter, 1000)
+    limiter.on_flood("forward", 7, seconds=3600)  # 800; the day's growth would be 880
+
+    clock.advance(days=2)  # ``bad`` is two days old, past the 24 hours it bounds growth for
+
+    budget = limiter.budget_of("forward", 7)
+    assert budget is not None and budget.amount == 800  # held where it was: not lowered, not grown
+
+
+def test_a_budget_with_no_bad_does_not_grow() -> None:
+    now = datetime(2026, 3, 10, 12, 0).astimezone()
+    budget = LaneBudget(100, 1, now, now, 3600)
+
+    assert grow_budget(budget, now + timedelta(days=5)) == budget
+
+
+def test_a_budget_already_past_its_ceiling_is_never_lowered() -> None:
+    now = datetime(2026, 3, 10, 12, 0).astimezone()
+    budget = LaneBudget(99, 1, now, now, 3600, bad=100, bad_at=now)
+
+    assert grow_budget(budget, now + timedelta(days=3)).amount == 99
+
+
+def _lane_with(budget: LaneBudget, clock: FakeClock) -> Limiter:
+    state = LimiterState(2.0, clock().date(), 0, (LaneState("forward", 7, 2.0, budget),))
+    limiter, _, _ = make(state=state, clock=clock)
+    return limiter
+
+
+async def test_a_flood_above_ok_goes_back_to_ok_instead_of_halving() -> None:
+    clock = FakeClock()
+    now = clock()
+    limiter = _lane_with(LaneBudget(88, 1, now, now, 3600, ok=80, bad=120, bad_at=now), clock)
+    await put(limiter, 90)  # the lane ran 90 into ground that no run proved clean
+
+    cut = limiter.on_flood("forward", 7, seconds=3600)
+
+    assert cut is not None
+    assert (cut.amount, cut.ok, cut.bad, cut.probe_fails) == (80, 80, 90, 1)
+    assert cut.checked_at == clock()
+
+
+async def test_a_flood_at_or_below_ok_halves_the_budget_and_forgets_ok() -> None:
+    clock = FakeClock()
+    now = clock()
+    limiter = _lane_with(LaneBudget(80, 1, now, now, 3600, ok=80, bad=120, bad_at=now), clock)
+    await put(limiter, 100)
+
+    cut = limiter.on_flood("forward", 7, seconds=3600)
+
+    assert cut is not None
+    assert (cut.amount, cut.ok, cut.bad, cut.probe_fails) == (40, None, 100, 0)
+
+
+async def test_bad_keeps_the_lowest_amount_that_ever_drew_a_flood() -> None:
+    clock = FakeClock()
+    now = clock()
+    limiter = _lane_with(LaneBudget(80, 1, now, now, 3600, bad=70, bad_at=now), clock)
+    await put(limiter, 100)
+
+    cut = limiter.on_flood("forward", 7, seconds=3600)
+
+    assert cut is not None and cut.bad == 70
+
+
+async def test_forgetting_budgets_clears_only_the_lanes_of_that_destination() -> None:
+    clock = FakeClock()
+    now = clock()
+    budget = LaneBudget(80, 1, now, now, 3600, ok=80, bad=100, bad_at=now)
+    state = LimiterState(
+        3.0,
+        clock().date(),
+        0,
+        (
+            LaneState("forward", 7, 3.0, budget),
+            LaneState("send", 7, 3.0, budget),
+            LaneState("forward", 8, 3.0, budget),
+        ),
+    )
+    limiter, _, _ = make(state=state, clock=clock)
+
+    assert limiter.forget_budgets(7) == 2
+
+    assert limiter.budget_of("forward", 7) is None and limiter.budget_of("send", 7) is None
+    assert limiter.budget_of("forward", 8) == budget
+    assert limiter.delay_of("forward", 7) == 3.0  # the pace it learned stays
+    limiter.check_budget(10_000, "forward", 7)  # nothing stops a lane that learned nothing yet
+    assert limiter.forget_budgets() == 1
 
 
 async def test_a_budget_survives_a_restart() -> None:
@@ -555,7 +665,7 @@ async def test_slow_mode_counts_the_time_already_spent_uploading() -> None:
     assert sleeps.calls == [18.0]  # 30 s between the posts, 12 of them spent already
 
 
-async def test_messages_sent_are_counted_per_lane_in_hourly_buckets() -> None:
+async def test_messages_sent_are_counted_per_lane_in_five_minute_buckets() -> None:
     limiter, _, clock = make(clock=FakeClock(datetime(2026, 3, 10, 12, 0).astimezone()))
     limiter.on_success(5, "forward", 7)
     clock.advance(minutes=30)
@@ -571,7 +681,7 @@ async def test_messages_sent_are_counted_per_lane_in_hourly_buckets() -> None:
 
     clock.advance(hours=23)
     assert limiter.sent_in("forward", 7, 24) == 0
-    assert limiter.state.hours == ()  # the old buckets are dropped
+    assert limiter.state.buckets == ()  # the old buckets are dropped
 
 
 async def test_lanes_and_buckets_survive_a_restart() -> None:
@@ -585,7 +695,7 @@ async def test_lanes_and_buckets_survive_a_restart() -> None:
     assert second.delay_of("forward", 7) == 4.0
     assert second.delay_of("send", 7) == 2.0  # a lane with no row of its own: the base delay
     assert second.sent_in("forward", 7, 1) == 4
-    assert second.state.lanes == saved.lanes and second.state.hours == saved.hours
+    assert second.state.lanes == saved.lanes and second.state.buckets == saved.buckets
 
 
 async def test_a_database_from_before_the_lanes_seeds_every_lane_with_its_one_delay() -> None:
@@ -594,3 +704,38 @@ async def test_a_database_from_before_the_lanes_seeds_every_lane_with_its_one_de
     limiter, _, _ = make(state=old, clock=FakeClock(datetime(2026, 3, 10, 12, 0).astimezone()))
 
     assert limiter.delay_of("forward", 7) == limiter.delay_of("send", 9) == 8.0
+
+
+async def test_a_one_hour_window_lets_go_within_five_minutes_of_the_hour_not_of_the_next_one() -> (
+    None
+):
+    """The run of 2026-10-17: it stopped at 02:32 on a budget of 1506 per hour, having started at
+    02:15, and the hourly buckets made it wait until 04:00 (1 h 45 min) instead of about 03:20."""
+    limiter, _, clock = make(clock=FakeClock(datetime(2026, 10, 17, 2, 15).astimezone()))
+    limiter.on_flood("forward", 7, seconds=3600)  # no history: the floor of 20 per hour
+    limiter._budgets[("forward", 7)] = LaneBudget(
+        1506, 1, clock(), clock(), 1737
+    )  # what the real flood taught
+    for _ in range(17):  # 17 minutes of sending, 90 messages a minute: five-minute buckets fill
+        limiter.on_success(90, "forward", 7)
+        clock.advance(minutes=1)
+    clock.now = datetime(2026, 10, 17, 2, 32).astimezone()
+
+    with pytest.raises(BudgetReached) as stop:
+        await limiter.acquire(20, action="forward", dst=7)
+
+    wait = stop.value.resume_at - clock()
+    assert (
+        timedelta(minutes=30) < wait <= timedelta(hours=1)
+    )  # not the 1 h 28 min of hourly buckets
+    clock.now = stop.value.resume_at
+    await limiter.acquire(20, action="forward", dst=7)  # and then it really fits
+
+
+async def test_a_message_leaves_the_window_at_most_five_minutes_after_the_hour_is_up() -> None:
+    limiter, _, clock = make(clock=FakeClock(datetime(2026, 10, 17, 3, 2).astimezone()))
+    limiter.on_success(10, "send", 7)
+    clock.advance(minutes=50)
+    assert limiter.sent_in("send", 7, 1) == 10  # the bucket (03:00-03:05) is wholly inside
+    clock.advance(minutes=16)  # 66 minutes: past the bucket plus its five minutes
+    assert limiter.sent_in("send", 7, 1) == 0

@@ -19,6 +19,7 @@ from tgmirror.cli.commands import (
     doctor,
     history,
     inspect,
+    limits,
     restore,
     retry,
     run,
@@ -133,5 +134,6 @@ app.command("history")(history.history)
 app.command("retry")(retry.retry)
 app.command("status")(status.status)
 app.add_typer(config.config_app, name="config")
+app.add_typer(limits.limits_app, name="limits")
 app.command("doctor")(doctor.doctor)
 app.add_typer(appdata.appdata_app, name="appdata")

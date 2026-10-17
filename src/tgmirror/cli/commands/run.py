@@ -65,6 +65,15 @@ def run_clone(
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="With --fresh: do not ask for confirmation.")
     ] = False,
+    reset_limits: Annotated[
+        bool,
+        typer.Option(
+            "--reset-limits",
+            help="Forget the limits the write lanes into the destination learned from "
+            "Telegram's long waits (budget, where it was blocked, where it ran clean) before "
+            "this run: nothing stops them until their next long wait. Only this run.",
+        ),
+    ] = False,
     wait: Annotated[
         bool,
         typer.Option(
@@ -116,6 +125,7 @@ def run_clone(
                 fresh=fresh,
                 yes=yes,
                 from_backup=str(from_backup) if from_backup is not None else None,
+                reset_limits=reset_limits,
             )
             if isinstance(result, ResumeElsewhere):
                 typer.echo(t("run.resumed_elsewhere", id=result.run_id))
@@ -167,6 +177,7 @@ async def resume_flow(
     fresh: bool = False,
     yes: bool = False,
     from_backup: str | None = None,
+    reset_limits: bool = False,
 ) -> ReadyToRun | ResumeElsewhere:
     """Everything ``tgmirror run``/the menu's "Chạy tiếp" does before ``execute()``: which pair,
     whether it is already live elsewhere, and the ``RunRequest`` to start.
@@ -201,6 +212,7 @@ async def resume_flow(
         pushdown=target.options.pushdown,
         force=force_takeover,
         fresh=fresh,
+        reset_limits=reset_limits,
         caption=target.options.caption,
         caption_text=target.options.caption_text,
         reset_polls=target.options.reset_polls,

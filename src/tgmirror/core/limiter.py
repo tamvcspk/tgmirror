@@ -9,10 +9,15 @@ others. A destination with slow mode never gets a post faster than its ``slowmod
 ten minutes also halve the batch size and raise the floor of the delay until ten quiet minutes
 have passed.
 
-Messages sent are counted per write lane in hourly buckets (a sliding window, not a calendar
-day). A FloodWait longer than ``short_flood`` seconds is a quota, not a burst (phase 19d2): it does
-not double the delay but sets the lane's *budget* (80% of what the lane sent in the window it
-names) or, if it has one, halves it; every 24 hours without such a flood the budget grows by 10%.
+Messages sent are counted per write lane in five-minute buckets (a sliding window, not a calendar
+day: a window lets go of its oldest messages at most five minutes late). A FloodWait longer
+than ``short_flood`` seconds is a quota, not a burst (phase 19d2): it does not double the
+delay but sets the lane's *budget* (80% of what the lane sent in the window it
+names) or, if it has one, halves it. Phase 19d4: a budget also remembers both sides of what was
+learned, ``bad`` (the fewest messages per window that ever drew a long flood) and ``ok`` (the most
+that ran clean). Every 24 hours without a long flood the budget grows by 10%, but never past 95%
+of ``bad``, and it stops growing once ``bad`` is older than ``probe_after_hours``; a flood met
+above ``ok`` (ground nobody proved) sends the budget back to ``ok`` instead of halving it.
 A lane with no budget is never stopped by one. A write that would pass the budget raises
 ``BudgetReached`` with the time the window lets enough go. ``daily_cap`` only warns
 (``cap_warning``): it never stops anything.
@@ -28,7 +33,7 @@ The numbers are conservative starting points, not documented Telegram limits.
 import random
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
@@ -40,7 +45,9 @@ FORWARD, SEND, HISTORY, FILE = "forward", "send", "history", "file"
 WRITE_ACTIONS = (FORWARD, SEND)
 READ_ACTIONS = (HISTORY, FILE)
 HOUR = 3600
-KEPT_HOURS = 24  # buckets older than this are dropped: the longest window anything asks about
+BUCKET = 300  # seconds one sent-bucket covers: how late a window can let go of a message
+BUCKETS_PER_HOUR = HOUR // BUCKET
+KEPT_BUCKETS = 24 * BUCKETS_PER_HOUR  # older buckets are dropped: the longest window asked about
 Lane = tuple[str, int]  # (action, destination); reads use destination 0
 Sleep = Callable[[float], Awaitable[None]]
 Clock = Callable[[], datetime]
@@ -56,6 +63,8 @@ CUT_TO = 0.8  # a first long flood: budget = this share of what the lane sent in
 HALVE = 0.5  # a long flood on a lane that has a budget
 GROW = 1.1  # per GROW_EVERY without a long flood
 GROW_EVERY = timedelta(hours=24)
+BAD_CEILING = 0.95  # growth by the clock never passes this share of ``bad``
+BAD_TTL = timedelta(hours=168)  # how long ``bad`` bounds growth (``probe_after_hours`` default)
 MIN_BUDGET = 20  # messages: a budget never falls below this
 SHORT_WINDOW_LIMIT = 3600  # a wait up to this many seconds names the 1-hour window, else 24 hours
 
@@ -73,6 +82,12 @@ class LaneBudget:
     since: datetime  # the last cut or growth: the clock the 24-hour growth counts from
     flood_at: datetime  # the long flood that set it, or last cut it
     flood_seconds: int  # ... and how long Telegram asked us to wait
+    # Phase 19d4 (migration 7). ``None``: not known.
+    ok: int | None = None  # the most a window ran clean while the budget held the lane
+    bad: int | None = None  # the fewest messages in a window that drew a long flood ...
+    bad_at: datetime | None = None  # ... and when it last did
+    checked_at: datetime | None = None  # the last time the limit was put to the test
+    probe_fails: int = 0  # probes that met a flood (nothing probes yet: it stays 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,66 +101,77 @@ class LaneState:
 
 
 @dataclass(frozen=True, slots=True)
-class SentHour:
-    """Messages one write lane sent in one UTC hour (table ``sent_hours``)."""
+class SentBucket:
+    """Messages one write lane sent in one five-minute bucket (table ``sent_buckets``)."""
 
     action: str
     dst: int
-    hour: int  # unix time // 3600
+    bucket: int  # unix time // BUCKET
     sent: int
 
 
 @dataclass(frozen=True, slots=True)
 class LimiterState:
-    """What survives a restart (tables ``limiter_state``, ``limiter_lanes``, ``sent_hours``)."""
+    """What survives a restart (tables ``limiter_state``, ``limiter_lanes``, ``sent_buckets``)."""
 
     delay: float  # the highest write-lane delay: what ``status`` calls "the delay"
     day: date  # the local day ``sent_today`` belongs to
     sent_today: int
     lanes: tuple[LaneState, ...] = ()
-    hours: tuple[SentHour, ...] = ()
+    buckets: tuple[SentBucket, ...] = ()
 
 
-def grow_budget(budget: LaneBudget, now: datetime) -> LaneBudget:
-    """``budget`` after 10% growth for each full day since it last changed (a pure function: the
-    limiter and ``status`` both read a budget through it)."""
+def growth_ceiling(budget: LaneBudget, now: datetime, bad_ttl: timedelta) -> int | None:
+    """How far the clock may grow ``budget``: 95% of ``bad``, or ``None`` (it may not grow at all)
+    when no ``bad`` is known or the one known is older than ``bad_ttl`` and no longer a bound."""
+    if budget.bad is None:
+        return None
+    if budget.bad_at is not None and now - budget.bad_at > bad_ttl:
+        return None
+    return int(budget.bad * BAD_CEILING)
+
+
+def grow_budget(budget: LaneBudget, now: datetime, bad_ttl: timedelta = BAD_TTL) -> LaneBudget:
+    """``budget`` after 10% growth for each full day since it last changed, up to ``growth_ceiling``
+    (a pure function: the limiter and ``status`` both read a budget through it). It never shrinks
+    a budget: one already at or past the ceiling stays as it is."""
     days = (now - budget.since) // GROW_EVERY
     if days <= 0:
         return budget
-    return LaneBudget(
-        max(round(budget.amount * GROW**days), MIN_BUDGET),
-        budget.window_hours,
-        budget.since + days * GROW_EVERY,
-        budget.flood_at,
-        budget.flood_seconds,
-    )
+    ceiling = growth_ceiling(budget, now, bad_ttl)
+    if ceiling is None:
+        return budget
+    grown = min(max(round(budget.amount * GROW**days), MIN_BUDGET), ceiling)
+    return replace(budget, amount=max(budget.amount, grown), since=budget.since + days * GROW_EVERY)
 
 
 def window_sent(
-    hours: Iterable[SentHour],
+    buckets: Iterable[SentBucket],
     now: datetime,
     window: int,
     *,
     action: str | None = None,
     dst: int | None = None,
 ) -> int:
-    """Messages in the hourly buckets of the last ``window`` hours before ``now``.
+    """Messages in the five-minute buckets of the last ``window`` hours before ``now``.
 
-    The current bucket and the ``window - 1`` before it count in full, the one before those by
-    the share of its hour still inside the window: a sliding window made from buckets, exact
-    enough for a budget and for the flood log. ``action``/``dst`` pick one lane (default: all)."""
+    The current bucket and the ones before it that still lie wholly inside the window count in
+    full, the one before those by the share of it still inside: a sliding window made from
+    buckets, exact enough for a budget and for the flood log. ``action``/``dst`` pick one lane
+    (default: all)."""
     stamp = now.timestamp()
-    current = int(stamp // HOUR)
-    elapsed = (stamp % HOUR) / HOUR
+    current = int(stamp // BUCKET)
+    elapsed = (stamp % BUCKET) / BUCKET
+    span = window * BUCKETS_PER_HOUR
     total = 0.0
-    for h in hours:
-        if (action is not None and h.action != action) or (dst is not None and h.dst != dst):
+    for b in buckets:
+        if (action is not None and b.action != action) or (dst is not None and b.dst != dst):
             continue
-        age = current - h.hour
-        if 0 <= age < window:
-            total += h.sent
-        elif age == window:
-            total += h.sent * (1 - elapsed)
+        age = current - b.bucket
+        if 0 <= age < span:
+            total += b.sent
+        elif age == span:
+            total += b.sent * (1 - elapsed)
     return round(total)
 
 
@@ -177,8 +203,8 @@ class Limiter:
             if lane.budget is not None
         }
         self._cap_level = 0  # 0: no cap warning yet in this run, 1: warned at 1x, 2: at 2x
-        self._hours: dict[tuple[str, int, int], int] = {
-            (h.action, h.dst, h.hour): h.sent for h in (state.hours if state else ())
+        self._buckets: dict[tuple[str, int, int], int] = {
+            (b.action, b.dst, b.bucket): b.sent for b in (state.buckets if state else ())
         }
         self._day = state.day if state else self._today()
         self._sent_today = state.sent_today if state else 0
@@ -213,7 +239,7 @@ class Limiter:
         """Messages a write lane sent in roughly the last ``hours`` hours (the oldest bucket counts
         by the share of it still inside the window)."""
         return window_sent(
-            (SentHour(a, d, h, n) for (a, d, h), n in self._hours.items()),
+            (SentBucket(a, d, b, n) for (a, d, b), n in self._buckets.items()),
             self._clock(),
             hours,
             action=action,
@@ -223,7 +249,7 @@ class Limiter:
     def sent_total(self, hours: int = 24) -> int:
         """Messages every write lane of the account sent in roughly the last ``hours`` hours."""
         return window_sent(
-            (SentHour(a, d, h, n) for (a, d, h), n in self._hours.items()), self._clock(), hours
+            (SentBucket(a, d, b, n) for (a, d, b), n in self._buckets.items()), self._clock(), hours
         )
 
     def budget_of(self, action: str, dst: int = 0) -> LaneBudget | None:
@@ -232,9 +258,18 @@ class Limiter:
         budget = self._budgets.get(lane)
         if budget is None:
             return None
-        grown = grow_budget(budget, self._clock())
+        grown = grow_budget(budget, self._clock(), timedelta(hours=self._limits.probe_after_hours))
         self._budgets[lane] = grown
         return grown
+
+    def forget_budgets(self, dst: int | None = None) -> int:
+        """Forget what the write lanes of ``dst`` (every destination: ``None``) learned about
+        their limits, so each is "not learned yet" again: nothing stops it until its next long
+        flood. Delays stay. Returns how many lanes had a budget."""
+        gone = [lane for lane in self._budgets if dst is None or lane[1] == dst]
+        for lane in gone:
+            del self._budgets[lane]
+        return len(gone)
 
     def budgets_for(self, dst: int) -> list[tuple[str, LaneBudget, int]]:
         """``(action, budget, sent in its window)`` of every write lane of ``dst`` that has one."""
@@ -264,14 +299,14 @@ class Limiter:
     @property
     def state(self) -> LimiterState:
         self._rollover()
-        self._prune_hours()
+        self._prune_buckets()
         keys = sorted(set(self._lanes) | set(self._budgets))
         lanes = tuple(
             LaneState(a, d, self._lanes.get((a, d), self._start), self._budgets.get((a, d)))
             for a, d in keys
         )
-        hours = tuple(SentHour(a, d, h, n) for (a, d, h), n in sorted(self._hours.items()))
-        return LimiterState(self.delay, self._day, self._sent_today, lanes, hours)
+        buckets = tuple(SentBucket(a, d, b, n) for (a, d, b), n in sorted(self._buckets.items()))
+        return LimiterState(self.delay, self._day, self._sent_today, lanes, buckets)
 
     def batch_size(self, requested: int) -> int:
         """The batch size to use now: ``requested`` halved once per active throttle step."""
@@ -350,8 +385,8 @@ class Limiter:
         action = action or SEND
         self._sent_today += cost
         self._since_long_pause += cost
-        hour = (action, dst, int(self._clock().timestamp() // HOUR))
-        self._hours[hour] = self._hours.get(hour, 0) + cost
+        bucket = (action, dst, int(self._clock().timestamp() // BUCKET))
+        self._buckets[bucket] = self._buckets.get(bucket, 0) + cost
         self._success(self._lane(action, dst))
 
     def on_read_success(self, action: str | None = None) -> None:
@@ -400,14 +435,40 @@ class Limiter:
         return (action, dst if action in WRITE_ACTIONS else 0)
 
     def _cut_budget(self, lane: Lane, seconds: int, now: datetime) -> LaneBudget:
-        """Set the budget of a lane that has none, or halve the one it has."""
+        """A long flood on a write lane: set its budget, halve the one it has, or — when the budget
+        had grown past ``ok``, into ground no run proved — go back to ``ok`` (a probe that
+        failed: we learned where the limit is, not that it got worse). ``bad`` becomes what the
+        lane had sent when Telegram pushed back (the lower of that and the old ``bad``)."""
         existing = self.budget_of(*lane)
+        window = (
+            existing.window_hours
+            if existing is not None
+            else 1
+            if seconds <= SHORT_WINDOW_LIMIT
+            else 24
+        )
+        sent = self.sent_in(lane[0], lane[1], window)
+        ok: int | None = None
+        fails = 0
         if existing is None:
-            window = 1 if seconds <= SHORT_WINDOW_LIMIT else 24
-            amount = round(self.sent_in(lane[0], lane[1], window) * CUT_TO)
+            amount = round(sent * CUT_TO)
+        elif existing.ok is not None and existing.amount > existing.ok:
+            amount, ok, fails = existing.ok, existing.ok, existing.probe_fails + 1
         else:
-            window, amount = existing.window_hours, round(existing.amount * HALVE)
-        budget = LaneBudget(max(amount, MIN_BUDGET), window, now, now, seconds)
+            amount, fails = round(existing.amount * HALVE), existing.probe_fails
+        known = [n for n in (existing.bad if existing else None, sent or None) if n is not None]
+        budget = LaneBudget(
+            max(amount, MIN_BUDGET),
+            window,
+            now,
+            now,
+            seconds,
+            ok=ok,
+            bad=min(known, default=None),
+            bad_at=now,
+            checked_at=now,
+            probe_fails=fails,
+        )
         self._budgets[lane] = budget
         return budget
 
@@ -415,21 +476,23 @@ class Limiter:
         self, action: str, dst: int, budget: LaneBudget, used: int, cost: int
     ) -> datetime:
         """When the window has let go of enough messages for ``cost`` more to fit: the end of the
-        window of the oldest hour bucket whose release makes room (a bucket counts in full until
-        the whole of its hour has left the window, so this is never early)."""
-        current = int(self._clock().timestamp() // HOUR)
+        window of the oldest bucket whose release makes room (a bucket counts in full until the
+        whole of its five minutes has left the window, so this is never early, and at most five
+        minutes late)."""
+        current = int(self._clock().timestamp() // BUCKET)
+        span = budget.window_hours * BUCKETS_PER_HOUR
         mine = sorted(
-            (hour, sent)
-            for (a, d, hour), sent in self._hours.items()
-            if a == action and d == dst and current - hour <= budget.window_hours
+            (bucket, sent)
+            for (a, d, bucket), sent in self._buckets.items()
+            if a == action and d == dst and current - bucket <= span
         )
         left, expiry = used, current + 1
-        for hour, sent in mine:
+        for bucket, sent in mine:
             left -= sent
-            expiry = hour + budget.window_hours + 1
+            expiry = bucket + span + 1
             if left + cost <= budget.amount:
                 break
-        return datetime.fromtimestamp(expiry * HOUR, UTC).astimezone()
+        return datetime.fromtimestamp(expiry * BUCKET, UTC).astimezone()
 
     def _bounded(self, delay: float) -> float:
         lim = self._limits  # the config may have changed since the delay was saved
@@ -444,10 +507,10 @@ class Limiter:
             )
         self._successes[lane] = count
 
-    def _prune_hours(self) -> None:
-        current = int(self._clock().timestamp() // HOUR)
-        for key in [k for k in self._hours if current - k[2] > KEPT_HOURS]:
-            del self._hours[key]
+    def _prune_buckets(self) -> None:
+        current = int(self._clock().timestamp() // BUCKET)
+        for key in [k for k in self._buckets if current - k[2] > KEPT_BUCKETS]:
+            del self._buckets[key]
 
     def _jitter(self) -> float:
         j = self._limits.jitter

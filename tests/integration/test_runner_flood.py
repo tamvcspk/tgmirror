@@ -407,9 +407,13 @@ async def test_a_short_flood_sets_no_budget_and_a_long_one_sets_the_lanes_alone(
         ("forward", rig.dst.id, 20, 24)
     ]
     assert query(rig, "SELECT delay_ms FROM limiter_state") == [(2000,)]  # the delay did not double
+    # ... and it remembers where it was blocked (the 20 it had sent); nothing has run clean yet
+    assert query(
+        rig, "SELECT bad_amount, ok_amount, probe_fails, checked_at IS NOT NULL FROM limiter_lanes"
+    ) == [(20, None, 0, 1)]
     assert (
         "budget_learned",
-        {"action": "forward", "budget": 20, "window": 24, "seconds": 7200},
+        {"action": "forward", "budget": 20, "window": 24, "seconds": 7200, "bad": 20},
     ) in (rig.recorder.notices)
 
 

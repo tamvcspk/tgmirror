@@ -10,7 +10,7 @@ is ever live at once in practice); at rest, whichever is newer wins.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
 import typer
@@ -51,7 +51,9 @@ def status(
             if target is None:
                 raise RunNotFound(None)
             now = utc_now()
-            daily_cap = rt.config().limits.daily_cap
+            limits = rt.config().limits
+            daily_cap = limits.daily_cap
+            bad_ttl = timedelta(hours=limits.probe_after_hours)
             if isinstance(target, Backup):
                 backup_report = await build_backup_report(
                     store, target, now=now, daily_cap=daily_cap
@@ -62,7 +64,9 @@ def status(
                     else _backup_text(backup_report)
                 )
             else:
-                report = await build_report(store, target, now=now, daily_cap=daily_cap)
+                report = await build_report(
+                    store, target, now=now, daily_cap=daily_cap, bad_ttl=bad_ttl
+                )
                 out = (
                     json.dumps(_record(report), ensure_ascii=False, indent=2)
                     if as_json
@@ -200,7 +204,8 @@ def _record(report: StatusReport) -> dict[str, object]:
         "total_items": run_.options.total_items or None,
         "handled": run_.handled,
         "left": report.left,
-        "cap_rest_days": report.cap_days,
+        "cap_rest_hours": report.cap_rest_hours,
+        "cap_rest_days": -(-report.cap_rest_hours // 24),
         "limiter": None
         if report.delay is None
         else {
@@ -215,6 +220,9 @@ def _record(report: StatusReport) -> dict[str, object]:
                     "sent": b.sent,
                     "flood_seconds": b.flood_seconds,
                     "flood_at": b.flood_at.isoformat(),
+                    "ok": b.ok,
+                    "bad": b.bad,
+                    "checked_at": b.checked_at.isoformat() if b.checked_at else None,
                 }
                 for b in report.budgets
             ],

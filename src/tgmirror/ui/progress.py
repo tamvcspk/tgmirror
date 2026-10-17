@@ -17,6 +17,7 @@ from tgmirror.core.gateway import TransferPhase
 from tgmirror.engine.transfer import Transfer
 from tgmirror.store.backups import Backup
 from tgmirror.store.runs import Run
+from tgmirror.ui.lines import rest_phrase
 from tgmirror.ui.messages import t
 
 STEP = 5  # percent a transfer must have advanced before its next line...
@@ -156,7 +157,10 @@ class LineReporter:
         self._transfer_lines = TransferLines(emit, interval=interval, clock=clock)
 
     def notice(self, code: str, **params: object) -> None:
-        self._emit(t(f"run.{code}", **{k: _plain(v) for k, v in params.items()}))
+        plain = {k: _plain(v) for k, v in params.items()}
+        if code == "cap_rest":  # the rest is told in the unit that fits it: hours, or whole days
+            plain["rest"] = rest_phrase(int(params["hours"]))  # type: ignore[call-overload]
+        self._emit(t(f"run.{code}", **plain))
 
     def progress(self, run: Run) -> None:
         now = self._clock()

@@ -566,17 +566,23 @@ VI: dict[str, str] = {
     "run.analyzed": (
         "Ước tính: tối đa {total} tin cần xem xét (số đếm của Telegram, chưa trừ filter)."
     ),
-    "run.cap_days": (
+    "run.cap_rest": (
         "Ngân sách học được {budget} tin/{window} giờ: với {total} tin, cần nghỉ thêm khoảng "
-        "{days} ngày trước khi xong (xem docs/05-chong-flood.md)."
+        "{rest} trước khi xong (xem docs/05-chong-flood.md)."
     ),
+    "rest.hours": "{n} giờ",
+    "rest.days": "{n} ngày",
     "run.cap_warning": (
         "Đã gửi {sent} tin trong 24 giờ qua, vượt ngưỡng nhắc daily_cap ({cap}). Chỉ là nhắc: "
         "chỉ ngân sách học được từ flood dài của Telegram mới dừng lần chạy."
     ),
     "run.budget_learned": (
         "Telegram bắt chờ {seconds}s: ngân sách của làn {action} giờ là {budget} tin/{window} giờ "
-        "(tăng dần 10% mỗi 24 giờ không bị chặn)."
+        "(tăng dần 10% mỗi 24 giờ không bị chặn, không quá 95% của {bad} tin đã bị chặn)."
+    ),
+    "run.limits_reset": (
+        "--reset-limits: đã quên giới hạn học được của {count} làn ghi vào đích này; không gì chặn "
+        "chúng cho tới flood dài kế tiếp."
     ),
     "run.progress_total": (
         "Lần chạy {id}: {handled}/{total} tin (~{percent}%): {done} đã sao chép, "
@@ -612,7 +618,7 @@ VI: dict[str, str] = {
     "status.line_progress_items": ("Tiến độ:     ~{percent}% ({handled} / tối đa {total} tin)"),
     "status.line_cap": (
         "Ngân sách:   còn tối đa {left} tin, ngân sách {cap} tin/{window} giờ: cần nghỉ thêm "
-        "khoảng {days} ngày"
+        "khoảng {rest}"
     ),
     "status.line_budget": (
         "Ngân sách:   {action}: {budget} tin/{window} giờ (đã gửi {sent}); đặt sau flood "
@@ -620,6 +626,40 @@ VI: dict[str, str] = {
     ),
     "status.line_budget_none": (
         "Ngân sách:   chưa học (chưa gặp flood dài nào; chỉ pacing và FloodWait giới hạn)"
+    ),
+    "status.line_bounds": (
+        "Giới hạn:    {action}: bị chặn ở {bad} tin, chạy sạch tới {ok}; kiểm chứng lần cuối {at}"
+    ),
+    "limits.none": "Chưa có làn ghi nào được ghi nhận (chưa có lần chạy nào gửi tin).",
+    "limits.dest": "Đích {dst} ({title})",
+    "limits.dest_unknown": "Đích {dst}",
+    "limits.lane_learned": (
+        "  {action}: {budget} tin/{window} giờ (đã gửi {sent}); bị chặn ở {bad}, chạy sạch tới "
+        "{ok}; flood {seconds}s lúc {flood_at}; kiểm chứng lần cuối {checked}; nhịp {delay}s"
+    ),
+    "limits.lane_unlearned": (
+        "  {action}: chưa học giới hạn (đã gửi {sent} trong 24 giờ; chỉ nhịp {delay}s và "
+        "FloodWait giới hạn)"
+    ),
+    "limits.reset_done": (
+        "Đã quên giới hạn của {count} làn ghi {where}. Nhịp đã học được giữ nguyên."
+    ),
+    "limits.reset_none": "Không có làn ghi nào đã học giới hạn {where}.",
+    "limits.where_dst": "vào {dst}",
+    "limits.where_all": "(mọi đích)",
+    "limits.unknown": "-",
+    "err.limits_reset_target": (
+        "Cho biết đích cần quên giới hạn: --dst ĐÍCH (id hoặc tên trong `tgmirror limits`), "
+        "hoặc --all cho mọi đích."
+    ),
+    "err.limits_reset_both": "--dst và --all không đi cùng nhau.",
+    "err.limits_dst_unknown": (
+        "Không thấy đích '{ref}' trong các làn đã học. Dùng id hoặc tên trong `tgmirror limits`."
+    ),
+    "err.limits_dst_ambiguous": "'{ref}' khớp nhiều đích: {matches}. Dùng id.",
+    "err.limits_busy": (
+        "Lần chạy hoặc backup {id} đang chạy ở nơi khác: nó giữ giới hạn trong bộ nhớ và sẽ ghi "
+        "đè lên đây. Dừng nó (`tgmirror stop`) trước."
     ),
     "status.line_speed": "Tốc độ:      {speed} tin/giây (trung bình từ lúc bắt đầu){eta}",
     "status.line_speed_unknown": "Tốc độ:      chưa đủ dữ liệu",
@@ -1412,17 +1452,24 @@ EN: dict[str, str] = {
     "run.analyzed": (
         "Estimate: up to {total} messages to look at (Telegram's count, the filter not subtracted)."
     ),
-    "run.cap_days": (
+    "run.cap_rest": (
         "Learned budget of {budget} messages per {window} hours: with {total} messages the run "
-        "has to rest about {days} more day(s) before it is done (see docs/05-chong-flood.md)."
+        "has to rest about {rest} more before it is done (see docs/05-chong-flood.md)."
     ),
+    "rest.hours": "{n} h",
+    "rest.days": "{n} day(s)",
     "run.cap_warning": (
         "{sent} messages sent in the last 24 hours, past the daily_cap reminder ({cap}). Only a "
         "reminder: nothing stops the run but the budget learned from Telegram's long waits."
     ),
     "run.budget_learned": (
         "Telegram asked to wait {seconds}s: the {action} lane's budget is now {budget} messages "
-        "per {window} hours (it grows 10% per 24 hours without a block)."
+        "per {window} hours (it grows 10% per 24 hours without a block, never past 95% of the "
+        "{bad} that drew a block)."
+    ),
+    "run.limits_reset": (
+        "--reset-limits: forgot the limits learned by {count} write lanes into this destination; "
+        "nothing stops them until their next long wait."
     ),
     "run.progress_total": (
         "Run {id}: {handled}/{total} messages (~{percent}%): {done} copied, "
@@ -1459,8 +1506,8 @@ EN: dict[str, str] = {
         "Progress:    ~{percent}% ({handled} / at most {total} messages)"
     ),
     "status.line_cap": (
-        "Budget:      up to {left} messages left, budget {cap} per {window} h: about {days} more "
-        "day(s) of rest"
+        "Budget:      up to {left} messages left, budget {cap} per {window} h: about {rest} more "
+        "of rest"
     ),
     "status.line_budget": (
         "Budget:      {action}: {budget} messages per {window} h ({sent} sent); set after a "
@@ -1468,6 +1515,42 @@ EN: dict[str, str] = {
     ),
     "status.line_budget_none": (
         "Budget:      not learned yet (no long wait so far; only pacing and FloodWait limit it)"
+    ),
+    "status.line_bounds": (
+        "Limit:       {action}: blocked at {bad} messages, ran clean up to {ok}; last put to the "
+        "test {at}"
+    ),
+    "limits.none": "No write lane is recorded yet (no run has sent anything).",
+    "limits.dest": "Destination {dst} ({title})",
+    "limits.dest_unknown": "Destination {dst}",
+    "limits.lane_learned": (
+        "  {action}: {budget} messages per {window} h ({sent} sent); blocked at {bad}, ran clean "
+        "up to {ok}; {seconds}s wait at {flood_at}; last put to the test {checked}; pace {delay}s"
+    ),
+    "limits.lane_unlearned": (
+        "  {action}: limit not learned ({sent} sent in the last 24 hours; only the {delay}s pace "
+        "and FloodWait limit it)"
+    ),
+    "limits.reset_done": (
+        "Forgot the limits of {count} write lanes {where}. The learned pace stays."
+    ),
+    "limits.reset_none": "No write lane has learned a limit {where}.",
+    "limits.where_dst": "into {dst}",
+    "limits.where_all": "(every destination)",
+    "limits.unknown": "-",
+    "err.limits_reset_target": (
+        "Say which destination to forget the limits of: --dst DEST (an id or a title from "
+        "`tgmirror limits`), or --all for every destination."
+    ),
+    "err.limits_reset_both": "--dst and --all cannot be combined.",
+    "err.limits_dst_unknown": (
+        "No destination '{ref}' among the lanes that learned something. Use an id or a title "
+        "from `tgmirror limits`."
+    ),
+    "err.limits_dst_ambiguous": "'{ref}' matches several destinations: {matches}. Use the id.",
+    "err.limits_busy": (
+        "Run or backup {id} is running elsewhere: it keeps the limits in memory and would write "
+        "them back over this. Stop it (`tgmirror stop`) first."
     ),
     "status.line_speed": "Speed:       {speed} messages/s (average since it began){eta}",
     "status.line_speed_unknown": "Speed:       not enough data yet",

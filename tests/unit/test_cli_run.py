@@ -23,7 +23,7 @@ from tgmirror.cli.keys import KeyProvider, apply_key
 from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.core.errors import FloodWait
 from tgmirror.core.gateway import ChatKind
-from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentHour
+from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentBucket
 from tgmirror.engine.runner import RunControl, Runner
 from tgmirror.store.backups import Backup, BackupSpec
 from tgmirror.store.runs import Control, Run, RunSpec, RunStatus
@@ -1006,7 +1006,7 @@ def test_a_used_up_budget_ends_the_run_with_exit_3_until_the_window_lets_go(
         now.astimezone().date(),
         0,
         lanes=(LaneState("forward", dst, 2.0, LaneBudget(4, 24, now, now, 7200)),),
-        hours=(SentHour("forward", dst, int(now.timestamp() // 3600), 4),),
+        buckets=(SentBucket("forward", dst, int(now.timestamp() // 300), 4),),
     )
 
     async def seed() -> None:

@@ -9,7 +9,7 @@ import pytest
 from tests.fakes import FakeGateway
 from tgmirror.core.errors import BackupBusy, RunBusy, SchemaTooNew, StoreError
 from tgmirror.core.gateway import ChannelInfo, ChatKind, MediaKind, SrcMessage, Unit
-from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentHour
+from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentBucket
 from tgmirror.store.backups import BackupSpec
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store, default_migrations
 from tgmirror.store.msgmap import MessageResult
@@ -1033,25 +1033,25 @@ async def test_v4_migration_adds_flood_context_and_lane_tables(tmp_path: Path) -
         ]
         loaded = await upgraded.load_limiter_state("default")
         assert loaded == LimiterState(6.0, date(2026, 1, 1), 9)
-        assert loaded is not None and loaded.lanes == () and loaded.hours == ()
+        assert loaded is not None and loaded.lanes == () and loaded.buckets == ()
         events = await upgraded.flood_events(1)
         assert [(e.kind, e.action, e.dst) for e in events] == [("flood_wait", None, None)]
 
 
-async def test_lanes_and_hourly_buckets_are_kept_per_account(store: Store) -> None:
+async def test_lanes_and_sent_buckets_are_kept_per_account(store: Store) -> None:
     state = LimiterState(
         4.0,
         date(2026, 1, 1),
         7,
         lanes=(LaneState("forward", -100, 4.0), LaneState("history", 0, 2.0)),
-        hours=(SentHour("forward", -100, 490_000, 7),),
+        buckets=(SentBucket("forward", -100, 5_880_000, 7),),
     )
     await store.save_limiter_state("default", state)
     await store.save_limiter_state("other", LimiterState(2.0, date(2026, 1, 1), 0))
 
     assert await store.load_limiter_state("default") == state
     other = await store.load_limiter_state("other")
-    assert other is not None and other.lanes == () and other.hours == ()
+    assert other is not None and other.lanes == () and other.buckets == ()
 
     await store.save_limiter_state("default", LimiterState(2.0, date(2026, 1, 1), 7))
     again = await store.load_limiter_state("default")
@@ -1088,3 +1088,119 @@ async def test_v5_migration_keeps_a_lane_without_a_budget(tmp_path: Path) -> Non
         )
         again = await upgraded.load_limiter_state("default")
         assert again is not None and again.lanes[0].budget == budget
+
+
+async def test_v6_migration_moves_each_hour_to_its_last_five_minute_bucket(tmp_path: Path) -> None:
+    """Phase 19d2: hourly counts become five-minute buckets; an old hour lands on its *last*
+    bucket, so a window never lets go of those messages early."""
+    path = tmp_path / "state.db"
+    async with await Store.open(path, migrations=default_migrations()[:5]):
+        pass
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO limiter_state(account, delay_ms, day, sent_today, updated_at) "
+        "VALUES('default', 2000, '2026-01-01', 9, ?)",
+        (T0.isoformat(),),
+    )
+    con.execute("INSERT INTO sent_hours VALUES('default', 'send', -100, 490000, 30)")
+    con.commit()
+    con.close()
+
+    async with await Store.open(path) as upgraded:
+        assert await rows(path, "SELECT action, dst, bucket, sent FROM sent_buckets") == [
+            ("send", -100, 490000 * 12 + 11, 30)
+        ]
+        loaded = await upgraded.load_limiter_state("default")
+        assert loaded is not None
+        assert loaded.buckets == (SentBucket("send", -100, 490000 * 12 + 11, 30),)
+
+
+async def test_v7_migration_gives_a_learned_budget_its_ok_and_bad(tmp_path: Path) -> None:
+    """Phase 19d4: a budget learned by v6 (cut to 80% of what was sent) gets ``ok`` = itself,
+    ``bad`` = budget / 0.8, and its flood and growth times as ``bad_at``/``checked_at``; a lane
+    that never learned one gets nothing."""
+    path = tmp_path / "state.db"
+    async with await Store.open(path, migrations=default_migrations()[:6]):
+        pass
+    flood_at, since = T0.isoformat(), (T0 + timedelta(days=1)).isoformat()
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO limiter_state(account, delay_ms, day, sent_today, updated_at) "
+        "VALUES('default', 4000, '2026-01-01', 9, ?)",
+        (T0.isoformat(),),
+    )
+    con.execute(
+        "INSERT INTO limiter_lanes(account, action, dst, delay_ms, budget, window_hours, "
+        "budget_since, flood_at, flood_seconds) VALUES('default', 'forward', -100, 4000, "
+        "1506, 1, ?, ?, 1800)",
+        (since, flood_at),
+    )
+    con.execute(
+        "INSERT INTO limiter_lanes(account, action, dst, delay_ms) "
+        "VALUES('default', 'send', -100, 4000)"
+    )
+    con.commit()
+    con.close()
+
+    async with await Store.open(path) as upgraded:
+        assert await rows(path, "PRAGMA user_version") == [(len(default_migrations()),)]
+        loaded = await upgraded.load_limiter_state("default")
+        assert loaded is not None
+        forward, send = loaded.lanes  # ordered by action
+        assert send.budget is None
+        assert forward.budget == LaneBudget(
+            1506,
+            1,
+            T0 + timedelta(days=1),
+            T0,
+            1800,
+            ok=1506,
+            bad=1882,
+            bad_at=T0,
+            checked_at=T0 + timedelta(days=1),
+        )
+
+
+async def test_ok_bad_and_the_check_time_survive_a_save_and_a_reload(store: Store) -> None:
+    budget = LaneBudget(
+        80, 1, T0, T0, 3600, ok=70, bad=100, bad_at=T0, checked_at=T0, probe_fails=2
+    )
+    state = LimiterState(2.0, date(2026, 1, 1), 0, (LaneState("forward", -100, 2.0, budget),))
+
+    await store.save_limiter_state("default", state)
+
+    loaded = await store.load_limiter_state("default")
+    assert loaded is not None and loaded.lanes[0].budget == budget
+
+
+async def test_forgetting_budgets_clears_a_destination_and_keeps_the_delays(store: Store) -> None:
+    budget = LaneBudget(80, 1, T0, T0, 3600, ok=80, bad=100, bad_at=T0, checked_at=T0)
+    state = LimiterState(
+        3.0,
+        date(2026, 1, 1),
+        0,
+        (
+            LaneState("forward", -100, 3.0, budget),
+            LaneState("send", -100, 3.0, budget),
+            LaneState("forward", -200, 3.0, budget),
+            LaneState("history", 0, 1.0),
+        ),
+    )
+    await store.save_limiter_state("default", state)
+    await store.save_limiter_state("other", state)
+
+    assert await store.forget_budgets("default", -100) == 2
+
+    loaded = await store.load_limiter_state("default")
+    assert loaded is not None
+    by_lane = {(lane.action, lane.dst): lane for lane in loaded.lanes}
+    assert by_lane["forward", -100].budget is None and by_lane["send", -100].budget is None
+    assert by_lane["forward", -100].delay == 3.0  # the pace stays
+    assert by_lane["forward", -200].budget == budget
+    other = await store.load_limiter_state("other")
+    assert other is not None and all(
+        lane.budget == budget for lane in other.lanes if lane.action != "history"
+    )
+
+    assert await store.forget_budgets("default") == 1  # every destination
+    assert await store.forget_budgets("default") == 0

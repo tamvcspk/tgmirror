@@ -97,6 +97,10 @@ class RunOptions:
     # there starts with (``t.me/<username>``; none: ``t.me/c/<number>``). A run-only property: a
     # username can change between runs.
     dst_username: str | None = None
+    # Phase 19d4 (``--reset-limits``): forget the limits the write lanes into the destination had
+    # learned before this run starts. A run-only property, like ``retry_of``: asking for it once
+    # must not make every later run of the pair forget them again.
+    reset_limits: bool = False
 
     def for_pair(self, dst_base_id: int) -> "RunOptions":
         """What the mirror remembers: the run-only keys dropped, ``dst_base_id`` as given."""

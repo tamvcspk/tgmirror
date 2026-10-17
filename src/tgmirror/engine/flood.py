@@ -245,6 +245,7 @@ class FloodGuard:
                 budget=budget.amount,
                 window=budget.window_hours,
                 seconds=exc.seconds,
+                bad=budget.bad if budget.bad is not None else "-",
             )
         await self._store.save_limiter_state(self._owner.account, self._limiter.state)
         if self._limiter.throttle > throttled:

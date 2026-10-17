@@ -130,7 +130,7 @@ async def test_a_learned_budget_that_will_cost_days_is_said_up_front(rig: Rig) -
         await rig.runner(store).run(await rig.begin(store, batch_size=3))
 
     # 3 now, then 3 and 1 on the next two windows
-    assert notices(rig, "cap_days") == [{"total": 7, "budget": 3, "window": 24, "days": 2}]
+    assert notices(rig, "cap_rest") == [{"total": 7, "budget": 3, "window": 24, "hours": 48}]
 
 
 async def test_a_run_with_no_learned_budget_says_nothing_about_days_of_rest(rig: Rig) -> None:
@@ -139,7 +139,7 @@ async def test_a_run_with_no_learned_budget_says_nothing_about_days_of_rest(rig:
 
     await rig.runner(store).run(await rig.begin(store))
 
-    assert notices(rig, "cap_days") == []
+    assert notices(rig, "cap_rest") == []
 
 
 async def test_an_error_of_the_analysis_is_not_the_runs(rig: Rig) -> None:

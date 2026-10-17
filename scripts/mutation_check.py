@@ -42,6 +42,8 @@ TESTS = [
     "tests/unit/test_transfer.py",
     "tests/unit/test_status.py",
     "tests/unit/test_limiter.py",
+    "tests/unit/test_cli_limits.py",
+    "tests/unit/test_store.py::test_v7_migration_gives_a_learned_budget_its_ok_and_bad",
     "tests/integration/test_runner_flood.py",
     "tests/integration/test_runner_split.py",
     # Phase 15b, Đợt 1/2 mechanisms (N2/N3, N4, N7): whole small files where fast enough, else
@@ -362,11 +364,54 @@ MUTATIONS = [
         "    days = (now - budget.since) // GROW_EVERY",
         "    days = 0 * ((now - budget.since) // GROW_EVERY)",
     ),
+    # Phase 19d4: both sides of a limit (docs/05-chong-flood.md, "thăm dò giới hạn")
+    Mutation(
+        "growth by the clock ignores bad",
+        "src/tgmirror/core/limiter.py",
+        "    return int(budget.bad * BAD_CEILING)",
+        "    return 10**9",
+    ),
+    Mutation(
+        "an old bad still bounds growth",
+        "src/tgmirror/core/limiter.py",
+        "    if budget.bad_at is not None and now - budget.bad_at > bad_ttl:",
+        "    if False:",
+    ),
+    Mutation(
+        "a flood above ok halves the budget instead of going back to ok",
+        "src/tgmirror/core/limiter.py",
+        "        elif existing.ok is not None and existing.amount > existing.ok:",
+        "        elif False:",
+    ),
+    Mutation(
+        "bad forgets a lower earlier mark",
+        "src/tgmirror/core/limiter.py",
+        "            bad=min(known, default=None),",
+        "            bad=sent or None,",
+    ),
+    Mutation(
+        "forgetting budgets clears every destination",
+        "src/tgmirror/core/limiter.py",
+        "        gone = [lane for lane in self._budgets if dst is None or lane[1] == dst]",
+        "        gone = list(self._budgets)",
+    ),
+    Mutation(
+        "--reset-limits forgets nothing",
+        "src/tgmirror/engine/runner.py",
+        "            forgotten = self._limiter.forget_budgets(run.dst_id)",
+        "            forgotten = 0",
+    ),
+    Mutation(
+        "a budget learned before migration 7 gets the wrong bad",
+        "src/tgmirror/store/db.py",
+        '    "  bad_amount = budget * 5 / 4,\\n"',
+        '    "  bad_amount = budget,\\n"',
+    ),
     Mutation(
         "the run rests until a moment that is already past",
         "src/tgmirror/core/limiter.py",
-        "            expiry = hour + budget.window_hours + 1",
-        "            expiry = hour",
+        "            expiry = bucket + span + 1",
+        "            expiry = bucket",
     ),
     Mutation(
         "slow mode is not a floor under the pace",

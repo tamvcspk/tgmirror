@@ -46,6 +46,15 @@ def retry(
             "(see `tgmirror run --help`).",
         ),
     ] = False,
+    reset_limits: Annotated[
+        bool,
+        typer.Option(
+            "--reset-limits",
+            help="Forget the limits the write lanes into the destination learned from "
+            "Telegram's long waits (budget, where it was blocked, where it ran clean) before "
+            "this run: nothing stops them until their next long wait. Only this run.",
+        ),
+    ] = False,
     from_backup: Annotated[
         Path | None,
         typer.Option(
@@ -72,6 +81,7 @@ def retry(
                 number,
                 force_takeover=force_takeover,
                 from_backup=str(from_backup) if from_backup is not None else None,
+                reset_limits=reset_limits,
             )
             if result is None:
                 typer.echo(t("retry.nothing", id=(await resolve_run(store, number)).id))
@@ -92,6 +102,7 @@ async def retry_flow(
     *,
     force_takeover: bool = False,
     from_backup: str | None = None,
+    reset_limits: bool = False,
 ) -> ReadyToRun | None:
     """Everything ``tgmirror retry``/the menu's "Thử lại tin lỗi" does before ``execute()``.
 
@@ -100,7 +111,11 @@ async def retry_flow(
     """
     target = await resolve_run(store, number)
     return await retry_flow_for(
-        store, target, force_takeover=force_takeover, from_backup=from_backup
+        store,
+        target,
+        force_takeover=force_takeover,
+        from_backup=from_backup,
+        reset_limits=reset_limits,
     )
 
 
@@ -110,6 +125,7 @@ async def retry_flow_for(
     *,
     force_takeover: bool = False,
     from_backup: str | None = None,
+    reset_limits: bool = False,
 ) -> ReadyToRun | None:
     """Like ``retry_flow``, but for an already-resolved ``target`` (the menu picks it itself).
 
@@ -126,6 +142,7 @@ async def retry_flow_for(
         pushdown=target.options.pushdown,
         force=force_takeover,
         retry_of=target.id,
+        reset_limits=reset_limits,
         caption=target.options.caption,
         caption_text=target.options.caption_text,
         reset_polls=target.options.reset_polls,

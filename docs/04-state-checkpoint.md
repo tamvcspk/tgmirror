@@ -1,6 +1,6 @@
 # 04 — State, checkpoint, delta
 
-Một file SQLite (`WAL` mode, `foreign_keys=ON`, `busy_timeout=5000` để `pause`/`stop` từ process khác không bị lỗi khóa). Phiên bản schema nằm ở `PRAGMA user_version`; `store/schema.sql` là phiên bản 1, các thay đổi sau thêm migration đánh số đăng ký ở `store/db.py::default_migrations` (mỗi migration chạy trong một transaction, có test nâng cấp từ phiên bản trước). Phiên bản 2 (phase 8, 2026-09-25): thêm `mirrors.dst_kind`, backfill từ `src_kind` cho các cặp có sẵn. Phiên bản 3 (phase 11a, 2026-09-25): thêm bảng `backups` và cột `flood_log.backup_id` (xem "Backup (Phase 11a)" bên dưới). Phiên bản 4 (phase 19d1, 2026-10-15): thêm `flood_log.dst/action/sent_1h/sent_24h/premium` và hai bảng `limiter_lanes`, `sent_hours` (xem `05-chong-flood.md`, "Làn"). Phiên bản 5 (phase 19d2, 2026-10-15): `limiter_lanes` thêm `budget`, `window_hours`, `budget_since`, `flood_at`, `flood_seconds` (ngân sách học được của làn, `NULL` = chưa học).
+Một file SQLite (`WAL` mode, `foreign_keys=ON`, `busy_timeout=5000` để `pause`/`stop` từ process khác không bị lỗi khóa). Phiên bản schema nằm ở `PRAGMA user_version`; `store/schema.sql` là phiên bản 1, các thay đổi sau thêm migration đánh số đăng ký ở `store/db.py::default_migrations` (mỗi migration chạy trong một transaction, có test nâng cấp từ phiên bản trước). Phiên bản 2 (phase 8, 2026-09-25): thêm `mirrors.dst_kind`, backfill từ `src_kind` cho các cặp có sẵn. Phiên bản 3 (phase 11a, 2026-09-25): thêm bảng `backups` và cột `flood_log.backup_id` (xem "Backup (Phase 11a)" bên dưới). Phiên bản 4 (phase 19d1, 2026-10-15): thêm `flood_log.dst/action/sent_1h/sent_24h/premium` và hai bảng `limiter_lanes`, `sent_hours` (từ v6 là `sent_buckets`; xem `05-chong-flood.md`, "Làn"). Phiên bản 5 (phase 19d2, 2026-10-15): `limiter_lanes` thêm `budget`, `window_hours`, `budget_since`, `flood_at`, `flood_seconds` (ngân sách học được của làn, `NULL` = chưa học). Phiên bản 6 (phase 19d2, 2026-10-17): `sent_hours` đổi tên thành `sent_buckets` và cột `hour` thành `bucket` (ô 5 phút thay vì 1 giờ); mỗi giờ cũ chuyển thành ô cuối của nó (`hour × 12 + 11`), để cửa sổ không bao giờ nhả những tin đó sớm. Phiên bản 7 (phase 19d4, 2026-10-17): `limiter_lanes` thêm `ok_amount`, `bad_amount`, `bad_at`, `checked_at`, `probe_fails` (hai phía của giới hạn đã học; xem `05-chong-flood.md`, "Thăm dò giới hạn"); ngân sách đã học trước đó được điền `ok_amount = budget`, `bad_amount = budget × 5 / 4` (chia nguyên: 1506 ra đúng 1882 của lần chạy 68), `bad_at = flood_at`, `checked_at = budget_since`.
 
 ## Hai thứ, chỉ một thứ người dùng thấy
 
@@ -86,7 +86,7 @@ CREATE TABLE flood_log (
   batch_size INTEGER,
   action    TEXT,                           -- v4: làn: forward|send|history|file (NULL = hàng cũ)
   dst       INTEGER,                        -- v4: đích của làn ghi (NULL cho làn đọc)
-  sent_1h   INTEGER,                        -- v4: tin làn ghi đã gửi trong 1 giờ qua (xô giờ)
+  sent_1h   INTEGER,                        -- v4: tin làn ghi đã gửi trong 1 giờ qua (ô 5 phút)
   sent_24h  INTEGER,                        -- v4: ... trong 24 giờ qua
   premium   INTEGER                         -- v4: tài khoản có Premium (NULL = không biết)
 );
@@ -129,18 +129,23 @@ CREATE TABLE limiter_lanes (               -- v4: delay AIMD riêng của từng
   budget_since TEXT,                        -- v5: lần đổi cuối (cắt hay tăng 10%): đồng hồ tăng trưởng
   flood_at  TEXT,                           -- v5: flood dài đã đặt/cắt nó
   flood_seconds INTEGER,
+  ok_amount INTEGER,                        -- v7: mức cao nhất đã chạy sạch một cửa sổ
+  bad_amount INTEGER,                       -- v7: mức thấp nhất từng gây flood dài
+  bad_at    TEXT,                           -- v7: lần cuối gây flood; quá `probe_after_hours` thì `bad` hết chặn tăng trưởng
+  checked_at TEXT,                          -- v7: lần cuối giới hạn được đem ra thử
+  probe_fails INTEGER NOT NULL DEFAULT 0,   -- v7: thăm dò hỏng (chưa có gì ghi nó)
   PRIMARY KEY (account, action, dst)
 );
 
-CREATE TABLE sent_hours (                  -- v4: tin mỗi làn ghi đã gửi theo giờ UTC, giữ 24 giờ
+CREATE TABLE sent_buckets (                -- v4 (tên cũ sent_hours, theo giờ), v6: tin mỗi làn ghi đã gửi theo ô 5 phút, giữ 24 giờ
   account TEXT NOT NULL,
   action  TEXT NOT NULL,
   dst     INTEGER NOT NULL,
-  hour    INTEGER NOT NULL,                 -- unix time // 3600
+  bucket  INTEGER NOT NULL,                 -- unix time // 300 (v4: cột `hour`, // 3600)
   sent    INTEGER NOT NULL,
-  PRIMARY KEY (account, action, dst, hour)
+  PRIMARY KEY (account, action, dst, bucket)
 );
-```
+```
 
 **Không có migration từ mô hình job cũ** (2026-09-20): dự án chưa phát hành nên schema `runs` + `mirrors` được gộp thẳng vào `schema.sql` (phiên bản 1) thay cho bảng `jobs`; cơ sở dữ liệu cũ được xóa (`tgmirror.db`), không chuyển đổi. Hệ quả: một cặp đã clone bằng bản cũ mà DB bị xóa thì lần `clone` đầu tiên coi như cặp mới, nên nếu kênh đích còn các bản sao cũ, tin sẽ bị sao chép trùng; dùng đích mới hoặc dọn đích trước. Từ khi phát hành, mọi thay đổi schema phải là migration đánh số có test nâng cấp.
 

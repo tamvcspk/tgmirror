@@ -142,13 +142,55 @@ _V5_BUDGETS = (
 )
 
 
+# Version 6 (phase 19d2, after the first real runs): what a lane sent is counted in five-minute
+# buckets instead of hourly ones, so a one-hour window lets go of messages at most five minutes
+# late instead of up to an hour (a run that stopped at 02:32 had to wait until 04:00).
+# ``sent_hours`` becomes ``sent_buckets`` with ``bucket`` = unix time // 300. An old hour moves
+# to its *last* bucket (``hour * 12 + 11``), so a window never lets go of those messages early:
+# for at most a day the old counts are released up to an hour late, the safe way to be wrong.
+_V6_BUCKETS = (
+    "ALTER TABLE sent_hours RENAME TO sent_buckets;\n"
+    "ALTER TABLE sent_buckets RENAME COLUMN hour TO bucket;\n"
+    "UPDATE sent_buckets SET bucket = bucket * 12 + 11;\n"
+)
+
+
+# Version 7 (phase 19d4, docs/05-chong-flood.md "thăm dò giới hạn"): a lane's budget also remembers
+# both sides of what was learned. ``bad_amount``/``bad_at``: the fewest messages in a window that
+# ever drew a long flood, and when (growth by the clock stops short of it); ``ok_amount``: the most
+# a window ran clean while the budget held the lane; ``checked_at``: the last time the limit was
+# put to the test; ``probe_fails``: probes that met a flood (nothing writes it before probing
+# exists). A budget learned before this version gets what its history says: it was cut to 80% of
+# what the lane had sent when Telegram pushed back (so ``bad`` is ``budget / 0.8``, in integer
+# arithmetic: 1506 gives the 1882 that run 68 was stopped at), and the runs that kept to it ran
+# clean (``ok`` is the budget).
+_V7_LIMITS = (
+    "ALTER TABLE limiter_lanes ADD COLUMN ok_amount INTEGER;\n"
+    "ALTER TABLE limiter_lanes ADD COLUMN bad_amount INTEGER;\n"
+    "ALTER TABLE limiter_lanes ADD COLUMN bad_at TEXT;\n"
+    "ALTER TABLE limiter_lanes ADD COLUMN checked_at TEXT;\n"
+    "ALTER TABLE limiter_lanes ADD COLUMN probe_fails INTEGER NOT NULL DEFAULT 0;\n"
+    "UPDATE limiter_lanes SET ok_amount = budget,\n"
+    "  bad_amount = budget * 5 / 4,\n"
+    "  bad_at = flood_at, checked_at = budget_since WHERE budget IS NOT NULL;\n"
+)
+
+
 def default_migrations() -> tuple[str, ...]:
     """SQL scripts by version: ``migrations[i]`` upgrades ``user_version`` ``i`` to ``i + 1``.
 
     Version 1 is ``schema.sql``. A schema change appends a script here (never edits an earlier
     one) and gets a test that upgrades a database made by the previous version.
     """
-    return (_sql("schema.sql"), _V2_DST_KIND, _V3_BACKUPS, _V4_LANES, _V5_BUDGETS)
+    return (
+        _sql("schema.sql"),
+        _V2_DST_KIND,
+        _V3_BACKUPS,
+        _V4_LANES,
+        _V5_BUDGETS,
+        _V6_BUCKETS,
+        _V7_LIMITS,
+    )
 
 
 def utc_now() -> datetime:
@@ -638,6 +680,12 @@ class Store:
         """Keep what the limiter learned (after a flood); a batch commit saves it with the batch."""
         async with self._tx() as db:
             await limiterstate.save(db, account, state, self._ts())
+
+    async def forget_budgets(self, account: str, dst: int | None = None) -> int:
+        """``tgmirror limits reset``: clear what the account's write lanes into ``dst`` (every
+        destination: ``None``) learned about their limits. Returns how many had a budget."""
+        async with self._tx() as db:
+            return await limiterstate.forget_budgets(db, account, dst)
 
     # ---- topic map (phase 8, forum pairs) --------------------------------------------------
 

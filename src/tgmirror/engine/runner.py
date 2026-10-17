@@ -77,7 +77,7 @@ from tgmirror.engine.reupload import (
     send_unit_by_reference,
 )
 from tgmirror.engine.runs import DAILY_CAP
-from tgmirror.engine.status import cap_days
+from tgmirror.engine.status import rest_hours
 from tgmirror.engine.strategy import Strategy, may_reupload, router
 from tgmirror.engine.topics import TopicResolver, TopicRoute
 from tgmirror.engine.transfer import Transfer, TransferTracker
@@ -94,7 +94,7 @@ class Reporter(Protocol):
     """Where the runner tells the outside world what it is doing (the CLI prints it)."""
 
     def notice(self, code: str, **params: object) -> None:
-        """Something worth a line: ``analyzed``, ``cap_days``, ``reconciled``, ``reconcile_resend``,
+        """Something worth a line: ``analyzed``, ``cap_rest``, ``reconciled``, ``reconcile_resend``,
         ``reconcile_ambiguous``, ``flood_waiting``, ``flood_stopped``, ``throttled``, ``paused``,
         ``resumed``, ``topics_limit``. Codes map to ``run.<code>`` in ``ui/messages.py``."""
         ...
@@ -235,6 +235,10 @@ class Runner:
             rng=self._rng,
             wait=self._wait,
         )
+        if run.options.reset_limits:  # ``--reset-limits``: no lane keeps what it learned
+            forgotten = self._limiter.forget_budgets(run.dst_id)
+            await self._store.save_limiter_state(run.account, self._limiter.state)
+            self._reporter.notice("limits_reset", count=forgotten)
         live_reader = self._guard.reader(self._gateway)
         self._reader = self._reader_override or live_reader
         # The destination is always live Telegram, even for a restore (phase 11b) whose *source*
@@ -320,20 +324,22 @@ class Runner:
         run = await self._store.set_total(run.id, total)
         self._reporter.notice("analyzed", total=total)
         if (rest := self._rest(run, total)) is not None:
-            budget, window, days = rest
-            self._reporter.notice("cap_days", total=total, budget=budget, window=window, days=days)
+            budget, window, hours = rest
+            self._reporter.notice(
+                "cap_rest", total=total, budget=budget, window=window, hours=hours
+            )
         return run
 
     def _rest(self, run: Run, total: int) -> tuple[int, int, int] | None:
-        """``(budget, window hours, whole days)`` of the lane of this destination that would cost
+        """``(budget, window hours, hours of rest)`` of the lane of this destination that would cost
         the most rest if the run had to send ``total`` messages — or ``None`` when no lane has a
-        learned budget (nothing then says how long a run would take) or none costs a day."""
+        learned budget (nothing then says how long a run would take) or none costs any rest."""
         assert self._limiter is not None
         worst: tuple[int, int, int] | None = None
         for _, budget, used in self._limiter.budgets_for(run.dst_id):
-            days = cap_days(total, budget.amount, used, budget.window_hours)
-            if days > 0 and (worst is None or days > worst[2]):
-                worst = (budget.amount, budget.window_hours, days)
+            hours = rest_hours(total, budget.amount, used, budget.window_hours)
+            if hours > 0 and (worst is None or hours > worst[2]):
+                worst = (budget.amount, budget.window_hours, hours)
         return worst
 
     # ---- the loop -------------------------------------------------------------------------

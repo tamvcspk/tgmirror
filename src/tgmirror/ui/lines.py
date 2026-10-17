@@ -5,7 +5,7 @@ the full-screen menu (``ui/menu/run_screen.py``/``backup_screen.py``, appended t
 list of lines) never drift apart from writing the same thing twice.
 """
 
-from tgmirror.engine.status import StatusReport, cap_days
+from tgmirror.engine.status import StatusReport, rest_hours
 from tgmirror.store.backups import Backup
 from tgmirror.store.runs import FilterChange, FloodEvent, Run, RunStatus, StartedRun
 from tgmirror.ui.messages import t
@@ -120,15 +120,22 @@ def flood_where(event: FloodEvent) -> str:
     return f" [{', '.join(parts)}]" if parts else ""
 
 
+def rest_phrase(hours: int) -> str:
+    """``3 giờ``, ``2 ngày``: a rest in hours, in whole days only when it is exactly that."""
+    if hours >= 24 and hours % 24 == 0:
+        return t("rest.days", n=hours // 24)
+    return t("rest.hours", n=hours)
+
+
 def budget_lines(report: StatusReport) -> list[str]:
     """What ``status`` says about the budgets learned for the run's destination (phase 19d2): the
     rest they cost, then one line per lane with its window, what it sent and the wait that set
     it; or that nothing was learned yet (only pacing and FloodWait limit the run)."""
     lines: list[str] = []
-    if report.cap_days > 0 and report.left:
+    if report.cap_rest_hours > 0 and report.left:
         binding = max(
             report.budgets,
-            key=lambda b: cap_days(report.left or 0, b.amount, b.sent, b.window_hours),
+            key=lambda b: rest_hours(report.left or 0, b.amount, b.sent, b.window_hours),
         )
         lines.append(
             t(
@@ -136,7 +143,7 @@ def budget_lines(report: StatusReport) -> list[str]:
                 left=report.left,
                 cap=binding.amount,
                 window=binding.window_hours,
-                days=report.cap_days,
+                rest=rest_phrase(report.cap_rest_hours),
             )
         )
     for b in report.budgets:
@@ -149,6 +156,20 @@ def budget_lines(report: StatusReport) -> list[str]:
                 sent=b.sent,
                 seconds=b.flood_seconds,
                 at=b.flood_at.astimezone().strftime("%Y-%m-%d %H:%M"),
+            )
+        )
+    for b in report.budgets:
+        if b.bad is None and b.ok is None:
+            continue
+        lines.append(
+            t(
+                "status.line_bounds",
+                action=b.action,
+                bad=b.bad if b.bad is not None else t("limits.unknown"),
+                ok=b.ok if b.ok is not None else t("limits.unknown"),
+                at=b.checked_at.astimezone().strftime("%Y-%m-%d %H:%M")
+                if b.checked_at is not None
+                else t("limits.unknown"),
             )
         )
     if not report.budgets and report.delay is not None:

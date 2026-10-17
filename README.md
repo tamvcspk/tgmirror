@@ -82,6 +82,8 @@ tgmirror pause | stop         # from another terminal: pause in place / stop aft
 tgmirror history [n] [--json] # what earlier runs did (n: one run in detail, with failed messages and why)
 tgmirror retry [n]            # send again the messages run n failed to copy (default: the latest run); a run of its own
 tgmirror status [--json]      # progress, speed, ETA, failures and Telegram's limits of the running clone (works from a second terminal)
+tgmirror limits [--json]          # what the limiter learned about Telegram's limits per destination (budget, blocked at, ran clean to)
+tgmirror limits reset [--dst DEST | --all]   # forget it (no question asked); `clone`/`run`/`retry --reset-limits` does so for one run
 tgmirror config get [KEY] [--json]   # paths + every [limits] key, or one of them
 tgmirror config set KEY VALUE        # change one [limits] key (validated before it is written)
 tgmirror doctor                      # session, cryptg, destination permissions, safety notes

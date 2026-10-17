@@ -42,6 +42,10 @@ class Limits(BaseModel):
     # A FloodWait of more seconds than this is a quota, not a burst: it sets/cuts the
     # lane's budget instead of doubling its delay (docs/05-chong-flood.md, phase 19d2).
     short_flood: int = Field(60, ge=1)
+    # How long a lane's ``bad`` (the fewest messages per window that ever drew a long flood) still
+    # bounds the budget's growth by the clock; after that the budget stays where it is until the
+    # lane meets a flood (docs/05-chong-flood.md, phase 19d4). Also when a limit counts as stale.
+    probe_after_hours: int = Field(168, ge=1)
     max_auto_wait: float = Field(900.0, ge=0)
     # units downloaded ahead while one uploads (0 = none). Default 0: measuring several files'
     # parts moving at once over the production connection shape (a small set of connections made

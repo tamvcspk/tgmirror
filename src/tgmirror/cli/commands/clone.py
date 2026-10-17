@@ -262,6 +262,15 @@ def clone(
             help="Run even if another process seems to hold this clone (only if it is dead).",
         ),
     ] = False,
+    reset_limits: Annotated[
+        bool,
+        typer.Option(
+            "--reset-limits",
+            help="Forget the limits the write lanes into the destination learned from "
+            "Telegram's long waits (budget, where it was blocked, where it ran clean) before "
+            "this run: nothing stops them until their next long wait. Only this run.",
+        ),
+    ] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
 ) -> None:
     """Clone a source into a destination (existing, or newly created) and start copying now.
@@ -354,6 +363,7 @@ def clone(
             preview=preview_flag,
             yes=yes,
             force_takeover=force_takeover,
+            reset_limits=reset_limits,
         )
 
         async with authorized(rt) as conn:
@@ -427,6 +437,7 @@ class CloneOptions:
     preview: bool | None = None
     yes: bool = False
     force_takeover: bool = False
+    reset_limits: bool = False  # phase 19d4: ``--reset-limits``, of this run only
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,6 +621,7 @@ class CloneFlow:
             batch_size=o.batch_size or self._rt.config().limits.batch_size,
             pushdown=o.pushdown,
             force=o.force_takeover,
+            reset_limits=o.reset_limits,
             caption=choice.caption,
             caption_text=choice.caption_text,
             reset_polls=choice.reset_polls,

@@ -2,6 +2,8 @@
 ``cli/commands/status.py``), refreshed on its own every tick since it only reads the store (no
 Telegram call), like the CLI command."""
 
+from datetime import timedelta
+
 from rich.console import Group, RenderableType
 from rich.text import Text
 
@@ -43,14 +45,21 @@ class StatusDashboardScreen(Screen):
         if target is None:
             self._lines = [t("err.run_none")]
             return
-        daily_cap = self._app.rt.config().limits.daily_cap
+        limits = self._app.rt.config().limits
+        daily_cap = limits.daily_cap
         if isinstance(target, Backup):
             backup_report = await build_backup_report(
                 store, target, now=utc_now(), daily_cap=daily_cap
             )
             self._lines = _backup_lines(backup_report)
         else:
-            report = await build_report(store, target, now=utc_now(), daily_cap=daily_cap)
+            report = await build_report(
+                store,
+                target,
+                now=utc_now(),
+                daily_cap=daily_cap,
+                bad_ttl=timedelta(hours=limits.probe_after_hours),
+            )
             self._lines = _lines(report)
 
     def render(self) -> RenderableType:

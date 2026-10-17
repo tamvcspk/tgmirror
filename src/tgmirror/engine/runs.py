@@ -121,6 +121,9 @@ class RunRequest:
     # Phase 11b (``tgmirror restore``): the backup directory this run reads from instead of a live
     # source, e.g. ``begin_run`` reads its ``backup.json`` instead of asking the gateway.
     from_backup: str | None = None
+    # Phase 19d4 (``--reset-limits``): the user said to forget what the limiter learned about the
+    # destination's limits; asked once per run, never remembered with the pair.
+    reset_limits: bool = False
 
 
 def check_options(request: RunRequest) -> None:
@@ -230,6 +233,7 @@ async def begin_run(
             retry_of=request.retry_of,
             from_backup=request.from_backup,
             dst_username=dst.username,
+            reset_limits=request.reset_limits,
         ),
         filters_json=request.filters_json,
     )

@@ -54,7 +54,7 @@ class Recorder:
 
     @property
     def codes(self) -> list[str]:
-        return [c for c, _ in self.notices if c not in ("analyzed", "cap_days")]
+        return [c for c, _ in self.notices if c not in ("analyzed", "cap_rest")]
 
 
 class Rig:
