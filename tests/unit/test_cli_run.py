@@ -268,7 +268,7 @@ def test_wizard_and_flags_end_in_the_same_run_and_the_same_copy(
     flags_rt = make_runtime(gateway=flags_gw, root=tmp_path / "flags")
     flags = runner.invoke(app, CLONE, obj=flags_rt)
     prompter = ScriptedPrompter(
-        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, True]
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, False, True]
     )
     wizard_rt = make_runtime(
         gateway=wizard_gw, prompter=prompter, interactive=True, root=tmp_path / "wizard"
@@ -282,7 +282,8 @@ def test_wizard_and_flags_end_in_the_same_run_and_the_same_copy(
     )  # fmt: skip
     assert texts(flags_gw, a.dst_id) == texts(wizard_gw, b.dst_id) == ["m1", "m2", "m3", "m4"]
     assert flags.output == wizard.output
-    _, question = [m for kind, m in prompter.asked if kind == "confirm"]  # not one per step
+    # the routing and the customising questions, then the one: not one per step
+    _, _, question = [m for kind, m in prompter.asked if kind == "confirm"]
     assert question.startswith("Clone ") and question.endswith(" now?")
 
 
@@ -291,7 +292,7 @@ def test_declining_the_question_creates_and_copies_nothing(
 ) -> None:
     _, dst = source_with_messages(gateway)
     prompter = ScriptedPrompter(
-        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, False]
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, False, False]
     )
     rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
 
@@ -673,7 +674,7 @@ def test_the_wizard_offers_continue_or_scratch_only_for_a_pair_with_progress(
 ) -> None:
     _, dst = source_with_messages(gateway)
     fresh_pair = ScriptedPrompter(
-        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, True]
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, False, True]
     )
     runner.invoke(
         app, ["clone"], obj=make_runtime(gateway=gateway, prompter=fresh_pair, interactive=True)
@@ -683,7 +684,7 @@ def test_the_wizard_offers_continue_or_scratch_only_for_a_pair_with_progress(
 
     scratch = ScriptedPrompter(
         select=["Source", "Copy", "Automatic", "Start from scratch", "No filter"],
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
     result = runner.invoke(
         app, ["clone"], obj=make_runtime(gateway=gateway, prompter=scratch, interactive=True)
@@ -694,7 +695,7 @@ def test_the_wizard_offers_continue_or_scratch_only_for_a_pair_with_progress(
         "Continue: only what is new",
         "Start from scratch: copy everything again",
     ]
-    assert "already has 3 messages" in [m for k, m in scratch.asked if k == "confirm"][1]
+    assert "already has 3 messages" in [m for k, m in scratch.asked if k == "confirm"][2]
     assert texts(gateway, dst) == ["m1", "m2", "m3"] * 2 and "Fresh start" in result.output
 
 
@@ -706,7 +707,8 @@ def test_the_wizard_continue_choice_is_an_ordinary_delta(
     runner.invoke(app, CLONE, obj=rt)
     gateway.add_message(src, "m3")
     carry_on = ScriptedPrompter(
-        select=["Source", "Copy", "Automatic", "Continue", "No filter"], confirm=[False, True]
+        select=["Source", "Copy", "Automatic", "Continue", "No filter"],
+        confirm=[False, False, True],
     )
 
     result = runner.invoke(
@@ -724,7 +726,7 @@ def test_the_fresh_flag_skips_the_wizard_restart_question(
     rt = make_runtime(gateway=gateway)
     runner.invoke(app, CLONE, obj=rt)
     prompter = ScriptedPrompter(
-        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, True]
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, False, True]
     )
 
     result = runner.invoke(

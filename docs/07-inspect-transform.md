@@ -462,7 +462,7 @@ Là `edit` của Phase 20 (mục 6), không phải cơ chế mới. Bổ sung:
 | 20b | `topics split/merge` theo ngữ nghĩa 11.3 (chia: topic mới đúng thứ tự gốc, xoá khỏi topic cũ; gộp: nối topic sau vào cuối topic trước rồi xoá topic sau), `topics rename/close/delete` | Trên forum thử: chia một topic thành hai, gộp lại; không sót, không trùng, thứ tự đúng như 11.3; kill giữa chừng rồi chạy lại không đăng trùng, không xoá tin chưa có bản mới; tin mới đăng vào topic sau giữa lúc gộp thì topic đó không bị xoá | 0.3.0 |
 | 17 | Như cũ | | 0.3.x |
 
-**Trạng thái 2026-10-18**: Phase 21 xong code (trừ wizard/menu và cột Khám phá), chưa thử thật; các điểm khác bản đề xuất ở `06-lo-trinh.md`, "Phase 21 — ghi chú".
+**Trạng thái 2026-10-18**: Phase 21 xong code (kể cả wizard, cột Khám phá, cờ tinh chỉnh và `--dst-no-topics`), chưa thử thật; các điểm khác bản đề xuất ở `06-lo-trinh.md`, "Phase 21 — ghi chú".
 
 Thứ tự: **21 → 20 → 20b → 17**, cả ba (21, 20, 20b) trong **0.3.0** (chốt 2026-10-18, Q4). Phase 21 không ghi/xoá tại chỗ nên không cần D10, làm trước được.
 

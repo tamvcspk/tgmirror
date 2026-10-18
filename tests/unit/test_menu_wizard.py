@@ -69,6 +69,8 @@ async def test_a_new_clone_asks_like_the_cli_and_hands_over_to_the_run_screen(
     assert await screen.on_enter() == "stay"
     assert asked(screen) == t("clone.pick_source")
     await press(screen, MenuKey.ENTER)  # Source
+    assert asked(screen) == t("clone.route_by_hashtag")
+    await press(screen, MenuKey.ENTER)  # split by hashtag? No
     assert asked(screen) == t("clone.pick_destination")
     await press(screen, MenuKey.DOWN, MenuKey.ENTER)  # Good target (below "+ Create")
     await press(screen, MenuKey.ENTER)  # Automatic
@@ -94,7 +96,16 @@ async def test_esc_goes_back_one_question_across_steps(
     app = await make_app(make_runtime, tmp_path, gateway, FakeAuth(logged_in=ACCOUNT))
     screen = clone_screen(app)
     await screen.on_enter()
-    await press(screen, MenuKey.ENTER, MenuKey.DOWN, MenuKey.ENTER, MenuKey.ENTER, MenuKey.ENTER)
+    # source, routing (no), destination, mode, customise (no)
+    await press(
+        screen,
+        MenuKey.ENTER,
+        MenuKey.ENTER,
+        MenuKey.DOWN,
+        MenuKey.ENTER,
+        MenuKey.ENTER,
+        MenuKey.ENTER,
+    )
     assert asked(screen) == t("filter.pick")
 
     await press(screen, MenuKey.ESC)  # the filter step's first question: back to the strategy's
@@ -104,6 +115,8 @@ async def test_esc_goes_back_one_question_across_steps(
     await press(screen, MenuKey.ESC)  # into the destination step, "Good target" still highlighted
     assert asked(screen) == t("clone.pick_destination")
     assert "▸ [channel] Good target" in plain(screen.render())
+    await press(screen, MenuKey.ESC)  # the routing question, before the destination
+    assert asked(screen) == t("clone.route_by_hashtag")
     await press(screen, MenuKey.ESC, MenuKey.ESC)  # source, then out of the wizard
     assert screen.task is not None and screen.task.done()
     assert await screen.tick() == "pop"
@@ -123,7 +136,7 @@ async def test_esc_at_the_first_question_leaves_and_no_ends_the_wizard_without_w
 
     declined = clone_screen(app)
     await declined.on_enter()
-    await press(declined, MenuKey.ENTER)  # Source; no eligible destination: a new channel
+    await press(declined, MenuKey.ENTER, MenuKey.ENTER)  # Source, no routing; then no destination
     assert t("clone.no_candidates") in plain(declined.render())
     await press(declined, *"Copy", MenuKey.ENTER, MenuKey.ENTER)  # title, empty description
     await press(declined, MenuKey.ENTER, MenuKey.ENTER, MenuKey.ENTER)  # auto, no, no filter

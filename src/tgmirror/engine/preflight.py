@@ -35,6 +35,9 @@ class PlanOptions:
     caption_text: str = ""
     transform: Transform = Transform()  # phase 19
     topic_hashtag: bool = False  # a forum source into a destination without topics
+    # phase 21: the destination has no topics, so the names routing rules give become hashtags
+    # (``strategy.labels_as_hashtags``) and the messages carrying one are sent again
+    label_hashtag: bool = False
     # the source's topics by id, for the routing rules that go by a topic's name (phase 21)
     topic_titles: Mapping[int, str] = field(default_factory=dict)
     by_reference: bool = True  # the source lets content be saved (not ``noforwards``)
@@ -71,6 +74,7 @@ class Plan:
     # see a regex that misses before anything is written
     unmatched: int = 0
     unmatched_samples: tuple[tuple[int, str], ...] = ()
+    hashtags: bool = False  # ``topics`` are hashtags (a destination without topics), not topics
 
 
 @dataclass(slots=True)
@@ -97,6 +101,7 @@ class Preflight:
             by_reference=options.by_reference,
             topic_hashtag=options.topic_hashtag,
             transform=options.transform,
+            label_hashtag=options.label_hashtag,
             topic_titles=options.topic_titles,
         )
         self._send = Options(
@@ -183,10 +188,22 @@ class Preflight:
             pacing_seconds=self._pacing(calls),
             transfer_bytes=transfer,
             largest_file=self._largest,
-            topics=tuple(sorted(self._topics.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))),
+            topics=self._named_topics(),
             unmatched=self._unmatched,
             unmatched_samples=tuple(self._samples),
+            hashtags=self.options.label_hashtag,
         )
+
+    def _named_topics(self) -> tuple[tuple[str | None, int], ...]:
+        """Units by the name a rule gave them: the topic's title, or (a destination without
+        topics) the hashtag that title is written as, names that come to the same hashtag
+        counted together."""
+        rules = self.options.transform.topics
+        found: dict[str | None, int] = {}
+        for title, units in self._topics.items():
+            name = rules.hashtag_of(title) if self.options.label_hashtag and title else title
+            found[name] = found.get(name, 0) + units
+        return tuple(sorted(found.items(), key=lambda kv: (kv[0] is None, kv[0] or "")))
 
     def _write_calls(self) -> int:
         """A forward call carries up to ``batch_size`` units; any other way is a call per unit."""
@@ -226,6 +243,7 @@ def plan_to_dict(plan: Plan) -> dict[str, object]:
         "transfer_bytes": plan.transfer_bytes,
         "largest_file": plan.largest_file,
         "topics": [{"topic": topic, "units": units} for topic, units in plan.topics],
+        "topics_are": "hashtags" if plan.hashtags else "topics",
     }
     if plan.topics:
         data["unmatched"] = {

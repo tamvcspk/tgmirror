@@ -52,7 +52,11 @@ from tgmirror.cli.transform_options import (
     RewriteLinksOption,
     StripRoutingHashtagOption,
     TopicDefaultOption,
+    TopicLimitOption,
     TopicMapOption,
+    TopicPickOption,
+    TopicRegexOption,
+    TopicSkipOption,
     TransformOption,
     topic_flags,
 )
@@ -136,6 +140,10 @@ def clone(
     topic_map: TopicMapOption = None,
     topic_default: TopicDefaultOption = None,
     strip_routing_hashtag: StripRoutingHashtagOption = False,
+    topic_skip: TopicSkipOption = None,
+    topic_regex: TopicRegexOption = None,
+    topic_pick: TopicPickOption = None,
+    topic_limit: TopicLimitOption = None,
     keep_replies: KeepRepliesOption = False,
     rewrite_links: RewriteLinksOption = False,
     keep_forward_header: KeepForwardHeaderOption = False,
@@ -335,6 +343,10 @@ def clone(
             topic_map=topic_map,
             topic_default=topic_default,
             strip_routing_hashtag=strip_routing_hashtag,
+            topic_skip=topic_skip,
+            topic_regex=topic_regex,
+            topic_pick=topic_pick,
+            topic_limit=topic_limit,
             keep_replies=keep_replies,
             rewrite_links=rewrite_links,
             keep_forward_header=keep_forward_header,
@@ -484,6 +496,9 @@ class CloneFlow:
             self._interactive and not o.yes and (o.src is None or (o.dst is None and not o.dst_new))
         )
         self._source: ChannelInfo | None = None
+        # the transform the run goes by: the one from flags/file, plus the routing rule the wizard
+        # may have been asked for (``_pick_routing``)
+        self._transform = o.transform
         self._plan: Plan | None = None
         self._base: RunRequest | None = None
         self._seen_before = False
@@ -494,6 +509,7 @@ class CloneFlow:
     def steps(self) -> list[Callable[[], Awaitable[None]]]:
         return [
             self._pick_source,
+            self._pick_routing,
             self._pick_destination,
             self._read_history,
             self._pick_strategy,
@@ -548,8 +564,21 @@ class CloneFlow:
             source,
             destination,
             take_responsibility=take_responsibility,
-            forum=o.transform.routes_to_topics,
+            forum=self._transform.routes_to_topics,
         )
+
+    async def _pick_routing(self) -> None:
+        """Phase 21: the wizard offers the basic routing rule (a topic, or a hashtag, per hashtag)
+        before the destination is chosen, since routing decides whether a new one is a forum.
+        Flags and files say the same with ``--hashtag-to-topic``/``--transform``; the wizard stays
+        out when either already routes."""
+        o = self._o
+        self._transform = o.transform
+        if not self._asked or o.transform.topics.routing:
+            return
+        if (choice := await wizard.pick_routing(self._prompter)) is not None:
+            rules = o.transform.topics.with_auto_all(skip=choice.skip, pick=choice.pick)
+            self._transform = replace(o.transform, topics=rules)
 
     def _may_download(self, source: ChannelInfo, destination: ChannelInfo | NewChannelSpec) -> bool:
         """Whether the mode given as a flag leaves a way to download and send again, which is the
@@ -566,9 +595,9 @@ class CloneFlow:
         )
         hashtag = o.topic_as_hashtag is not False and loses_topics
         labels = labels_as_hashtags(
-            o.transform, destination.kind if isinstance(destination, ChannelInfo) else None
+            self._transform, destination.kind if isinstance(destination, ChannelInfo) else None
         )
-        return may_reupload(o.mode, o.caption or "keep", hashtag, o.transform, labels)
+        return may_reupload(o.mode, o.caption or "keep", hashtag, self._transform, labels)
 
     async def _confirm_unadministered(self, source: ChannelInfo) -> bool:
         """No CLI flag to type in an interactive flow (menu or classic wizard): typing the flag's
@@ -619,9 +648,11 @@ class CloneFlow:
             # send every message again for nothing (``--mode copy`` still refuses the flag below)
             topic_hashtag = topic_hashtag and loses_topics
         labels = labels_as_hashtags(
-            o.transform, plan.dst.kind if isinstance(plan.dst, ChannelInfo) else None
+            self._transform, plan.dst.kind if isinstance(plan.dst, ChannelInfo) else None
         )
-        downloads = may_reupload(choice.mode, choice.caption, topic_hashtag, o.transform, labels)
+        downloads = may_reupload(
+            choice.mode, choice.caption, topic_hashtag, self._transform, labels
+        )
         base = RunRequest(
             mode=choice.mode,
             batch_size=o.batch_size or self._rt.config().limits.batch_size,
@@ -634,7 +665,7 @@ class CloneFlow:
             ignore_unsupported=choice.ignore_unsupported,
             placeholder=choice.placeholder,
             topic_as_hashtag=topic_hashtag,
-            transform_json=o.transform.to_json(),
+            transform_json=self._transform.to_json(),
         )
         check_options(base)  # options that contradict each other: exit 2 before any write
         if plan.protected and not downloads:

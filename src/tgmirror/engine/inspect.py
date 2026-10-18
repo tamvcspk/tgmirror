@@ -20,6 +20,7 @@ from typing import Any
 
 from tgmirror.core.gateway import GENERAL_TOPIC_ID, MessageReader, SrcMessage, Unit
 from tgmirror.engine import planner
+from tgmirror.engine.transform import TopicRules
 from tgmirror.filters.matcher import Matcher
 
 BY_CHOICES = (
@@ -33,6 +34,7 @@ BY_CHOICES = (
     "domain",
     "size",
     "duplicate",
+    "route",  # phase 21: the topic a `topics.route` rule sends a unit to (needs a transform)
 )
 DEFAULT_BY = ("media", "month", "hashtag")
 DEFAULT_TOP = 10
@@ -196,10 +198,13 @@ class Inspector:
         forum: bool = False,
         topic_titles: Mapping[int, str] | None = None,
         on_selected: Callable[[Unit], None] | None = None,
+        rules: TopicRules | None = None,
     ) -> None:
         unknown = [b for b in by if b not in BY_CHOICES]
         if unknown:
             raise ValueError(f"unknown grouping {unknown[0]!r}")
+        # ``route`` counts nothing without routing rules (the CLI refuses ``--by route`` then)
+        self._rules = rules if rules is not None and rules.routing else None
         self._matcher = matcher
         self._by = tuple(dict.fromkeys(by))
         self._forum = forum
@@ -228,13 +233,25 @@ class Inspector:
         self._selected.add(unit)
         if self._on_selected is not None:
             self._on_selected(unit)
+        destination = self._destination(unit) if "route" in self._by else None
         for m in unit.messages:
             for by in self._by:
-                for key, name in _keys(by, m, forum=self._forum, topic_titles=self._titles):
+                if by == "route":  # decided for the whole unit: an album goes to one topic
+                    keys: list[tuple[str, str | None]] = (
+                        [] if self._rules is None else [(destination or NONE, None)]
+                    )
+                else:
+                    keys = _keys(by, m, forum=self._forum, topic_titles=self._titles)
+                for key, name in keys:
                     self._counts[by][key] += 1
                     self._bytes[by][key] += m.size or 0
                     if name and key not in self._names[by]:
                         self._names[by][key] = name
+
+    def _destination(self, unit: Unit) -> str | None:
+        """The topic (or label) the routing rules, ``default`` included, send ``unit`` to; ``None``:
+        none did, so it follows its source topic's own mapping or lands in General."""
+        return None if self._rules is None else self._rules.destination(unit, self._titles)
 
     def report(self, *, top: int = DEFAULT_TOP, complete: bool = True) -> Report:
         return Report(

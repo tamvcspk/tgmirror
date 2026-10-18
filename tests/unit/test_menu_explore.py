@@ -227,3 +227,36 @@ async def test_the_menu_entry_asks_for_a_source_then_opens_the_explorer(
 
         assert isinstance(result, tuple) and result[0] == "replace"
         assert isinstance(result[1], ExploreScreen)
+
+
+async def test_t_loads_a_transform_and_adds_the_destination_topic_column(
+    make_runtime: MakeRuntime, tmp_path: Path, gateway: FakeGateway
+) -> None:
+    """Phase 21: the routing rules of a transform file give the "By destination topic" column,
+    and go on to the clone wizard with the source and the filter."""
+    rules = tmp_path / "t.yaml"
+    rules.write_text("topics:\n  hashtag_to_topic:\n    auto: all\n", encoding="utf-8")
+    async with explored(make_runtime, tmp_path, gateway) as (screen, _, _):
+        assert screen._explorer is not None and "route" not in screen._explorer.tables
+
+        result = await screen.handle_key("t")
+        assert isinstance(result, tuple) and result[0] == "push"
+        asking = result[1]
+        assert isinstance(asking, WizardScreen)
+        await asking.on_enter()
+        for key in str(rules):
+            await asking.handle_key(key)
+        assert await asking.handle_key(MenuKey.ENTER) == "pop"
+
+        explorer = screen._explorer
+        assert "route" in explorer.tables
+        assert {row.key: row.messages for row in explorer.rows("route")} == {"A": 3, "B": 3}
+        for _ in range(3):  # the last column: forward -> domain -> sender -> route (no topics)
+            await screen.handle_key(MenuKey.TAB)
+        assert "By destination topic" in plain(screen.render())
+        clone = await screen.handle_key("c")
+        assert isinstance(clone, tuple) and isinstance(clone[1], WizardScreen)
+        assert screen._transform.topics.routing
+        await clone[1].on_enter()
+        assert clone[1].task is not None
+        clone[1].task.cancel()

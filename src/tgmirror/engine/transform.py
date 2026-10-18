@@ -89,13 +89,15 @@ from tgmirror.core.gateway import (
     Unit,
 )
 from tgmirror.engine.routing import (
-    AUTO_ALL,
     MAX_TOPIC_TITLE,
+    PICKS,
     Routed,
     RouteRule,
     TransformError,
     auto_rule,
+    checked_pattern,
     parse_rule,
+    parse_skip,
     tag_rule,
     title_of_tag,
 )
@@ -232,11 +234,40 @@ class TopicRules:
 
     # ---- flags on top of a file -----------------------------------------------------------------
 
-    def with_auto_all(self) -> "TopicRules":
-        """``--hashtag-to-topic``: after the rules there are, every other hashtag names a topic."""
-        if any(rule.is_auto_all for rule in self.rules):
-            return self
-        return replace(self, rules=(*self.rules, AUTO_ALL))
+    def with_auto_all(
+        self,
+        *,
+        skip: Sequence[str] = (),
+        pattern: str | None = None,
+        pick: str | None = None,
+        add: bool = True,
+    ) -> "TopicRules":
+        """``--hashtag-to-topic``: after the rules there are, every other hashtag names a topic.
+        ``skip``, ``pattern`` and ``pick`` (``--topic-skip``, ``--topic-regex``, ``--topic-pick``)
+        tune that rule: they add to the ``skip`` of one the file already has and replace its
+        ``regex``/``pick``. With ``add`` off no rule is added, so the flags need one to exist
+        already. Raises ``TransformError``."""
+        names = parse_skip("--topic-skip", "hashtags", list(skip)) if skip else ()
+        if pattern is not None:
+            checked_pattern("--topic-regex", pattern)
+        if pick is not None and pick not in PICKS:
+            raise TransformError("--topic-pick: first or last")
+        for index, rule in enumerate(self.rules):
+            if rule.is_auto_all:
+                tuned = replace(
+                    rule,
+                    skip=tuple(dict.fromkeys((*rule.skip, *names))),
+                    pattern=pattern if pattern is not None else rule.pattern,
+                    pick=pick or rule.pick,
+                )
+                return replace(self, rules=(*self.rules[:index], tuned, *self.rules[index + 1 :]))
+        if not add:
+            raise TransformError(
+                "--topic-skip / --topic-regex / --topic-pick: only mean something with hashtag "
+                "routing (--hashtag-to-topic, or a rule `from: hashtags, to: "
+                '"{value|tag_title}"` in the transform file)'
+            )
+        return replace(self, rules=(*self.rules, auto_rule(names, pattern, pick or "first")))
 
     def layered(
         self,
@@ -244,13 +275,22 @@ class TopicRules:
         renames: Sequence[tuple[int | str, str]] = (),
         default: str | None = None,
         strip: bool = False,
+        limit: int | None = None,
     ) -> "TopicRules":
         """``self`` (what a transform file says) with the command-line flags put on top, the same
-        way ``--hashtag-to-topic`` is: a single value replaces the file's (``default``), a switch
-        only turns on (``strip``), and ``renames`` (``--topic-map``: a source topic id or title and
+        way ``--hashtag-to-topic`` is: a single value replaces the file's (``default``, ``limit``),
+        a switch only turns on (``strip``), and ``renames`` (``--topic-map``: a source topic id
+        or title and
         the name it gets) add to the file's, winning for a topic both name. Raises
         ``TransformError`` when a flag has nothing to act on."""
         rules = self
+        if limit is not None:
+            if not self.variable:
+                raise TransformError(
+                    "--topic-limit: only means something when a rule's name is made from the "
+                    "message (--hashtag-to-topic, or a `{...}` in a rule's `to:`)"
+                )
+            rules = replace(rules, limit=_limit("--topic-limit", limit))
         if default is not None or strip:
             if not self.routing:
                 raise TransformError(

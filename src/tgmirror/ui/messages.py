@@ -550,7 +550,16 @@ VI: dict[str, str] = {
     ),
     "clone.confirm_start": "Sao chép {src} → {dst} ngay bây giờ?",
     "clone.dst_will_be_created": "«{title}» (kênh mới sẽ được tạo)",
-
+    "clone.route_by_hashtag": (
+        "Chia tin theo hashtag: mỗi tin vào topic mang tên hashtag của nó (đích không có topic thì "
+        "thành hashtag trong tin)? Luật phức tạp hơn thì dùng --transform"
+    ),
+    "clone.route_skip": (
+        "Hashtag KHÔNG đặt tên topic, cách nhau bằng dấu phẩy (bỏ trống nếu không có)"
+    ),
+    "clone.route_pick": "Tin có nhiều hashtag: lấy hashtag nào đặt tên topic?",
+    "clone.route_pick_first": "Hashtag đầu tiên",
+    "clone.route_pick_last": "Hashtag cuối cùng",
     "clone.topic_as_hashtag": (
         "Giữ tên topic dưới dạng hashtag trong mỗi tin? (forward không thêm được hashtag, nên "
         "các tin trong topic sẽ được gửi lại thay vì forward)"
@@ -770,7 +779,7 @@ VI: dict[str, str] = {
     "explore.title": "Khám phá ▸ {src}",
     "explore.footer": (
         "←→ cột · ↑↓ dòng · Enter lọc · x loại trừ · ⌫ bỏ bước · Tab đổi cột · l danh sách · "
-        "s lưu @last · c clone · b backup · u cập nhật · R đọc lại · Esc thoát"
+        "s lưu @last · t transform · c clone · b backup · u cập nhật · R đọc lại · Esc thoát"
     ),
     "explore.footer_building": "q hoặc Esc: dừng đọc và dùng phần đã có",
     "explore.index_line": "{messages} tin trong chỉ mục · cập nhật lúc {when}",
@@ -780,7 +789,19 @@ VI: dict[str, str] = {
     "explore.filter": "Lọc: {steps}",
     "explore.no_filter": "(chưa lọc)",
     "explore.not_filterable": "Dòng này không thành bộ lọc được.",
-
+    "explore.route_not_filterable": (
+        "Topic đích là kết quả của luật, không phải thuộc tính của tin: lọc theo "
+        "hashtag, loại media, ..."
+    ),
+    "explore.transform_title": "Nạp transform",
+    "explore.transform_prompt": ("Tệp transform có `topics.route` (để trống: bỏ cột topic đích)"),
+    "explore.transform_none": (
+        "Tệp {path} không có luật định tuyến nào (`topics.route` / `hashtag_to_topic`)."
+    ),
+    "explore.transform_loaded": (
+        "Đã nạp luật định tuyến: cột «Theo topic đích» (Tab để chuyển tới)."
+    ),
+    "explore.transform_dropped": "Đã bỏ luật định tuyến.",
     "explore.hidden_forward": "Nguồn forward ẩn tên: không lọc theo nó được.",
     "explore.channel_post": "Bài đăng của kênh không có người gửi để lọc.",
     "explore.exclude_month": "Không loại trừ theo tháng được: chọn tháng để lọc vào.",
@@ -889,7 +910,12 @@ VI: dict[str, str] = {
     "inspect.by.domain": "Theo domain của link",
     "inspect.by.size": "Theo cỡ file",
     "inspect.by.duplicate": "File đăng nhiều lần",
-
+    "inspect.by.route": "Theo topic đích",
+    "inspect.route_needs_routing": (
+        "--by route cần luật định tuyến: đưa --transform có `topics.route` (hoặc "
+        "--hashtag-to-topic)."
+    ),
+    "inspect.none_route": "(không luật nào khớp)",
     "inspect.col.value": "Giá trị",
     "inspect.col.messages": "Tin",
     "inspect.col.size": "Dung lượng",
@@ -954,7 +980,13 @@ VI: dict[str, str] = {
     "inspect.plan_left_out": "Sẽ bỏ qua: {what}.",
     "inspect.plan_topics": "Vào topic (theo luật `topics.route`): {what}.",
     "inspect.plan_topics_rest": "không luật nào khớp (theo topic nguồn, hoặc General)",
-
+    "inspect.plan_topics_hashtags": (
+        "Thành hashtag trong tin (theo luật `topics.route`; đích không có topic): {what}."
+    ),
+    "inspect.plan_topics_rest_hashtags": "không luật nào khớp (chuyển tiếp nguyên, không hashtag)",
+    "inspect.plan_dst_no_topics_kind": (
+        "--dst-no-topics chỉ dùng với --plan clone hoặc --plan restore."
+    ),
     "inspect.plan_unmatched": (
         "{count} tin không khớp luật nào (sửa luật nếu đó không phải điều bạn muốn); vài tin đầu:"
     ),
@@ -1532,7 +1564,14 @@ EN: dict[str, str] = {
     ),
     "clone.confirm_start": "Clone {src} → {dst} now?",
     "clone.dst_will_be_created": "'{title}' (a new channel will be created)",
-
+    "clone.route_by_hashtag": (
+        "Split by hashtag: each message goes to the topic named after its hashtag (a hashtag in "
+        "the message when the destination has no topics)? Finer rules: use --transform"
+    ),
+    "clone.route_skip": ("Hashtags that do NOT name a topic, separated by commas (empty for none)"),
+    "clone.route_pick": "A message with several hashtags: which one names its topic?",
+    "clone.route_pick_first": "The first hashtag",
+    "clone.route_pick_last": "The last hashtag",
     "clone.topic_as_hashtag": (
         "Keep the topic name as a hashtag in each message? (a forward cannot add one, so "
         "messages in a topic are sent again instead of forwarded)"
@@ -1760,7 +1799,8 @@ EN: dict[str, str] = {
     "explore.title": "Explore > {src}",
     "explore.footer": (
         "left/right column - up/down row - Enter filter - x exclude - Backspace undo - Tab "
-        "other column - l list - s save @last - c clone - b backup - u update - R re-read - Esc"
+        "other column - l list - s save @last - t transform - c clone - b backup - u "
+        "update - R re-read - Esc"
     ),
     "explore.footer_building": "q or Esc: stop reading and use what there is",
     "explore.index_line": "{messages} messages in the index - updated {when}",
@@ -1770,7 +1810,19 @@ EN: dict[str, str] = {
     "explore.filter": "Filter: {steps}",
     "explore.no_filter": "(not filtered yet)",
     "explore.not_filterable": "This row cannot become a filter.",
-
+    "explore.route_not_filterable": (
+        "A destination topic is what the rules give, not something a message has: filter "
+        "by hashtag, media kind, ..."
+    ),
+    "explore.transform_title": "Load a transform",
+    "explore.transform_prompt": (
+        "Transform file with `topics.route` (empty: drop the destination-topic column)"
+    ),
+    "explore.transform_none": "{path} holds no routing rule (`topics.route` / `hashtag_to_topic`).",
+    "explore.transform_loaded": (
+        'Routing rules loaded: the "By destination topic" column (Tab to reach it).'
+    ),
+    "explore.transform_dropped": "Routing rules dropped.",
     "explore.hidden_forward": "The forward hides its origin: it cannot be filtered on.",
     "explore.channel_post": "A channel post has no sender to filter on.",
     "explore.exclude_month": "A month cannot be excluded: pick a month to keep instead.",
@@ -1883,7 +1935,12 @@ EN: dict[str, str] = {
     "inspect.by.domain": "By link domain",
     "inspect.by.size": "By file size",
     "inspect.by.duplicate": "Files posted more than once",
-
+    "inspect.by.route": "By destination topic",
+    "inspect.route_needs_routing": (
+        "--by route needs routing rules: give a --transform with `topics.route` (or "
+        "--hashtag-to-topic)."
+    ),
+    "inspect.none_route": "(no rule matched)",
     "inspect.col.value": "Value",
     "inspect.col.messages": "Messages",
     "inspect.col.size": "Size",
@@ -1951,7 +2008,14 @@ EN: dict[str, str] = {
     "inspect.plan_left_out": "It would leave out: {what}.",
     "inspect.plan_topics": "Into topics (by the `topics.route` rules): {what}.",
     "inspect.plan_topics_rest": "no rule matched (the source topic's own, or General)",
-
+    "inspect.plan_topics_hashtags": (
+        "Into hashtags in the message (by the `topics.route` rules; the destination has no "
+        "topics): {what}."
+    ),
+    "inspect.plan_topics_rest_hashtags": "no rule matched (forwarded as it is, no hashtag)",
+    "inspect.plan_dst_no_topics_kind": (
+        "--dst-no-topics only goes with --plan clone or --plan restore."
+    ),
     "inspect.plan_unmatched": (
         "{count} messages matched no rule (fix the rules if that is not what you want); the "
         "first few:"

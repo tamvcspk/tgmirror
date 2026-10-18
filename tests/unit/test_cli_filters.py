@@ -284,15 +284,15 @@ def test_the_wizard_stores_the_same_filter_as_the_flags(
         select=["Source", "Copy", "Automatic", CRITERIA],
         checkbox=[["video"]],
         text=["#News", "", "2024-01-01", "", "", ""],  # hashtags, keywords, since, until, sizes
-        confirm=[False, True],  # the one question, after the preview
+        confirm=[False, False, True],  # the one question, after the preview
     )
     result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 0, result.output
     assert filters_of(rt) == filters_of(flags_rt) == NEWS_SINCE_2024
     assert "Preview" in result.output
-    # "customise how to copy?" (no), then the one question before copying
-    assert [k for k, _ in prompter.asked if k == "confirm"] == ["confirm", "confirm"]
+    # "split by hashtag?" (no), "customise how to copy?" (no), then the one question before copying
+    assert [k for k, _ in prompter.asked if k == "confirm"] == ["confirm"] * 3
 
 
 def test_the_wizard_offers_a_topic_checkbox_for_a_forum_source(
@@ -320,7 +320,7 @@ def test_the_wizard_offers_a_topic_checkbox_for_a_forum_source(
         select=["Forum", "Copy", "Automatic", CRITERIA],
         checkbox=[[], ["Announcements"]],  # no media, then the topic checkbox
         text=["", "", "", "", "", ""],
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
     result = runner.invoke(app, ["clone"], obj=rt)
 
@@ -337,7 +337,7 @@ def test_choosing_no_filter_in_the_wizard_stores_an_empty_one_and_shows_no_previ
         gateway,
         tmp_path / "w",
         select=["Source", "Copy", "Automatic", "No filter"],
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -361,7 +361,7 @@ def test_the_wizard_loads_a_yaml_file(
         tmp_path / "w",
         select=["Source", "Copy", "Automatic", "Load from a YAML file"],
         text=[f'"{path}"'],  # pasted with quotes, as "Copy as path" gives it
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -382,7 +382,7 @@ def test_the_wizard_asks_again_after_an_invalid_answer(
         checkbox=[["video"]],
         # only the refused answer is asked again: the media ticked and the text before it stay
         text=["", "", "last week", "2024-01-01", "", "", ""],
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -407,7 +407,7 @@ def test_declining_after_the_preview_leaves_nothing_behind(
         select=["Source", "Automatic", CRITERIA],  # no existing destination: it asks for a new one
         checkbox=[[]],
         text=["Copy", "", "#k", "", "", "", "", ""],
-        confirm=[False, False],  # the one question, after the preview: no
+        confirm=[False, False, False],  # the one question, after the preview: no
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)
@@ -519,7 +519,7 @@ def test_the_wizard_offers_to_keep_the_filter_of_a_pair_it_has_seen(
         gateway,
         tmp_path / "w",
         select=["Source", "Copy", "Automatic", "Continue", "Keep the filter of the previous run"],
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
 
     result = runner.invoke(app, ["clone"], obj=rt)

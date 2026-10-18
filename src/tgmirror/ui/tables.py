@@ -85,7 +85,8 @@ def print_topics(console: Console, topics: Sequence[TopicInfo]) -> None:
 def row_label(by: str, row: InspectRow) -> str:
     """A table row's words: the sentinel key says "none", a name rides along with its id."""
     if row.key == inspect.NONE:
-        return t("inspect.none_forward" if by == "forward" else "inspect.none_sender")
+        key = {"forward": "inspect.none_forward", "route": "inspect.none_route"}
+        return t(key.get(by, "inspect.none_sender"))
     if row.name:
         return f"{row.name} ({row.key})"
     return row.key
@@ -230,9 +231,10 @@ def print_plan(
             )
         console.print(grid)
     if plan.topics:
-        rest = t("inspect.plan_topics_rest")
+        suffix = "_hashtags" if plan.hashtags else ""
+        rest = t(f"inspect.plan_topics_rest{suffix}")
         named = [(topic if topic is not None else rest, units) for topic, units in plan.topics]
-        console.print(Text(t("inspect.plan_topics", what=_kinds(named))))
+        console.print(Text(t(f"inspect.plan_topics{suffix}", what=_kinds(named))))
     if plan.unmatched:
         console.print(Text(t("inspect.plan_unmatched", count=f"{plan.unmatched:,}")))
         for message_id, text in plan.unmatched_samples:

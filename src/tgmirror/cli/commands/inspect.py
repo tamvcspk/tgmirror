@@ -54,7 +54,11 @@ from tgmirror.cli.transform_options import (
     RewriteLinksOption,
     StripRoutingHashtagOption,
     TopicDefaultOption,
+    TopicLimitOption,
     TopicMapOption,
+    TopicPickOption,
+    TopicRegexOption,
+    TopicSkipOption,
     TransformOption,
     topic_flags,
 )
@@ -78,8 +82,9 @@ from tgmirror.engine.endpoints import find_channel
 from tgmirror.engine.flood import Interrupted, inspect_guard
 from tgmirror.engine.preflight import KINDS, PlanOptions, Preflight, plan_to_dict
 from tgmirror.engine.runner import RunControl
-from tgmirror.engine.runs import RunRequest, check_options
-from tgmirror.engine.transform import Transform
+from tgmirror.engine.runs import InvalidOptions, RunRequest, check_options
+from tgmirror.engine.strategy import labels_as_hashtags
+from tgmirror.engine.transform import TopicRules, Transform
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 from tgmirror.store.index import MetadataIndex
@@ -255,6 +260,10 @@ def inspect_command(
     topic_map: TopicMapOption = None,
     topic_default: TopicDefaultOption = None,
     strip_routing_hashtag: StripRoutingHashtagOption = False,
+    topic_skip: TopicSkipOption = None,
+    topic_regex: TopicRegexOption = None,
+    topic_pick: TopicPickOption = None,
+    topic_limit: TopicLimitOption = None,
     keep_replies: KeepRepliesOption = False,
     rewrite_links: RewriteLinksOption = False,
     keep_forward_header: KeepForwardHeaderOption = False,
@@ -274,6 +283,15 @@ def inspect_command(
         typer.Option(
             "--topic-as-hashtag",
             help="With --plan clone: a forum source into a destination without topics.",
+        ),
+    ] = False,
+    dst_no_topics: Annotated[
+        bool,
+        typer.Option(
+            "--dst-no-topics",
+            help="With --plan clone/restore: the destination is not a forum, so the names the "
+            "topics.route rules give become hashtags in the messages (those are sent again). "
+            "Without it the plan assumes a forum, as for a new destination.",
         ),
     ] = False,
     refresh: Annotated[
@@ -364,6 +382,10 @@ def inspect_command(
                     no_index,
                     hashtag_to_topic,
                     strip_routing_hashtag,
+                    topic_skip,
+                    topic_regex,
+                    topic_pick,
+                    topic_limit,
                     keep_replies,
                     rewrite_links,
                     keep_forward_header,
@@ -371,6 +393,7 @@ def inspect_command(
                     ignore_unsupported,
                     placeholder,
                     topic_as_hashtag,
+                    dst_no_topics,
                 ],  # fmt: skip
             )
         filters = collect(
@@ -400,12 +423,18 @@ def inspect_command(
                 topic_map=topic_map,
                 topic_default=topic_default,
                 strip_routing_hashtag=strip_routing_hashtag,
+                topic_skip=topic_skip,
+                topic_regex=topic_regex,
+                topic_pick=topic_pick,
+                topic_limit=topic_limit,
                 keep_replies=keep_replies,
                 rewrite_links=rewrite_links,
                 keep_forward_header=keep_forward_header,
             ),
         )
         tables = _validated_by(by)
+        if "route" in tables and not transform.topics.routing:
+            raise UsageProblem("inspect.route_needs_routing")
         if freeze and save is None:
             raise UsageProblem("inspect.freeze_needs_save")
         if offline and (refresh or no_index):
@@ -432,6 +461,8 @@ def inspect_command(
             ignore_unsupported=ignore_unsupported,
             placeholder=placeholder,
             topic_as_hashtag=topic_as_hashtag,
+            dst_no_topics=dst_no_topics,
+            transform_for_route="route" in tables,
         )
         job = _Job(
             filters=filters,
@@ -442,6 +473,7 @@ def inspect_command(
             as_json=as_json,
             csv_path=csv_path,
             plan=planned,
+            rules=transform.topics,
             limits=limits,
             save=save,
             freeze=freeze,
@@ -568,6 +600,8 @@ def _plan_options(
     ignore_unsupported: bool,
     placeholder: bool,
     topic_as_hashtag: bool,
+    dst_no_topics: bool = False,
+    transform_for_route: bool = False,
 ) -> PlanOptions | None:
     """The ``--plan`` flags as ``PlanOptions``, checked like the real command checks them (the
     same ``check_options``), before anything is read."""
@@ -575,11 +609,12 @@ def _plan_options(
         mode is not None
         or caption is not None
         or caption_text is not None
-        or not transform.is_empty
+        or (not transform.is_empty and not transform_for_route)
         or reset_polls
         or ignore_unsupported
         or placeholder
         or topic_as_hashtag
+        or dst_no_topics
     )
     if plan is None:
         if given:
@@ -605,6 +640,11 @@ def _plan_options(
         topic_as_hashtag=topic_as_hashtag,
     )
     check_options(request)
+    if dst_no_topics and plan == "backup":
+        raise UsageProblem("inspect.plan_dst_no_topics_kind")
+    labels = dst_no_topics and labels_as_hashtags(transform, ChatKind.BROADCAST)
+    if labels and request.mode == "copy":  # the name becomes a hashtag: needs a rewrite
+        raise InvalidOptions("route_needs_rewrite")
     return PlanOptions(
         kind=plan,
         mode=request.mode,
@@ -612,6 +652,7 @@ def _plan_options(
         caption_text=request.caption_text,
         transform=transform,
         topic_hashtag=topic_as_hashtag,
+        label_hashtag=labels,
         reset_polls=reset_polls,
         ignore_unsupported=ignore_unsupported,
         placeholder=placeholder,
@@ -628,6 +669,7 @@ class _Job:
     as_json: bool
     csv_path: Path | None
     plan: PlanOptions | None
+    rules: TopicRules
     limits: Limits
     save: Path | None
     freeze: bool
@@ -725,6 +767,7 @@ async def _inspect(source: Source, job: _Job, control: RunControl) -> None:
         forum=source.forum,
         topic_titles=source.topic_titles,
         on_selected=on_selected,
+        rules=job.rules,
     )
 
     last_line = [time.monotonic()]  # the first line comes after one interval, not at once

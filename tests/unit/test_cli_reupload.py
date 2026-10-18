@@ -309,7 +309,7 @@ def test_the_wizard_step_and_the_flags_end_in_the_same_run(
         select=["Source", "Copy", "Download and send again", "Add some text", "No filter"],
         text=["via X"],
         checkbox=[[t("options.flag_reset_polls")]],
-        confirm=[True, True],  # customise how to copy; then the one question
+        confirm=[False, True, True],  # customise how to copy; then the one question
     )
     wizard_rt = make_runtime(
         gateway=wizard_gw, prompter=prompter, interactive=True, root=tmp_path / "wizard"
@@ -328,7 +328,7 @@ def test_declining_to_customise_is_a_plain_forward_with_the_captions_kept(
 ) -> None:
     source_with_messages(gateway, 1)
     prompter = ScriptedPrompter(
-        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, True]
+        select=["Source", "Copy", "Automatic", "No filter"], confirm=[False, False, True]
     )
     rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
 
@@ -347,7 +347,7 @@ def test_a_protected_source_skips_the_how_to_copy_question_and_goes_to_the_rest(
     prompter = ScriptedPrompter(
         select=["Source", "Copy", "Keep them", "No filter"],
         checkbox=[[]],
-        confirm=[True, True],  # the D3 question, then the one before copying
+        confirm=[False, True, True],  # the D3 question, then the one before copying
     )
     rt = make_runtime(gateway=gateway, prompter=prompter, interactive=True)
 
@@ -355,7 +355,7 @@ def test_a_protected_source_skips_the_how_to_copy_question_and_goes_to_the_rest(
 
     assert result.exit_code == 0, result.output
     asked = [m for kind, m in prompter.asked if kind == "confirm"]
-    assert not any("Customise" in m for m in asked) and "Restrict saving content" in asked[0]
+    assert not any("Customise" in m for m in asked) and "Restrict saving content" in asked[1]
     assert saved_runs(rt)[0].mode == "reupload"
 
 
@@ -485,7 +485,7 @@ def test_the_wizard_always_asks_for_the_mode_and_offers_all_three(
         make_runtime,
         gateway,
         select=["Source", "Copy", "Automatic", "No filter"],
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
 
     assert result.exit_code == 0, result.output
@@ -506,11 +506,12 @@ def test_choosing_copy_in_the_wizard_is_the_flag_and_asks_nothing_more(
         make_runtime,
         gateway,
         select=["Source", "Copy", "Server-side forward only", "No filter"],
-        confirm=[True],  # only the question before copying: copy has no details to ask about
+        confirm=[False, True],  # only the question before copying: copy has no details to ask about
     )
 
     assert result.exit_code == 0, result.output
-    assert [kind for kind, _ in prompter.asked].count("confirm") == 1
+    # the routing question, then the one before copying
+    assert [kind for kind, _ in prompter.asked].count("confirm") == 2
     (run,) = saved_runs(rt)
     assert (run.mode, run.options.caption) == ("copy", "keep")
 
@@ -524,12 +525,12 @@ def test_reupload_without_details_uses_the_defaults_and_asks_about_them_once(
         make_runtime,
         gateway,
         select=["Source", "Copy", "Download and send again", "No filter"],
-        confirm=[False, True],  # details: no; then the question before copying
+        confirm=[False, False, True],  # details: no; then the question before copying
     )
 
     assert result.exit_code == 0, result.output
     asked = [m for kind, m in prompter.asked if kind == "confirm"]
-    assert "what cannot be copied" in asked[0]
+    assert "what cannot be copied" in asked[1]
     (run,) = saved_runs(rt)
     assert (run.mode, run.options.caption, run.options.reset_polls) == ("reupload", "keep", False)
     assert texts(gateway, dst) == ["m1"] and len(gateway.calls_to("send_prepared")) == 1
@@ -544,11 +545,11 @@ def test_the_auto_details_question_is_about_captions_only(
         make_runtime,
         gateway,
         select=["Source", "Copy", "Automatic", "No filter"],
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
 
     assert result.exit_code == 0, result.output
-    assert "captions" in [m for kind, m in prompter.asked if kind == "confirm"][0]
+    assert "captions" in [m for kind, m in prompter.asked if kind == "confirm"][1]
     assert not [1 for kind, _ in prompter.asked if kind == "checkbox"]
 
 

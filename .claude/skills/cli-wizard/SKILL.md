@@ -101,6 +101,10 @@ User-facing strings are Vietnamese by default with English fallbacks kept in one
 - Wrap user-provided text (channel titles) in `rich.text.Text` before putting it in a Rich table; a title like `[pro]` is otherwise read as markup.
 - Tables must stay readable at 80 columns (the phase 1 `channels` table was unreadable before it was compacted); test with `CliRunner`, which is 80 wide.
 
+## A question that goes before a step it decides (Phase 21)
+
+`CloneFlow._pick_routing` ("Chia tin theo hashtag?", default No) sits between the source and the destination, because routing decides whether a *new* destination is made a forum (`plan_endpoints(forum=...)`); the transform the run goes by is `CloneFlow._transform` (the flags' one plus what the wizard added), not `options.transform`, which only says what was given. A new `confirm` in the wizard shifts every scripted `ScriptedPrompter(confirm=[...])` answer and every "n-th confirm" assertion in the wizard tests (~30 needed `False` put in front when this one was added): count them before adding another.
+
 ## Commands that destroy something (Phase 20, `tgmirror delete`)
 
 The shape to copy for `edit`/`repost`/`undo`: plan first (`DeleteFlow.planned`, printing `ui/lines.py::delete_plan_lines`), then `DeleteFlow.confirmed` — a terminal types the **count** back (never Yes/No), no terminal needs `--yes` **and** `--expect N`, neither leaves the plan saved (`UsageProblem("delete.needs_yes")`, exit 2) — then `execute` in the foreground with `RunControl`/`stop_on_interrupt`/`rt.keys` like `backup`. A wrong confirmation cancels the plan. `--resume O<n>` takes up a saved or interrupted operation and excludes the source/filter flags. Operation numbers are shown as `O<n>` (`history`, `pause`/`stop`).

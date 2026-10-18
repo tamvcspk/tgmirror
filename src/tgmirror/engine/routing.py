@@ -352,7 +352,7 @@ def parse_rule(where: str, raw: Any) -> RouteRule:
         return RouteRule(to, when)
     groups: set[str] = {"value"}
     if pattern is not None:
-        compiled = _checked_pattern(where, pattern)
+        compiled = checked_pattern(where, pattern)
         groups |= {str(i) for i in range(compiled.groups + 1)} | set(compiled.groupindex)
     elif source == "text":
         raise TransformError(f"{where}.regex: `from: text` needs a pattern to find the part to use")
@@ -362,10 +362,10 @@ def parse_rule(where: str, raw: Any) -> RouteRule:
             raise TransformError(f"{where}.to: {{{part.name}}} is not there (have: {have})")
     if pick not in PICKS:
         raise TransformError(f"{where}.pick: first or last")
-    return RouteRule(to, when, source, pattern, pick, _skip(where, source, skip_raw))
+    return RouteRule(to, when, source, pattern, pick, parse_skip(where, source, skip_raw))
 
 
-def _checked_pattern(where: str, pattern: Any) -> "regex.Pattern[str]":
+def checked_pattern(where: str, pattern: Any) -> "regex.Pattern[str]":
     if not isinstance(pattern, str) or not pattern:
         raise TransformError(f"{where}.regex: a pattern")
     try:
@@ -374,7 +374,7 @@ def _checked_pattern(where: str, pattern: Any) -> "regex.Pattern[str]":
         raise TransformError(f"{where}.regex: {exc}") from None
 
 
-def _skip(where: str, source: str, raw: Any) -> tuple[str, ...]:
+def parse_skip(where: str, source: str, raw: Any) -> tuple[str, ...]:
     if raw is None:
         return ()
     items = [raw] if isinstance(raw, str) else raw
@@ -406,9 +406,13 @@ def tag_rule(tag: str, topic: str) -> RouteRule:
     return RouteRule(escaped(topic), Rule(hashtag=(tag,)))
 
 
-def auto_rule(skip: tuple[str, ...] = ()) -> RouteRule:
-    """Every hashtag gets a topic named after it: ``auto: all``, ``--hashtag-to-topic``."""
-    return RouteRule("{value|tag_title}", None, "hashtags", None, "first", skip)
+def auto_rule(
+    skip: tuple[str, ...] = (), pattern: str | None = None, pick: str = "first"
+) -> RouteRule:
+    """Every hashtag gets a topic named after it: ``auto: all``, ``--hashtag-to-topic``. ``pattern``
+    (``--topic-regex``) keeps only the hashtags it matches, ``pick`` (``--topic-pick``) takes the
+    first or the last of the ones left."""
+    return RouteRule("{value|tag_title}", None, "hashtags", pattern, pick, skip)
 
 
 AUTO_ALL = auto_rule()

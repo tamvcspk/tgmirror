@@ -22,6 +22,7 @@ from tgmirror.engine.endpoints import (
     validate_new_channel,
 )
 from tgmirror.engine.selection import LastDiscovery
+from tgmirror.engine.transform import TopicRules, TransformError
 from tgmirror.filters.model import FilterError, FilterSpec
 from tgmirror.filters.parser import FlagFilters, from_flags
 from tgmirror.store.runs import Run
@@ -160,6 +161,39 @@ async def pick_topic_as_hashtag(prompter: Prompter) -> bool:
     """Phase 8: the source is a forum, the destination is not, and the run can rewrite text —
     keep each topic's name as a hashtag instead of dropping it silently. Default yes."""
     return await prompter.confirm(t("clone.topic_as_hashtag"), True)
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingChoice:
+    """Phase 21: the basic routing rule the wizard offers (``--hashtag-to-topic`` with
+    ``--topic-skip`` and ``--topic-pick``). Anything finer is a ``--transform`` file."""
+
+    skip: tuple[str, ...] = ()
+    pick: str = "first"
+
+
+async def pick_routing(prompter: Prompter) -> RoutingChoice | None:
+    """Offer to send each message to the topic (a hashtag, in a destination without topics) named
+    after its hashtag. ``None``: no, the default. The hashtags to leave out are checked as the flag
+    checks them and asked again when one is not a hashtag."""
+    if not await prompter.confirm(t("clone.route_by_hashtag"), False):
+        return None
+    skip: tuple[str, ...] = ()
+    for attempt in range(1, MAX_FILTER_ATTEMPTS + 1):
+        typed = await prompter.text(t("clone.route_skip"))
+        skip = tuple(part.strip() for part in typed.replace(";", ",").split(",") if part.strip())
+        try:
+            TopicRules().with_auto_all(skip=skip)
+            break
+        except TransformError as exc:
+            if attempt == MAX_FILTER_ATTEMPTS:
+                raise
+            prompter.say(describe(exc))
+    pick = await prompter.select(
+        t("clone.route_pick"),
+        [Choice(t("clone.route_pick_first"), "first"), Choice(t("clone.route_pick_last"), "last")],
+    )
+    return RoutingChoice(skip, pick)
 
 
 @dataclass(frozen=True, slots=True)

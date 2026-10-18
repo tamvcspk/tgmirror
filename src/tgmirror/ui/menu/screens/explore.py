@@ -13,6 +13,7 @@ are asked as always (rule 7: nothing here that only the menu can do).
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from rich.console import Group, RenderableType
 from rich.table import Table
@@ -28,8 +29,10 @@ from tgmirror.core.gateway import ChannelInfo, ChatKind, Unit
 from tgmirror.engine import index as indexing
 from tgmirror.engine import inspect as inspecting
 from tgmirror.engine import planner, selection
+from tgmirror.engine import transform as transforms
 from tgmirror.engine.explore import CYCLE, FIXED, Explorer, NotFilterable
 from tgmirror.engine.flood import Interrupted, inspect_guard
+from tgmirror.engine.transform import Transform, TransformError
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterError
 from tgmirror.store.index import MetadataIndex
@@ -78,6 +81,9 @@ class ExploreScreen(Screen):
         self._focus = 0  # the column the cursor is in
         self._cursor = [0, 0, 0, 0]  # the highlighted row of each column
         self._extra = 0  # which of ``CYCLE`` the last column shows
+        # phase 21: a transform loaded with ``t``: its routing rules make the "destination topic"
+        # column, and it goes with the source into the clone wizard
+        self._transform = Transform()
 
     # ---- building the index -----------------------------------------------------------------
 
@@ -139,7 +145,9 @@ class ExploreScreen(Screen):
                 self._units.append(item)
         finally:
             await index.close()
-        self._explorer = Explorer(self._units, forum=forum, topic_titles=titles)
+        self._explorer = Explorer(
+            self._units, forum=forum, topic_titles=titles, rules=self._transform.topics
+        )
 
     async def tick(self) -> ScreenResult | None:
         task = self._task
@@ -299,8 +307,12 @@ class ExploreScreen(Screen):
             return ("push", ListScreen(self._lines(), explorer.report.selected.messages))
         if letter in ("s", "S"):
             self._note = self._save()
+        elif letter in ("t", "T"):
+            return ("push", self._transform_screen())
         elif letter in ("c", "C"):
-            clone = CloneOptions(src=str(self._channel.id), filters=explorer.spec)
+            clone = CloneOptions(
+                src=str(self._channel.id), filters=explorer.spec, transform=self._transform
+            )
             return ("push", clone_screen(self._app, clone))
         elif letter in ("b", "B"):
             backup = BackupOptions(src=str(self._channel.id), filters=explorer.spec)
@@ -310,6 +322,35 @@ class ExploreScreen(Screen):
         elif letter == "R":
             return ("replace", ExploreScreen(self._app, self._channel, refresh=True))
         return "stay"
+
+    def _transform_screen(self) -> WizardScreen:
+        """Ask for a transform file and load its routing rules into the explorer (rule 7: the
+        same file ``--transform`` takes). An empty answer drops them. A bad file is said, and the
+        rules in use stay."""
+
+        async def flow(prompter: MenuPrompter) -> ScreenResult:
+            raw = (await prompter.path(t("explore.transform_prompt"))).strip().strip("\"'")
+            explorer = self._explorer
+            assert explorer is not None
+            if not raw:
+                self._transform = Transform()
+                explorer.set_rules(None)
+                self._note = t("explore.transform_dropped")
+                return "pop"
+            path = await asyncio.to_thread(lambda: Path(raw).expanduser())
+            try:
+                loaded = await asyncio.to_thread(transforms.load, path)
+            except (TransformError, OSError) as exc:
+                text = exc.detail if isinstance(exc, TransformError) else str(exc)
+                return ("replace", InfoScreen([str(text)]))
+            if not loaded.topics.routing:
+                return ("replace", InfoScreen([t("explore.transform_none", path=path)]))
+            self._transform = loaded
+            explorer.set_rules(loaded.topics)
+            self._note = t("explore.transform_loaded")
+            return "pop"
+
+        return WizardScreen(t("explore.transform_title"), flow)
 
     def _selected_units(self) -> list[Unit]:
         assert self._explorer is not None

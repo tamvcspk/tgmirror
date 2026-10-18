@@ -4,7 +4,9 @@ offer the same flag and the same rules.
 
 The transform can also arrive in the ``transform:`` section of a ``--selection`` file. Both at
 once is a conflict, not a merge (two files, no way to say which is the base). The ``topics`` flags
-(``--hashtag-to-topic``, ``--topic-map``, ``--topic-default``, ``--strip-routing-hashtag``) are
+(``--hashtag-to-topic``, ``--topic-map``, ``--topic-default``, ``--strip-routing-hashtag``,
+and the ones that tune hashtag routing: ``--topic-skip``, ``--topic-regex``, ``--topic-pick``,
+``--topic-limit``) are
 not a second file: they go on top of whichever one there is (or of nothing), and so do
 ``--keep-replies``, ``--keep-forward-header`` and ``--rewrite-links``.
 """
@@ -83,6 +85,54 @@ StripRoutingHashtagOption = Annotated[
 ]
 
 
+TopicSkipOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--topic-skip",
+        metavar="#TAG",
+        help="With hashtag routing: a hashtag that names no topic (an advertiser's, say). Repeat "
+        "for more. Adds to the `skip` of the file's rule `from: hashtags, to: "
+        '"{value|tag_title}"`.',
+        rich_help_panel="Transform",
+    ),
+]
+
+TopicRegexOption = Annotated[
+    str | None,
+    typer.Option(
+        "--topic-regex",
+        metavar="REGEX",
+        help="With hashtag routing: only a hashtag the pattern finds names a topic (write it for "
+        "the hashtag in lower case, with its #: '^#(?!yy)' leaves out those starting yy). "
+        "Replaces the `regex` of the file's hashtag rule.",
+        rich_help_panel="Transform",
+    ),
+]
+
+TopicPickOption = Annotated[
+    str | None,
+    typer.Option(
+        "--topic-pick",
+        metavar="first|last",
+        help="With hashtag routing, when a message has several hashtags: the one that names its "
+        "topic (default first). Replaces the `pick` of the file's hashtag rule.",
+        rich_help_panel="Transform",
+    ),
+]
+
+TopicLimitOption = Annotated[
+    int | None,
+    typer.Option(
+        "--topic-limit",
+        min=1,
+        max=1000,
+        help="At most this many new topics are created in one run by a rule whose name comes from "
+        "the message (default 30). Replaces `limit` of a --transform file.",
+        rich_help_panel="Transform",
+    ),
+]
+
+
 KeepRepliesOption = Annotated[
     bool,
     typer.Option(
@@ -136,6 +186,10 @@ class TopicFlags:
     keep_replies: bool = False
     keep_forward_header: bool = False
     rewrite_links: bool = False
+    topic_skip: tuple[str, ...] = ()
+    topic_regex: str | None = None
+    topic_pick: str | None = None
+    topic_limit: int | None = None
 
 
 def topic_flags(
@@ -147,6 +201,10 @@ def topic_flags(
     keep_replies: bool = False,
     keep_forward_header: bool = False,
     rewrite_links: bool = False,
+    topic_skip: list[str] | None = None,
+    topic_regex: str | None = None,
+    topic_pick: str | None = None,
+    topic_limit: int | None = None,
 ) -> TopicFlags:
     return TopicFlags(
         hashtag_to_topic,
@@ -156,6 +214,10 @@ def topic_flags(
         keep_replies,
         keep_forward_header,
         rewrite_links,
+        tuple(topic_skip or ()),
+        topic_regex,
+        topic_pick,
+        topic_limit,
     )
 
 
@@ -184,14 +246,23 @@ def with_topic_flags(base: Transform, flags: TopicFlags) -> Transform:
     """``base`` with the ``topics`` flags on top: ``--hashtag-to-topic`` adds the rule ``auto:
     all`` stands for, ``--topic-map`` adds renames, ``--topic-default`` and
     ``--strip-routing-hashtag`` set their part of the routing (so they need routing, from the
-    file or ``--hashtag-to-topic``). Raises ``TransformError``."""
+    file or ``--hashtag-to-topic``); ``--topic-skip``, ``--topic-regex`` and ``--topic-pick`` tune
+    the hashtag rule that ``--hashtag-to-topic`` adds or the file already has, and
+    ``--topic-limit`` replaces the limit. Raises ``TransformError``."""
     rules = base.topics
-    if flags.hashtag_to_topic:
-        rules = rules.with_auto_all()
+    tuned = bool(flags.topic_skip or flags.topic_regex is not None or flags.topic_pick)
+    if flags.hashtag_to_topic or tuned:
+        rules = rules.with_auto_all(
+            skip=flags.topic_skip,
+            pattern=flags.topic_regex,
+            pick=flags.topic_pick,
+            add=flags.hashtag_to_topic,
+        )
     rules = rules.layered(
         renames=_renames_of(flags.topic_map),
         default=flags.topic_default,
         strip=flags.strip_routing_hashtag,
+        limit=flags.topic_limit,
     )
     changed = base if rules == base.topics else replace(base, topics=rules)
     if flags.keep_replies:

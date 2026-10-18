@@ -18,12 +18,13 @@ from typing import Any
 
 from tgmirror.core.gateway import Unit
 from tgmirror.engine.inspect import NONE, Inspector, Report, Row, Table
+from tgmirror.engine.transform import TopicRules
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 
 # the four a screen shows side by side: three fixed, and one that cycles through the rest
 FIXED = ("media", "month", "hashtag")
-CYCLE = ("forward", "domain", "topic", "sender")
+CYCLE = ("forward", "domain", "topic", "sender", "route")
 TABLES = (*FIXED, *CYCLE)
 
 
@@ -84,6 +85,8 @@ def predicate_of(by: str, key: str) -> dict[str, Any]:
             if key.lstrip("-").isdigit():
                 return {"from_user": [int(key)]}
             raise NotFilterable("explore.channel_post")
+        case "route":  # the outcome of the rules, not something a message has
+            raise NotFilterable("explore.route_not_filterable")
     raise NotFilterable("explore.not_filterable")
 
 
@@ -121,10 +124,12 @@ class Explorer:
         *,
         forum: bool = False,
         topic_titles: Mapping[int, str] | None = None,
+        rules: TopicRules | None = None,
     ) -> None:
         self._units = units
         self._forum = forum
         self._titles = dict(topic_titles or {})
+        self._rules = rules if rules is not None and rules.routing else None
         self.steps: list[Step] = []
         self._reports: list[Report] = [self._tally(FilterSpec())]  # one per prefix of ``steps``
 
@@ -138,8 +143,21 @@ class Explorer:
 
     @property
     def tables(self) -> list[str]:
-        """The tables worth showing: ``topic`` only for a forum."""
-        return [by for by in TABLES if by != "topic" or self._forum]
+        """The tables worth showing: ``topic`` only for a forum, ``route`` only once the routing
+        rules of a transform are loaded."""
+        return [
+            by
+            for by in TABLES
+            if (by != "topic" or self._forum) and (by != "route" or self._rules is not None)
+        ]
+
+    def set_rules(self, rules: TopicRules | None) -> None:
+        """Load (or, with ``None`` or rules that route nothing, drop) the routing rules the
+        ``route`` table goes by; every count is made again."""
+        self._rules = rules if rules is not None and rules.routing else None
+        self._reports = [self._tally(FilterSpec())]
+        for n in range(1, len(self.steps) + 1):
+            self._reports.append(self._tally(spec_of(self.steps[:n])))
 
     def rows(self, by: str) -> tuple[Row, ...]:
         table: Table = next(tab for tab in self.report.tables if tab.by == by)
@@ -177,6 +195,7 @@ class Explorer:
             self.tables,
             forum=self._forum,
             topic_titles=self._titles,
+            rules=self._rules,
         )
         for unit in self._units:
             inspector.add(unit)

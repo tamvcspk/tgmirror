@@ -178,7 +178,8 @@ def test_a_busy_pair_is_refused_before_the_strategy_questions(
     result = runner.invoke(app, ["clone"], obj=rt)
 
     assert result.exit_code == 3, result.output
-    assert [kind for kind, _ in prompter.asked] == ["select", "select"]  # source, destination
+    # source, the routing question (declined), destination
+    assert [kind for kind, _ in prompter.asked] == ["select", "confirm", "select"]
 
 
 def test_typing_the_flag_verbatim_lets_a_non_admin_account_through(
@@ -501,7 +502,9 @@ def test_wizard_creates_the_same_channel_as_the_flags(
     wizard_gateway = FakeGateway()
     wizard_gateway.add_channel("Source")
     prompter = ScriptedPrompter(
-        select=["Source", "Automatic", "No filter"], text=["Copy", "about"], confirm=[False, True]
+        select=["Source", "Automatic", "No filter"],
+        text=["Copy", "about"],
+        confirm=[False, False, True],
     )
     wizard = runner.invoke(
         app,
@@ -548,7 +551,9 @@ def test_wizard_with_no_eligible_destination_goes_straight_to_creating(
 ) -> None:
     gateway.add_channel("Only one")
     prompter = ScriptedPrompter(
-        select=["Only one", "Automatic", "No filter"], text=["Copy", ""], confirm=[False, True]
+        select=["Only one", "Automatic", "No filter"],
+        text=["Copy", ""],
+        confirm=[False, False, True],
     )
 
     result = runner.invoke(
@@ -565,7 +570,9 @@ def test_wizard_declining_the_confirmation_creates_nothing(
 ) -> None:
     gateway.add_channel("Source")
     prompter = ScriptedPrompter(
-        select=["Source", "Automatic", "No filter"], text=["Copy", ""], confirm=[False, False]
+        select=["Source", "Automatic", "No filter"],
+        text=["Copy", ""],
+        confirm=[False, False, False],
     )
 
     result = runner.invoke(
@@ -583,7 +590,7 @@ def test_wizard_asks_again_after_an_empty_title(
     prompter = ScriptedPrompter(
         select=["Source", "Automatic", "No filter"],
         text=["", "Copy", "About it"],  # only the refused title is asked again
-        confirm=[False, True],
+        confirm=[False, False, True],
     )
 
     result = runner.invoke(
