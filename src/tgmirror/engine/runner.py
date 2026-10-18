@@ -30,7 +30,7 @@ import shutil
 import tempfile
 import threading
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -78,7 +78,7 @@ from tgmirror.engine.reupload import (
 )
 from tgmirror.engine.runs import DAILY_CAP
 from tgmirror.engine.status import rest_hours
-from tgmirror.engine.strategy import Strategy, may_reupload, router
+from tgmirror.engine.strategy import Strategy, labels_as_hashtags, may_reupload, router
 from tgmirror.engine.topics import TopicResolver, TopicRoute
 from tgmirror.engine.transfer import Transfer, TransferTracker
 from tgmirror.engine.transform import Transform
@@ -208,6 +208,7 @@ class Runner:
         self._reader: MessageReader | None = None
         self._dst_reader: MessageReader | None = None
         self._topics: TopicResolver | None = None
+        self._titles: Mapping[int, str] = {}  # the source's topics, when a rule reads them
 
     async def run(self, run: Run) -> Run:
         """Carry out ``run`` (already started by ``begin_run``) to a resting state and return it.
@@ -363,6 +364,9 @@ class Runner:
             )
         caption = CaptionMode(run.options.caption)
         transform = Transform.from_json(run.options.transform_json)
+        titles = self._titles = (
+            await self._resolver(run).source_titles() if transform.topics.needs_topic_titles else {}
+        )
         async with (
             aclosing(read) as units,
             aclosing(
@@ -375,8 +379,14 @@ class Runner:
                         by_reference=not run.options.src_protected,
                         topic_hashtag=_topic_hashtag(run),
                         transform=transform,
+                        label_hashtag=labels_as_hashtags(transform, run.dst_kind),
+                        topic_titles=titles,
                     ),
-                    topic_of=transform.topics.destination if transform.routes_to_topics else None,
+                    topic_of=(
+                        (lambda unit: transform.topics.destination(unit, titles))
+                        if transform.routes_to_topics
+                        else None
+                    ),
                 )
             ) as stream,
             aclosing(self._ready(run, stream)) as ready_stream,
@@ -401,7 +411,8 @@ class Runner:
         self._pipeline = None
         caption = CaptionMode(run.options.caption)
         transform = Transform.from_json(run.options.transform_json)
-        if not may_reupload(run.mode, caption, _topic_hashtag(run), transform):
+        label_hashtag = labels_as_hashtags(transform, run.dst_kind)
+        if not may_reupload(run.mode, caption, _topic_hashtag(run), transform, label_hashtag):
             async for batch in stream:
                 yield Ready(await self._without_done(run.id, batch))
             return
@@ -538,6 +549,9 @@ class Runner:
         9) — Telegram is left to default a topic-less post to General on its own."""
         if batch.topic_id is None and batch.dst_topic is None:
             return TopicRoute()
+        return await self._resolver(run).resolve(batch.topic_id, batch.dst_topic)
+
+    def _resolver(self, run: Run) -> TopicResolver:
         assert self._guard is not None and self._reader is not None
         guard = self._guard
         if self._topics is None:
@@ -555,7 +569,7 @@ class Runner:
                 dst_reader=self._dst_reader,
                 on_limit=lambda limit: self._reporter.notice("topics_limit", limit=limit),
             )
-        return await self._topics.resolve(batch.topic_id, batch.dst_topic)
+        return self._topics
 
     async def _send(self, run: Run, batch: Batch, ready: Ready | None = None) -> None:
         assert self._guard is not None and self._limiter is not None
@@ -583,7 +597,7 @@ class Runner:
                 and batch.strategy is Strategy.REFERENCE
             ):  # strategy B, by the files' ids: one unit
                 options = Options.of(run.options)
-                strip = transform.topics.strip_tag(batch.units[0])
+                strip = transform.topics.strip_ops(batch.units[0], self._titles)
                 results = await self._guard.write(
                     "send_by_reference",
                     batch.size,
@@ -609,7 +623,7 @@ class Runner:
                 )
             elif ready is not None and ready.action is not None:  # strategy B: one unit
                 action, options = ready.action, Options.of(run.options)
-                strip = transform.topics.strip_tag(batch.units[0])
+                strip = transform.topics.strip_ops(batch.units[0], self._titles)
                 method = "send_text" if action.kind is ActionKind.PLACEHOLDER else "send_prepared"
                 results = await self._guard.write(
                     method,
@@ -684,8 +698,8 @@ class Runner:
             found = await self._reader.get_messages(run.src_id, [answered])
             if not found:
                 return None
-            there = transform.topics.destination(Unit((found[0],)))
-            if there != transform.topics.destination(unit):
+            there = transform.topics.destination(Unit((found[0],)), self._titles)
+            if there != transform.topics.destination(unit, self._titles):
                 return None
         return await self._store.dst_id_of(run.id, answered)
 

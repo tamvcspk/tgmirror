@@ -2,6 +2,8 @@
 
 **Trạng thái: đã duyệt hướng** (đề xuất 2026-10-12, người dùng trả lời cả 7 câu hỏi cùng ngày, xem mục 10). **Phase 18a đã có code (2026-10-12); Phase 18b (chỉ mục, `--quick`, màn hình Khám phá) xong code 2026-10-14, ghi ở `06-lo-trinh.md`, "Phase 18b — ghi chú"** — chi tiết đã chuyển sang `01-kien-truc.md` ("Khám phá"), `02-cli-ux.md` ("Khám phá nguồn") và `03-filters.md` ("Selection", predicate mới); những chỗ làm khác với bản đề xuất dưới đây ghi ở `06-lo-trinh.md`, "Phase 18a — ghi chú" (đọc mục đó trước khi dựa vào mục 3–4 và 8 bên dưới). **Phase 19 đã bắt đầu (2026-10-13), theo ba lát cắt 19a/19b/19c; 19a (mục 5.2: chuỗi thao tác caption và mô hình `Transform`) và 19b (mục 5.1: hashtag → topic, `topic_map`, định dạng hashtag) đã có code, chi tiết ở `02-cli-ux.md` ("Transform"), `01-kien-truc.md` ("Định tuyến theo hashtag") và `06-lo-trinh.md` ("Phase 19 — ghi chú", kể cả chỗ làm khác với mục 5.1, 5.2 và 5.4 bên dưới); 19c (giữ reply, `forward_header`, link nội bộ) chưa có dòng code nào.** Phase 18b, 20 chưa có dòng code nào. Phase 18–20 đã vào bảng lộ trình của `06-lo-trinh.md`; D10 đã vào `00-tong-quan.md`. Khi từng phase bắt đầu thì chuyển chi tiết của nó sang các doc 01–04 tương ứng, như đã làm với "Kế hoạch Phase 9–16".
 
+**Bổ sung 2026-10-18 (người dùng duyệt hướng cùng ngày, trả lời 5 câu ở 11.6; chưa có dòng code nào; cả ba vào 0.3.0)**: mục 11 — định tuyến topic tổng quát (`topics.route`, Phase 21), gộp/chia topic (Phase 20b), sửa tin theo `msg_map`.
+
 Điều kiện trước: 0.1.1 đã phát hành (Phase 16) và Đợt 4 của Phase 15b xong. Không có gì ở đây chặn 0.1.1.
 
 ---
@@ -320,3 +322,158 @@ Thứ tự trong 0.2.0: 18a → 19 → 18b (18b là UX đắt nhất; 18a + 19 �
 | 5 | `delete` mặc định backup trước khi xoá? | **Tùy chọn, hỏi Có/Không** (mục 6.3, bước 3) |
 | 6 | Xuất caption/text của nguồn `noforwards` từ inspect có cần D3? | **Không**; D3 chỉ áp khi thật sự chạm vào nội dung (tải media, đăng lại) |
 | 7 | Dời Phase 17 ra sau Phase 20, dựng trên máy của nó? | **Ok** |
+
+## 11. Bổ sung cho release sau 0.2.0: định tuyến topic tổng quát, gộp/chia topic, sửa tin (đề xuất 2026-10-18, **người dùng duyệt hướng cùng ngày**, câu trả lời ở 11.6; chưa code)
+
+Người dùng yêu cầu (2026-10-18): thêm vào plan các thao tác cho forum — **gộp topic, chia topic, sửa tin** — đi qua selection và transform; và gặp hai tình huống thật khi dùng 19b:
+
+- **Ca 1 — nhiều hashtag**: tin có `#a #b #c`, `auto: all` luôn lấy hashtag *viết đầu tiên* (`TopicRules.match`), `map` lấy theo thứ tự của bảng. Không có cách nói "lấy hashtag cuối", "lấy hashtag khớp mẫu này".
+- **Ca 2 — tên file trong caption, không có hashtag**: caption kiểu `Alida_0412.mp4`; muốn dùng regex trích tên trong đó (`Alida`) làm tên topic. Hôm nay không có cách nào: định tuyến chỉ đọc hashtag.
+
+Yêu cầu: giải pháp không chạy theo từng ca mà là một cơ chế chung.
+
+### 11.1 Chẩn đoán
+
+19b cứng ba chỗ, và cả hai ca (lẫn gộp/chia) đều rơi vào đúng ba chỗ đó:
+
+| Chỗ cứng hôm nay | Cái cần |
+|---|---|
+| **Khoá lấy từ đâu**: chỉ hashtag | hashtag, caption/text, tên file, tên topic nguồn, ... |
+| **Chọn ứng viên nào**: hashtag đầu tiên (`auto`), hoặc thứ tự của `map` | `first` / `last`, lọc ứng viên bằng regex, bỏ qua một danh sách |
+| **Đặt tên thế nào**: `_title_of_tag` (`#machine_learning` → `Machine learning`) hoặc tên cố định | một mẫu tên dùng được phần trích ra (`{name}`) với vài bộ lọc cố định |
+
+Thêm một điều kiện tùy chọn (`when`, chính là ngôn ngữ filter) thì cùng một nguyên tố giải luôn gộp topic (`when: {topic: [A, B]}` → một tên) và chia topic (`when: {topic: [A], ...}` → nhiều tên).
+
+### 11.2 Đề xuất: luật định tuyến (`topics.route`)
+
+Một **danh sách luật có thứ tự**; luật đầu tiên *cho ra được một tên topic* thắng. Mỗi luật có bốn phần, phần nào cũng tùy chọn trừ `to`:
+
+```yaml
+topics:
+  route:
+    # tên cố định theo điều kiện — `when` là một rule include của 03-filters.md (các predicate AND)
+    - when: {hashtag: ["#vip"]}
+      to: "VIP"
+
+    # Ca 1: mỗi hashtag là một ứng viên; lấy cái CUỐI, bỏ qua danh sách quảng cáo
+    - from: hashtags
+      pick: last                        # first (mặc định) | last
+      skip: ["#YYLive", "#789Live"]
+      to: "{value|tag_title}"           # đúng cách `auto: all` đặt tên hôm nay
+
+    # Ca 2: trích tên file trong caption, bỏ số thứ tự và đuôi
+    - from: text                        # caption/text của tin NGUỒN, trước mọi thao tác caption
+      regex: '(?m)^(?P<name>[^\s.]+?)(?:[_-]\d+)*\.(?:mp4|mkv|mov|jpe?g)\s*$'
+      to: "{name|title}"
+
+    # hoặc từ tên file thật của media (SrcMessage.file_name), khi có
+    - from: file_name
+      regex: '^(?P<name>[A-Za-z]+)'
+      to: "{name}"
+
+    # chia một topic nguồn: tin của topic 1207 có chữ "part 2" sang topic riêng
+    - when: {topic: [1207], regex: '(?i)part\s*2'}
+      to: "Alida — phần 2"
+
+  default: "Khác"                       # không luật nào cho ra tên, và tin không nằm trong topic nguồn nào
+  limit: 100                            # topic MỚI mà luật có biến (`{...}`) được tạo mỗi lần chạy
+  strip: matched                        # bỏ phần đã dùng để định tuyến khỏi caption (hashtag / đoạn regex khớp)
+  topic_map: { ... }                    # như 19b
+```
+
+**Các phần của một luật:**
+
+- `when` — điều kiện, **đúng ngôn ngữ của filter** (`03-filters.md`, đánh giá bằng chính `Matcher`, cùng luật "thiếu thuộc tính thì sai", regex có timeout). Không có ngôn ngữ thứ hai cho điều kiện.
+- `from` — nguồn ứng viên: `hashtags` (mỗi hashtag một ứng viên, theo thứ tự viết), `text` (caption/text), `file_name`, `topic` (tên topic nguồn), `forwarded_from` (tên kênh gốc của tin forward). Album: ứng viên gom từ mọi tin của album theo thứ tự (luật 4 — một unit một topic).
+- `regex` — tùy chọn; giữ ứng viên khớp và lấy nhóm: nhóm có tên → `{name}`, nhóm số → `{1}`, cả đoạn → `{0}`; `{value}` là ứng viên (hoặc đoạn khớp). `pick` chọn lần khớp đầu/cuối; `skip` bỏ ứng viên trong danh sách (so không phân biệt hoa thường).
+- `to` — mẫu tên. Bộ lọc **cố định, không mở rộng được**: `title` (hoa chữ đầu), `lower`, `upper`, `tag_title` (`#a_b` → `A b`), `slug`. Kết quả được cắt khoảng trắng, gộp khoảng trắng liền, tối đa 128 ký tự (`MAX_TOPIC_TITLE`); **rỗng thì luật coi như không khớp**, xét luật kế tiếp.
+
+**Ngữ nghĩa giữ nguyên của 19b:**
+
+- Định tuyến đọc **tin nguồn**, không đọc caption sau các thao tác `caption:` (như hôm nay: t.yaml xoá mọi từ không phải hashtag mà vẫn định tuyến đúng).
+- Thứ tự ưu tiên: `route` → ánh xạ topic nguồn (`topic_map`, 1-1 theo tên) → `default` (chỉ cho tin không nằm trong topic nguồn nào) → General.
+- Topic đích tìm theo **tên** trước khi tạo (`TopicResolver._topic_titled`), nên chạy lại / crash / hai luật cho cùng tên đều về một topic; tên so không phân biệt hoa thường — `alida` và `Alida` là một topic.
+- `limit` thay cho `hashtag_to_topic.limit`, áp cho mọi tên **có biến** (tên cố định trong `to` không bị giới hạn, như `map` hôm nay).
+- `strip: matched` tổng quát hoá `strip: true`: bỏ hashtag đã định tuyến, hoặc đoạn regex đã khớp (chỉ khi `from: text`). Có `strip` thì tin phải gửi lại (D3 như mọi tin gửi lại), giống hôm nay.
+- Cú pháp cũ `hashtag_to_topic` vẫn chạy, là **cú pháp tắt** dịch sang `route` (như `--caption` dịch sang danh sách thao tác): `map` → luật `when: {hashtag: [...]}` + tên cố định; `auto: [..]` → như vậy với `tag_title`; `auto: all` → `from: hashtags, pick: first, skip, to: "{value|tag_title}"`. Cặp đã lưu transform dạng cũ không bị coi là "đổi transform": so sánh sau khi dịch cả hai về `route`.
+- **Một tin (một unit) một topic** (chốt 2026-10-18, Q1): không nhân bản tin vào nhiều topic; `msg_map` giữ một bản sao mỗi tin nguồn.
+- **Cùng luật cho cả topic lẫn hashtag** (chốt 2026-10-18, Q3): tên mà `route` cho ra là một **nhãn**; loại đích quyết định nhãn thành gì. Đích là forum → topic có tên đó. Đích không phải forum → một hashtag viết theo `hashtag_format` (mặc định `#{slug}`), gắn vào caption ở đúng chỗ `topic_as_hashtag` dùng hôm nay (`CaptionPolicy.hashtag`), nên tin phải gửi lại (D3 như mọi tin gửi lại). Một file transform vì vậy chạy được cho cả hai loại đích; `route` không còn bị từ chối khi đích không phải forum (khác `hashtag_to_topic` hôm nay, vẫn đòi forum). Với nhãn là hashtag, `limit` không áp (không tạo gì ở đích), `default` cũng thành hashtag.
+
+**Xem trước — bắt buộc phải có, vì regex là thứ dễ sai nhất:** `inspect --plan clone --transform t.yaml` thêm bảng **"topic đích"** (topic → số tin, đánh dấu topic sẽ được tạo mới, số tin rơi vào `default`/General) và mẫu vài tin **không khớp luật nào** kèm caption, để sửa regex trước khi ghi gì. Màn hình Khám phá có cột tương ứng khi đã nạp transform.
+
+**Không làm** (giữ nguyên tắc ở 5.2): không biểu thức tự do, không script, không bộ lọc tên do người dùng định nghĩa. Mọi luật kiểm được khi nạp file (regex biên dịch được, mẫu chỉ dùng nhóm có trong regex, bộ lọc có thật) và giải thích được trong một dòng.
+
+**Hai ca của người dùng với cơ chế này:**
+
+| Ca | Luật |
+|---|---|
+| 1 — nhiều hashtag | `pick: last`; hoặc `regex: '^#(?!YY)'` để chỉ giữ ứng viên đúng mẫu; hoặc luật `when: {hashtag: [...]}` đặt trước cho hashtag ưu tiên |
+| 2 — tên file trong caption | `from: text` + `regex` có nhóm `name` + `to: "{name|title}"`; tin không khớp rơi vào `default` |
+
+### 11.3 Gộp và chia topic
+
+**Khi sao chép (clone/restore sang một forum khác)** — không cần lệnh mới:
+
+- **Gộp**: hai topic nguồn cho ra một tên (`topic_map` cùng tên — đã có từ 19b; hoặc `when: {topic: [A, B]}` → một `to`).
+- **Chia**: luật `when: {topic: [A], ...}` hoặc `from: ...` với điều kiện topic; tin còn lại của A đi theo ánh xạ topic như cũ.
+- Thứ tự trong từng topic đích đúng thứ tự nguồn (một lần quét theo id tăng dần).
+
+**Tại chỗ, trên một forum đang có** — giới hạn của Telegram quyết định (mục 6.1): theo hiểu biết hiện tại **không có API chuyển tin sang topic khác** (spike 4, chưa xác minh). Nên:
+
+1. **Dựng lại**: clone forum → forum mới với `route`/`topic_map`, kiểm tra, đổi username. Không mất gì, chạy được từ 11.2. Vẫn là đường nên gợi ý cho một forum rất lớn.
+2. **Gộp và chia tại chỗ** (Phase 20b, chốt 2026-10-18, Q5) — dựng trên `repost` + `delete` của Phase 20, cùng plan → xác nhận → apply (D10). Ngữ nghĩa người dùng chốt:
+
+   **Chia** — `tgmirror topics split <forum> "A" --transform t.yaml` (hoặc `--selection`): những tin của A mà `route` cho ra một tên khác A được **đăng lại vào topic mới** (tạo theo tên, hoặc topic có sẵn cùng tên) **theo đúng thứ tự gốc** của chúng, rồi **xoá khỏi A**. Tin còn lại của A giữ nguyên chỗ và thứ tự. Một lần chia có thể cho ra nhiều topic mới; mỗi topic mới chứa các tin của nó theo thứ tự id tăng dần ở A.
+
+   ```
+   A: a1 b1 a2 b2 a3      route: b* → "B"
+   ⇒ A: a1 a2 a3          B (mới): b1 b2
+   ```
+
+   **Gộp** — `tgmirror topics merge <forum> "Topic 1" "Topic 2" [...]`: mọi tin của topic sau được **đăng lại vào topic đầu, nối tiếp sau các tin đã có của nó**, giữ thứ tự của topic sau; xong thì **xoá topic sau** (cả topic, không còn lại vỏ rỗng). Nhiều topic thì nối lần lượt theo thứ tự đã gõ.
+
+   ```
+   Topic 1: t1a t1b       Topic 2: t2a t2b t2c
+   ⇒ Topic 1: t1a t1b t2a t2b t2c          (Topic 2 bị xoá)
+   ```
+
+   Chi tiết an toàn (theo mục 6.3, không có gì riêng của topic được nới ra):
+   - Plan đóng băng danh sách id cần chuyển; xác nhận bằng gõ lại số tin (hoặc `--yes --expect N`); lưới an toàn backup hỏi Có/Không như `delete` (D3 cho nguồn `noforwards` như mọi backup).
+   - Từng unit (album nguyên vẹn, luật 4): đăng lại (im lặng mặc định) → ghi `new_msg_id` trong `op_items` → **chỉ sau đó** xoá bản gốc. Crash giữa chừng: reconcile dò bản đã đăng ở topic đích (như reconcile của run) nên không đăng trùng, và không bao giờ xoá một tin chưa có bản mới.
+   - Đăng lại đi đường của `repost` (forward không tác giả, hoặc gửi lại/tải lại khi forward không được), nên tin chuyển sang **mất views, reactions, bình luận, nhãn thời gian gốc**, và link/reply tới id cũ hỏng; reply *giữa* các tin cùng được chuyển được nối lại qua `op_items` như `reply: keep`. Plan nói thẳng những điều này.
+   - **Xoá topic sau khi gộp** chỉ chạy khi mọi unit đã `done` **và** đọc lại topic đó không còn tin nào ngoài plan (tin mới đăng vào giữa lúc chạy): còn thì không xoá topic, báo số tin còn lại và lệnh để gộp tiếp. Xoá topic là `channels.deleteTopicHistory`; không bao giờ xoá General (gộp *vào* General được, gộp General vào topic khác thì từ chối — General không xoá được).
+   - Không đổi được thứ tự *xen kẽ* với tin đã có: tin đăng lại luôn nằm **sau** mọi tin hiện có của topic đích (giới hạn của Telegram, mục 6.1). Với chia, topic mới thì không có tin nào trước nên thứ tự tái hiện đúng hoàn toàn; chia vào một topic **đã có tin** thì tin chuyển nối ở cuối — plan cảnh báo.
+3. Thao tác chỉ trên topic, rẻ và thật sự tại chỗ: `topics rename`, `topics close/reopen`, `topics delete` (cả lịch sử của topic; plan + gõ lại số tin như `delete`).
+
+### 11.4 Sửa tin
+
+Là `edit` của Phase 20 (mục 6), không phải cơ chế mới. Bổ sung:
+
+- `edit` nhận cùng transform, nhưng chỉ phần `caption:` (+ `links: rewrite`); có `route`/`topics` thì **từ chối** (mã 2) và chỉ sang `repost`/`topics split` — sửa tin không đổi được topic.
+- **Sửa trên đích của một cặp** theo `msg_map` (`edit --mirror M3` / từ một lần chạy): áp thêm một transform lên các bản sao đã đăng, khỏi clone lại. Cũng là lượt **sửa bù link tiến** mà 19c3 để lại (`links_left`, mục 5.3).
+- Undo như mục 6.3 (lưu text + entity gốc).
+
+### 11.5 Lộ trình đề xuất
+
+| Phase | Nội dung | Hoàn thành khi | Release |
+|---|---|---|---|
+| 21 | `topics.route` (mục 11.2), `hashtag_to_topic` thành cú pháp tắt, `strip: matched`, bảng "topic đích" trong `inspect --plan`, wizard/menu chọn luật cơ bản | Hai ca của người dùng chạy đúng trên kênh thật: nhiều hashtag với `pick: last`, tên file trong caption → đúng topic; transform 19b cũ cho đúng kết quả cũ; cùng file transform sang kênh thường cho hashtag đúng tên | 0.3.0 (chốt Q4) |
+| 20 | Như mục 8, cộng `edit` theo `msg_map` (11.4) | Như mục 8 | 0.3.0 |
+| 20b | `topics split/merge` theo ngữ nghĩa 11.3 (chia: topic mới đúng thứ tự gốc, xoá khỏi topic cũ; gộp: nối topic sau vào cuối topic trước rồi xoá topic sau), `topics rename/close/delete` | Trên forum thử: chia một topic thành hai, gộp lại; không sót, không trùng, thứ tự đúng như 11.3; kill giữa chừng rồi chạy lại không đăng trùng, không xoá tin chưa có bản mới; tin mới đăng vào topic sau giữa lúc gộp thì topic đó không bị xoá | 0.3.0 |
+| 17 | Như cũ | | 0.3.x |
+
+**Trạng thái 2026-10-18**: Phase 21 xong code (trừ wizard/menu và cột Khám phá), chưa thử thật; các điểm khác bản đề xuất ở `06-lo-trinh.md`, "Phase 21 — ghi chú".
+
+Thứ tự: **21 → 20 → 20b → 17**, cả ba (21, 20, 20b) trong **0.3.0** (chốt 2026-10-18, Q4). Phase 21 không ghi/xoá tại chỗ nên không cần D10, làm trước được.
+
+Spike thêm (mục 9): `channels.editForumTopic`, `channels.deleteTopicHistory` (tốc độ, FloodWait, có xoá được topic General không); spike 4 (chuyển tin giữa topic) trở thành điều kiện trước của 20b.
+
+### 11.6 Câu hỏi đã chốt (người dùng trả lời 2026-10-18)
+
+| # | Câu hỏi | Trả lời |
+|---|---|---|
+| 1 | Tin nhiều hashtag: một topic theo luật chọn, hay nhân bản vào mọi topic khớp? | **Một tin một topic** (không đổi `msg_map`) |
+| 2 | Ca tên file trong caption | "Không có đường" nghĩa là *không có cách* (không phải "không có đuôi"); **giải theo hướng đã đề xuất** (`from: text` + `regex` + `to`) |
+| 3 | Tên do `route` cho ra dùng làm hashtag khi đích không phải forum? | **Có**: `route` dùng cho cả topic lẫn hashtag (11.2, "Cùng luật cho cả topic lẫn hashtag") |
+| 4 | Phase 21 ra 0.2.1 hay 0.3.0? | **Gom vào 0.3.0** |
+| 5 | Gộp/chia tại chỗ? | **Có, làm 20b**: chia → tái hiện thứ tự ở topic mới, xoá các tin đã chuyển khỏi topic cũ; gộp → tái hiện thứ tự của topic sau vào (cuối) topic trước, ví dụ `[topic 1..., topic 2...]`, rồi xoá luôn topic sau (11.3) |

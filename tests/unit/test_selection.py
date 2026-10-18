@@ -151,7 +151,7 @@ def test_topic_rules_travel_with_the_selection_in_their_priority_order(tmp_path:
     loaded = sel.load(path).transform
 
     assert loaded == transform
-    assert [r.tag for r in loaded.topics.routes] == ["#zeta", "#alpha"]
+    assert [r.to for r in loaded.topics.rules] == ["Z", "A"]  # the priority order is kept
     assert (12, "Merged") in loaded.topics.renames
 
 

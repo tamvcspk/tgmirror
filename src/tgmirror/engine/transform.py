@@ -22,7 +22,7 @@ Phase 19 arrives in slices (docs/06-lo-trinh.md): 19a is the caption operations,
 section (where a message lands in a forum, and how a topic is named)::
 
     topics:
-      hashtag_to_topic:               # the destination must be a forum
+      hashtag_to_topic:               # the short form; the long one, ``route``, is below
         map:                          # in this order: the first rule a message matches wins
           "#python": "Python"
           "#rust": "Rust lang"
@@ -34,6 +34,13 @@ section (where a message lands in a forum, and how a topic is named)::
       topic_map:                      # a source topic (title or id) -> the destination topic's name
         "Old name": "New name"        # several into one = merged; also names the topic hashtag
       hashtag_format: "#t_{slug}"     # a topic kept as a hashtag in a destination without topics
+
+Phase 21 generalises the routing (``engine/routing.py``): ``topics.route`` is a list of rules, each
+a condition (``when``, the filter language), a place to take a candidate from (``from``:
+hashtags, text, file_name, topic, forwarded_from), what to keep of it (``regex``, ``pick``,
+``skip``) and a name template (``to``). ``hashtag_to_topic`` is read as the rules it stands for,
+so both end in one model and one canonical form (``route``). The name a rule gives is a label: a
+topic in a forum, a hashtag in a destination without topics.
 
 Slice 19c, the references between messages, arrives a key at a time::
 
@@ -81,22 +88,38 @@ from tgmirror.core.gateway import (
     StripLinks,
     Unit,
 )
-from tgmirror.filters.model import FilterError, normalize_hashtag
+from tgmirror.engine.routing import (
+    AUTO_ALL,
+    MAX_TOPIC_TITLE,
+    Routed,
+    RouteRule,
+    TransformError,
+    auto_rule,
+    parse_rule,
+    tag_rule,
+    title_of_tag,
+)
+from tgmirror.filters.model import normalize_hashtag
+
+__all__ = ["TransformError"]  # defined in ``engine/routing.py``, which this module builds on
 
 FORMAT_VERSION = 1
 MAX_OPERATIONS = 50
 _SCOPES = ("source", "all")
 _KEYS = frozenset({"version", "caption", "topics", "reply", "forward_header", "links"})
-_TOPICS_KEYS = frozenset({"hashtag_to_topic", "topic_map", "hashtag_format"})
+_TOPICS_KEYS = frozenset(
+    {"route", "default", "limit", "strip", "hashtag_to_topic", "topic_map", "hashtag_format"}
+)
+_ROUTE_SIDE_KEYS = frozenset({"default", "limit", "strip"})  # written beside `route`
 _TOPICS_KEY_HINTS = {  # what a key needs under it (a present key with no value is an error)
+    "route": 'give a list of rules like `- {from: hashtags, to: "{value|tag_title}"}`',
     "hashtag_to_topic": 'give `auto: all` (a topic per hashtag), `auto: ["#a"]` or `map:`',
     "topic_map": 'give `"Old name": "New name"` lines',
     "hashtag_format": 'give a format like "#t_{slug}"',
 }
 _ROUTING_KEYS = frozenset({"map", "auto", "default", "strip", "limit", "skip"})
-MAX_TOPIC_TITLE = 128  # Telegram's limit for a forum topic's title
 MAX_TOPIC_RULES = 200
-DEFAULT_AUTO_LIMIT = 30  # topics ``auto: all`` may create in one run: a guard, not a target
+DEFAULT_AUTO_LIMIT = 30  # new topics a variable name may make in one run: a guard, not a target
 MAX_AUTO_LIMIT = 1000
 _HASHTAG_FORMAT_SAMPLE = re.compile(r"#\w+")
 _OPERATIONS = frozenset(
@@ -104,82 +127,88 @@ _OPERATIONS = frozenset(
 )
 
 
-class TransformError(FilterError):
-    """A transform cannot be used. ``detail`` says which part and why (exit code 2)."""
-
-
-@dataclass(frozen=True, slots=True)
-class HashtagRoute:
-    """``hashtag_to_topic``: a message carrying ``tag`` lands in the topic titled ``topic``."""
-
-    tag: str  # lower-case, with ``#``
-    topic: str
-
-
 @dataclass(frozen=True, slots=True)
 class TopicRules:
-    """Where a message lands in a forum and how a topic is named (phase 19b). Empty (the default)
-    leaves everything to ``engine/topics.py``'s own mapping, as before."""
+    """Where a message lands in a forum, or which hashtag it gets in a chat without topics, and
+    how a topic is named (phases 19b and 21). Empty (the default) leaves everything to
+    ``engine/topics.py``'s own mapping, as before.
 
-    routes: tuple[HashtagRoute, ...] = ()  # in priority order
-    auto_all: bool = False  # after ``routes``: the first other hashtag of a message names a topic
-    auto_limit: int = DEFAULT_AUTO_LIMIT  # new topics ``auto_all`` may create in one run
-    auto_skip: tuple[str, ...] = ()  # hashtags ``auto_all`` leaves alone
-    default: str | None = None  # for a message with no matching tag and no source topic
-    strip: bool = False  # take the hashtag that routed a message out of its caption
+    ``rules`` is the ``route`` list; the older ``hashtag_to_topic`` is a shorthand that is turned
+    into the same rules when it is read, so there is one model and one canonical form."""
+
+    rules: tuple[RouteRule, ...] = ()  # in priority order: the first to give a name wins
+    default: str | None = None  # for a message no rule named and that sits in no source topic
+    limit: int = DEFAULT_AUTO_LIMIT  # new topics a rule with a variable name may make in one run
+    strip: bool = False  # take what routed a message (hashtag, matched text) out of its caption
     # a source topic (its id, or its title case-folded) -> the name of the destination topic
     renames: tuple[tuple[int | str, str], ...] = ()
     hashtag_format: str | None = None  # ``"#t_{slug}"``: how a topic kept as a hashtag is written
 
     @property
     def routing(self) -> bool:
-        """Messages go to topics by their hashtag, so the destination must be a forum."""
-        return bool(self.routes) or self.auto_all
+        """Messages are named by rules: a forum destination puts each in the topic of that name,
+        any other gives it a hashtag of that name."""
+        return bool(self.rules)
 
     @property
     def is_empty(self) -> bool:
         return not (self.routing or self.renames or self.hashtag_format)
 
     @property
+    def variable(self) -> bool:
+        """Some rule makes its name from the message, so a run may find many new names."""
+        return any(rule.variable for rule in self.rules)
+
+    @property
     def strips(self) -> bool:
-        """Some message is sent again without its routing hashtag."""
-        return self.strip and self.routing
+        """Some message is sent again without what routed it."""
+        return self.strip and any(rule.strippable for rule in self.rules)
+
+    @property
+    def needs_topic_titles(self) -> bool:
+        """A rule reads the title of a message's source topic, which only the source can tell."""
+        return any(rule.source == "topic" for rule in self.rules)
+
+    @property
+    def fixed_names(self) -> frozenset[str]:
+        """The names (case-folded) rules write out in full, and ``default``: topics the user named,
+        which ``limit`` does not count."""
+        names = {rule.fixed_name for rule in self.rules if rule.fixed_name is not None}
+        if self.default:
+            names.add(self.default)
+        return frozenset(name.strip().casefold() for name in names)
 
     # ---- what a unit gets -----------------------------------------------------------------------
 
-    def match(self, unit: Unit) -> HashtagRoute | None:
-        """The first rule (rules are in priority order) one of the unit's hashtags matches. The
-        hashtags of an album are those of all its messages: the caption sits on one of them."""
-        if not self.routing:
-            return None
-        order = [h.casefold() for m in unit.messages for h in m.hashtags]
-        if not order:
-            return None
-        found = set(order)
-        route = next((r for r in self.routes if r.tag in found), None)
-        if route is not None or not self.auto_all:
-            return route
-        # no rule of its own: the first hashtag written in the message names the topic
-        tag = next((h for h in order if h not in self.auto_skip), None)
-        return None if tag is None else HashtagRoute(tag, _title_of_tag(tag))
+    def route(self, unit: Unit, titles: Mapping[int, str] | None = None) -> Routed | None:
+        """The first rule (rules are in priority order) that gives ``unit`` a name. ``titles`` are
+        the source's topics by id, for the rules that read a topic's name."""
+        for index, rule in enumerate(self.rules):
+            if (found := rule.apply(unit, index, titles)) is not None:
+                return found
+        return None
 
-    def destination(self, unit: Unit) -> str | None:
-        """Title of the topic ``unit`` goes to because of a rule (or the default), or ``None``:
+    def destination(self, unit: Unit, titles: Mapping[int, str] | None = None) -> str | None:
+        """The name of the topic ``unit`` goes to because of a rule (or the default), or ``None``:
         it then follows the source topic's own mapping, or lands in General. ``default`` only
         takes a message that sits in no source topic: one in a topic of a forum source keeps its
         topic, which is the better answer to "where does it belong"."""
-        route = self.match(unit)
-        if route is not None:
-            return route.topic
+        if not self.rules:
+            return None
+        found = self.route(unit, titles)
+        if found is not None:
+            return found.title
         return self.default if unit.topic_id is None else None
 
-    def strip_tag(self, unit: Unit) -> str | None:
-        """The hashtag to take out of the caption of ``unit`` (``strip: true``), if a rule
-        routed it."""
+    def strip_ops(
+        self, unit: Unit, titles: Mapping[int, str] | None = None
+    ) -> tuple[CaptionOp, ...]:
+        """What to take out of the caption of ``unit`` (``strip: matched``): the hashtag, or the
+        text, the rule that named it went by. Nothing for a message the default placed."""
         if not self.strip:
-            return None
-        route = self.match(unit)
-        return None if route is None else route.tag
+            return ()
+        found = self.route(unit, titles)
+        return () if found is None else found.strip_ops()
 
     # ---- topic names ----------------------------------------------------------------------------
 
@@ -203,6 +232,12 @@ class TopicRules:
 
     # ---- flags on top of a file -----------------------------------------------------------------
 
+    def with_auto_all(self) -> "TopicRules":
+        """``--hashtag-to-topic``: after the rules there are, every other hashtag names a topic."""
+        if any(rule.is_auto_all for rule in self.rules):
+            return self
+        return replace(self, rules=(*self.rules, AUTO_ALL))
+
     def layered(
         self,
         *,
@@ -219,8 +254,8 @@ class TopicRules:
         if default is not None or strip:
             if not self.routing:
                 raise TransformError(
-                    "--topic-default / --strip-routing-hashtag: only mean something with hashtag "
-                    "routing (--hashtag-to-topic, or `hashtag_to_topic` in the transform file)"
+                    "--topic-default / --strip-routing-hashtag: only mean something with "
+                    "routing (--hashtag-to-topic, or `topics.route` in the transform file)"
                 )
             if default is not None:
                 rules = replace(rules, default=_topic_title("--topic-default", default))
@@ -241,19 +276,13 @@ class TopicRules:
     def to_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
         if self.routing:
-            routing: dict[str, Any] = {}
-            if self.routes:
-                routing["map"] = [{r.tag: r.topic} for r in self.routes]
-            if self.auto_all:
-                routing["auto"] = "all"
-                routing["limit"] = self.auto_limit
-                if self.auto_skip:
-                    routing["skip"] = list(self.auto_skip)
+            data["route"] = [rule.to_data() for rule in self.rules]
             if self.default is not None:
-                routing["default"] = self.default
+                data["default"] = self.default
+            if self.variable:
+                data["limit"] = self.limit
             if self.strip:
-                routing["strip"] = True
-            data["hashtag_to_topic"] = routing
+                data["strip"] = "matched"
         if self.renames:
             data["topic_map"] = [
                 {"id": key, "to": name} if isinstance(key, int) else {"title": key, "to": name}
@@ -268,32 +297,38 @@ class TopicRules:
         if data is None:
             return cls()
         if not isinstance(data, dict):
-            raise TransformError("topics: a mapping (hashtag_to_topic, topic_map, hashtag_format)")
+            raise TransformError("topics: a mapping (route, topic_map, hashtag_format)")
         unknown = data.keys() - _TOPICS_KEYS
         if unknown:
             names = ", ".join(sorted(map(str, unknown)))
             raise TransformError(f"topics: not a topics key: {names}")
         for key, hint in _TOPICS_KEY_HINTS.items():
-            if key in data and data[key] is None:  # `hashtag_to_topic:` with nothing under it
+            if key in data and data[key] is None:  # `route:` with nothing under it
                 raise TransformError(
                     f"topics.{key}: nothing under it, so it would do nothing — {hint}, "
                     "or remove the key"
                 )
         found = _Routing()
-        if (raw := data.get("hashtag_to_topic")) is not None:
+        if "route" in data:
+            if "hashtag_to_topic" in data:
+                raise TransformError(
+                    "topics: `route` and `hashtag_to_topic` both say where messages go; "
+                    "`hashtag_to_topic` is the short form of `route`, write one of them"
+                )
+            found = _route(data)
+        elif (raw := data.get("hashtag_to_topic")) is not None:
+            for key in _ROUTE_SIDE_KEYS & data.keys():
+                raise TransformError(
+                    f"topics.{key}: goes with `route`; with `hashtag_to_topic` it is written "
+                    "inside it"
+                )
             found = _routing(raw)
+        else:
+            for key in _ROUTE_SIDE_KEYS & data.keys():
+                raise TransformError(f"topics.{key}: only means something with `route`")
         renames = _renames(data.get("topic_map"))
         fmt = _hashtag_format(data.get("hashtag_format"))
-        return cls(
-            found.routes,
-            found.auto_all,
-            found.limit,
-            found.skip,
-            found.default,
-            found.strip,
-            renames,
-            fmt,
-        )
+        return cls(found.rules, found.default, found.limit, found.strip, renames, fmt)
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,12 +520,6 @@ def _topic_title(where: str, value: Any) -> str:
     return title
 
 
-def _title_of_tag(tag: str) -> str:
-    """The topic ``auto`` names after a hashtag: ``#machine_learning`` -> ``Machine learning``."""
-    name = tag.lstrip("#").replace("_", " ").strip()
-    return (name[:1].upper() + name[1:])[:MAX_TOPIC_TITLE]
-
-
 def _pairs(where: str, value: Any) -> list[tuple[Any, Any]]:
     """A mapping, or the list of one-key mappings the canonical form uses (order is a priority)."""
     if isinstance(value, dict):
@@ -507,22 +536,53 @@ def _pairs(where: str, value: Any) -> list[tuple[Any, Any]]:
 
 @dataclass(frozen=True, slots=True)
 class _Routing:
-    routes: tuple[HashtagRoute, ...] = ()
-    auto_all: bool = False
-    limit: int = DEFAULT_AUTO_LIMIT
-    skip: tuple[str, ...] = ()
+    rules: tuple[RouteRule, ...] = ()
     default: str | None = None
+    limit: int = DEFAULT_AUTO_LIMIT
     strip: bool = False
 
 
+def _limit(where: str, raw: Any) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= MAX_AUTO_LIMIT:
+        raise TransformError(f"{where}: a number from 1 to {MAX_AUTO_LIMIT}")
+    return raw
+
+
+def _route(data: dict[str, Any]) -> _Routing:
+    """``topics: {route: [...], default, limit, strip}`` (phase 21)."""
+    where = "topics.route"
+    raw = data["route"]
+    if not isinstance(raw, list) or not raw:
+        raise TransformError(
+            f'{where}: a list of rules, like `- {{from: hashtags, to: "{{value|tag_title}}"}}`'
+        )
+    if len(raw) > MAX_TOPIC_RULES:
+        raise TransformError(f"{where}: at most {MAX_TOPIC_RULES} rules")
+    rules = tuple(parse_rule(f"{where}[{i}]", item) for i, item in enumerate(raw))
+    default = data.get("default")
+    if default is not None:
+        default = _topic_title("topics.default", default)
+    if "limit" in data and not any(rule.variable for rule in rules):
+        raise TransformError(
+            "topics.limit: only means something when a rule's name is made from the message "
+            "(a {...} in its `to`)"
+        )
+    limit = _limit("topics.limit", data.get("limit", DEFAULT_AUTO_LIMIT))
+    strip = data.get("strip", False)
+    if strip not in (True, False, "matched"):
+        raise TransformError("topics.strip: `matched` (or true / false)")
+    return _Routing(rules, default, limit, strip is not False)
+
+
 def _routing(raw: Any) -> _Routing:
+    """``hashtag_to_topic``, the short form (phase 19b): written as the rules it stands for."""
     where = "topics.hashtag_to_topic"
     if not isinstance(raw, dict):
         raise TransformError(f"{where}: a mapping (map, auto, default, strip, limit, skip)")
     unknown = raw.keys() - _ROUTING_KEYS
     if unknown:
         raise TransformError(f"{where}: not a key: {', '.join(sorted(map(str, unknown)))}")
-    routes: list[HashtagRoute] = []
+    rules: list[RouteRule] = []
     seen: set[str] = set()
 
     def add(tag_where: str, tag: Any, topic: str) -> None:
@@ -533,7 +593,7 @@ def _routing(raw: Any) -> _Routing:
         if normal in seen:
             raise TransformError(f"{tag_where}: {normal} appears twice")
         seen.add(normal)
-        routes.append(HashtagRoute(normal, topic))
+        rules.append(tag_rule(normal, topic))
 
     if (explicit := raw.get("map")) is not None:
         for tag, topic in _pairs(f"{where}.map", explicit):
@@ -552,17 +612,15 @@ def _routing(raw: Any) -> _Routing:
                     normal = normalize_hashtag(str(tag))
                 except ValueError as exc:
                     raise TransformError(f"{where}.auto: {tag!r}: {exc}") from None
-                title = _topic_title(f"{where}.auto", _title_of_tag(normal))
+                title = _topic_title(f"{where}.auto", title_of_tag(normal))
                 add(f"{where}.auto", normal, title)
-    if not routes and not auto_all:
+    if not rules and not auto_all:
         raise TransformError(f"{where}: give `map` or `auto` (a list of hashtags, or `all`)")
-    if len(routes) > MAX_TOPIC_RULES:
+    if len(rules) > MAX_TOPIC_RULES:
         raise TransformError(f"{where}: at most {MAX_TOPIC_RULES} hashtags")
-    limit = raw.get("limit", DEFAULT_AUTO_LIMIT)
     if "limit" in raw and not auto_all:
         raise TransformError(f"{where}.limit: only means something with `auto: all`")
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_AUTO_LIMIT:
-        raise TransformError(f"{where}.limit: a number from 1 to {MAX_AUTO_LIMIT}")
+    limit = _limit(f"{where}.limit", raw.get("limit", DEFAULT_AUTO_LIMIT))
     skip: tuple[str, ...] = ()
     if (raw_skip := raw.get("skip")) is not None:
         if not auto_all:
@@ -574,13 +632,15 @@ def _routing(raw: Any) -> _Routing:
             skip = tuple(dict.fromkeys(normalize_hashtag(str(t)) for t in tags))
         except ValueError as exc:
             raise TransformError(f"{where}.skip: {exc}") from None
+    if auto_all:
+        rules.append(auto_rule(skip))
     default = raw.get("default")
     if default is not None:
         default = _topic_title(f"{where}.default", default)
     strip = raw.get("strip", False)
     if not isinstance(strip, bool):
         raise TransformError(f"{where}.strip: true or false")
-    return _Routing(tuple(routes), auto_all, limit, skip, default, strip)
+    return _Routing(tuple(rules), default, limit, strip)
 
 
 def _renames(raw: Any) -> tuple[tuple[int | str, str], ...]:

@@ -233,6 +233,10 @@ def print_plan(
         rest = t("inspect.plan_topics_rest")
         named = [(topic if topic is not None else rest, units) for topic, units in plan.topics]
         console.print(Text(t("inspect.plan_topics", what=_kinds(named))))
+    if plan.unmatched:
+        console.print(Text(t("inspect.plan_unmatched", count=f"{plan.unmatched:,}")))
+        for message_id, text in plan.unmatched_samples:
+            console.print(Text(f"  #{message_id}: {text}"))
     if plan.blocked:
         console.print(t("inspect.plan_blocked", what=_kinds(plan.blocked)))
     if plan.left_out:

@@ -697,7 +697,9 @@ async def _inspect(source: Source, job: _Job, control: RunControl) -> None:
 
     preflight = None
     if job.plan is not None:
-        options = replace(job.plan, by_reference=not source.protected)
+        options = replace(
+            job.plan, by_reference=not source.protected, topic_titles=source.topic_titles
+        )
         preflight = Preflight(options, job.limits)
 
     chosen_ids: list[int] = []

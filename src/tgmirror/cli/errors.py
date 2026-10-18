@@ -48,7 +48,6 @@ from tgmirror.engine.backupdir import CorruptMessagesFile
 from tgmirror.engine.endpoints import (
     AmbiguousChannel,
     ChannelNotFound,
-    DestinationNotForum,
     DestinationNotWritable,
     EndpointError,
     InvalidChannelTitle,
@@ -121,8 +120,6 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.source_restricted", title=exc.src.title)
         case DestinationNotWritable():
             return t("err.dest_not_writable", title=exc.dst.title)
-        case DestinationNotForum():
-            return t("err.dest_not_forum", title=exc.dst.title)
         case ForwardsRestricted():
             return t("err.forwards_restricted")
         case NoPermission():

@@ -47,15 +47,6 @@ class DestinationNotWritable(EndpointError):
         self.dst = dst
 
 
-class DestinationNotForum(EndpointError):
-    """A transform sends messages to topics (``hashtag_to_topic``, phase 19b) and the destination
-    chosen has none."""
-
-    def __init__(self, dst: ChannelInfo) -> None:
-        super().__init__(f"{dst.title!r} is not a forum, so it has no topics to send messages to")
-        self.dst = dst
-
-
 class SameChannel(EndpointError):
     def __init__(self) -> None:
         super().__init__("source and destination are the same chat")
@@ -168,9 +159,10 @@ def plan_endpoints(
     theirs to copy. It is the only way past a protected source this account does not administer
     (decision D3); tgmirror cannot check the claim, and the responsibility is entirely theirs.
 
-    ``forum`` (phase 19b, a transform that sends messages to topics by hashtag) needs a
-    destination with topics: a new one is created as a forum, whatever the source is, and an
-    existing one that is not raises ``DestinationNotForum``.
+    ``forum`` (a transform with ``topics.route``, phases 19b and 21) wants a destination with
+    topics: a new one is created as a forum, whatever the source is. An existing one that is not
+    a forum still works, with a warning (``route_hashtags``): each name a rule gives a message
+    becomes a hashtag in it instead of a topic.
     """
     warnings: list[str] = []
     protected = False
@@ -191,7 +183,7 @@ def plan_endpoints(
     if not (dst.is_admin and dst.can_post):
         raise DestinationNotWritable(dst)
     if forum and dst.kind is not ChatKind.FORUM:
-        raise DestinationNotForum(dst)
+        warnings.append("route_hashtags")
     if src.kind is ChatKind.FORUM and dst.kind is not ChatKind.FORUM:
         warnings.append("topic_loss")
     return Plan(src, dst, tuple(warnings), protected, forum)

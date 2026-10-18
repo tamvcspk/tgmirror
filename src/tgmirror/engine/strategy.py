@@ -10,10 +10,10 @@ unit is a file, and is downloaded and uploaded again otherwise. ``--mode reuploa
 downloads: it is what the user asked for, and what a source that restricts saving content needs.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 
-from tgmirror.core.gateway import CaptionMode, MediaKind, Unit
+from tgmirror.core.gateway import CaptionMode, ChatKind, MediaKind, Unit
 from tgmirror.engine.transform import TopicRules, Transform
 
 MODES = ("auto", "copy", "reupload")
@@ -28,18 +28,33 @@ class Strategy(StrEnum):
 Router = Callable[[Unit], Strategy]
 
 
+def labels_as_hashtags(transform: Transform | None, dst_kind: ChatKind | None) -> bool:
+    """Phase 21: the transform routes messages by name and the destination has no topics to put
+    them in, so each name becomes a hashtag in the message, which only a message sent again can
+    carry. ``dst_kind`` ``None`` is a destination not made yet: a new one is created as a forum."""
+    return (
+        transform is not None
+        and transform.routes_to_topics
+        and dst_kind is not None
+        and dst_kind is not ChatKind.FORUM
+    )
+
+
 def may_reupload(
     mode: str,
     caption: CaptionMode | str,
     topic_hashtag: bool = False,
     transform: Transform | None = None,
+    label_hashtag: bool = False,
 ) -> bool:
     """Whether a run in ``mode`` with this caption handling (and, phase 8, a topic hashtag to
-    append; phase 19, a transform) can download content and send it again, which is what decision
+    append; phase 19, a transform; phase 21, routed names kept as hashtags: ``label_hashtag``,
+    see ``labels_as_hashtags``) can download content and send it again, which is what decision
     D3 guards for a source that restricts saving content."""
     rewrites = (
         caption != CaptionMode.KEEP
         or topic_hashtag
+        or label_hashtag
         or (transform is not None and transform.rewrites)
     )
     return mode == "reupload" or (mode == "auto" and rewrites)
@@ -109,9 +124,14 @@ NO_CAPTION = frozenset(
 )
 
 
+def can_carry_hashtag(unit: Unit) -> bool:
+    """Some message of the unit has a text to append a hashtag to."""
+    return any(m.media not in NO_CAPTION for m in unit.messages)
+
+
 def takes_hashtag(unit: Unit) -> bool:
     """A forum unit outside General with somewhere to put its topic hashtag (phase 8)."""
-    return unit.topic_id is not None and any(m.media not in NO_CAPTION for m in unit.messages)
+    return unit.topic_id is not None and can_carry_hashtag(unit)
 
 
 def has_files(unit: Unit) -> bool:
@@ -127,6 +147,8 @@ def router(
     by_reference: bool = False,
     topic_hashtag: bool = False,
     transform: Transform | None = None,
+    label_hashtag: bool = False,
+    topic_titles: Mapping[int, str] | None = None,
 ) -> Router:
     """The strategy of each unit for a run in ``mode`` with this caption handling.
 
@@ -136,7 +158,9 @@ def router(
     (phase 19) rewrites captions (and, with ``text_too``, plain text) the same way, and with
     ``keep_replies`` sends again a unit that answers a message, and ``rewrite_links`` one that
     links to a message of its own chat (it is the runner that finds out which message at the
-    destination that is, or that there is none)."""
+    destination that is, or that there is none). ``label_hashtag`` (phase 21) sends again a unit
+    a routing rule named, to carry that name as a hashtag; ``topic_titles`` are the source's
+    topics by id, for the rules that go by a topic's name."""
     if mode == "reupload":
         return lambda unit: Strategy.REUPLOAD
     topics = transform.topics if transform is not None else TopicRules()
@@ -144,17 +168,33 @@ def router(
     text_too = transform is not None and transform.text_too
     replies = transform is not None and transform.keep_replies
     links = transform is not None and transform.rewrite_links
-    if mode == "copy" or not (caption_ops or topics.strips or topic_hashtag or replies or links):
+    labels = label_hashtag and topics.routing
+    if mode == "copy" or not (
+        caption_ops or topics.strips or topic_hashtag or replies or links or labels
+    ):
         return lambda unit: Strategy.COPY
 
     def auto(unit: Unit) -> Strategy:
         # caption operations change every unit; ``strip`` (phase 19b) only the ones a rule routed
         # by a hashtag, whose caption must lose it, which no forward does
-        changed = bool(caption_ops) or (topics.strips and topics.strip_tag(unit) is not None)
+        changed = bool(caption_ops) or (
+            topics.strips and bool(topics.strip_ops(unit, topic_titles))
+        )
         rewritten = changed and (has_caption(unit) or (text_too and has_plain_text(unit)))
         answering = replies and answers_something(unit)
         relinking = links and links_to_source(unit)
-        if not (rewritten or answering or relinking or (topic_hashtag and takes_hashtag(unit))):
+        labelled = (
+            labels
+            and can_carry_hashtag(unit)
+            and topics.destination(unit, topic_titles) is not None
+        )
+        if not (
+            rewritten
+            or answering
+            or relinking
+            or labelled
+            or (topic_hashtag and takes_hashtag(unit))
+        ):
             return Strategy.COPY
         return Strategy.REFERENCE if by_reference and has_files(unit) else Strategy.REUPLOAD
 

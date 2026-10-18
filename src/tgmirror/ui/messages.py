@@ -224,6 +224,10 @@ VI: dict[str, str] = {
         "Nguồn là forum nhưng đích không có topic: tên topic được giữ dưới dạng hashtag, nên tin "
         "trong topic được gửi lại thay vì forward (--no-topic-as-hashtag để bỏ)."
     ),
+    "warn.route_hashtags": (
+        "Đích không phải forum nên không có topic: tên mà `topics.route` cho mỗi tin được giữ "
+        "dưới dạng hashtag, và tin có tên được gửi lại thay vì forward."
+    ),
     # errors (each says what to do next)
     "err.not_logged_in": "Chưa đăng nhập hoặc phiên đã hết hạn. Chạy `tgmirror login`.",
     "err.missing_credentials": (
@@ -298,13 +302,10 @@ VI: dict[str, str] = {
         "--topic-as-hashtag."
     ),
     "err.transform": "Transform không hợp lệ: {detail}",
-    "err.opt_topics_need_forum": (
-        "Transform chuyển tin vào topic theo hashtag (`topics.hashtag_to_topic`) nên đích phải là "
-        "một forum (nhóm bật topic): chọn đích forum, hoặc dùng --dst-new để tạo đích mới."
-    ),
-    "err.dest_not_forum": (
-        "«{title}» không phải forum nên không có topic: transform chuyển tin vào topic theo "
-        "hashtag cần đích là forum. Chọn đích khác, hoặc dùng --dst-new để tạo đích mới."
+    "err.opt_route_needs_rewrite": (
+        "Đích không có topic nên tên mà `topics.route` cho mỗi tin được giữ dưới dạng hashtag, "
+        "và việc đó cần gửi lại tin (forward không thêm được hashtag): dùng --mode auto hoặc "
+        "--mode reupload, không dùng --mode copy."
     ),
     "err.opt_topic_hashtag_needs_rewrite": (
         "--topic-as-hashtag cần gửi lại tin (forward không thêm được hashtag): dùng --mode auto "
@@ -869,8 +870,11 @@ VI: dict[str, str] = {
         "reupload) để bỏ qua chúng."
     ),
     "inspect.plan_left_out": "Sẽ bỏ qua: {what}.",
-    "inspect.plan_topics": "Vào topic (theo hashtag): {what}.",
-    "inspect.plan_topics_rest": "không rule nào khớp (theo topic nguồn, hoặc General)",
+    "inspect.plan_topics": "Vào topic (theo luật `topics.route`): {what}.",
+    "inspect.plan_topics_rest": "không luật nào khớp (theo topic nguồn, hoặc General)",
+    "inspect.plan_unmatched": (
+        "{count} tin không khớp luật nào (sửa luật nếu đó không phải điều bạn muốn); vài tin đầu:"
+    ),
     "inspect.plan_protected": (
         "Nguồn bật «Restrict saving content»: phần tải xuống cần lời tuyên bố "
         "--yes-i-administer-this-channel (quyết định D3)."
@@ -1103,6 +1107,11 @@ EN: dict[str, str] = {
         "hashtags, so messages in topics are sent again instead of forwarded "
         "(--no-topic-as-hashtag to drop them)."
     ),
+    "warn.route_hashtags": (
+        "The destination is not a forum, so it has no topics: the name `topics.route` gives each "
+        "message is kept as a hashtag, and the messages that get one are sent again instead of "
+        "forwarded."
+    ),
     "err.not_logged_in": "Not logged in, or the session expired. Run `tgmirror login`.",
     "err.missing_credentials": (
         "No api_id/api_hash. Run `tgmirror login` (interactive), or set the TGMIRROR_API_ID and "
@@ -1177,14 +1186,10 @@ EN: dict[str, str] = {
         "keep, or --topic-as-hashtag."
     ),
     "err.transform": "Invalid transform: {detail}",
-    "err.opt_topics_need_forum": (
-        "The transform sends messages to topics by hashtag (`topics.hashtag_to_topic`), so the "
-        "destination must be a forum (a group with topics): pick a forum, or use --dst-new to "
-        "create one."
-    ),
-    "err.dest_not_forum": (
-        "'{title}' is not a forum, so it has no topics: a transform that sends messages to topics "
-        "by hashtag needs a forum destination. Pick another one, or use --dst-new to create one."
+    "err.opt_route_needs_rewrite": (
+        "The destination has no topics, so the name `topics.route` gives each message is kept as "
+        "a hashtag, which needs the message sent again (a forward cannot add one): use --mode "
+        "auto or --mode reupload, not --mode copy."
     ),
     "err.opt_topic_hashtag_needs_rewrite": (
         "--topic-as-hashtag needs messages sent again (a forward cannot add a hashtag): use "
@@ -1767,8 +1772,12 @@ EN: dict[str, str] = {
         "--mode reupload) to leave them out."
     ),
     "inspect.plan_left_out": "It would leave out: {what}.",
-    "inspect.plan_topics": "Into topics (by hashtag): {what}.",
+    "inspect.plan_topics": "Into topics (by the `topics.route` rules): {what}.",
     "inspect.plan_topics_rest": "no rule matched (the source topic's own, or General)",
+    "inspect.plan_unmatched": (
+        "{count} messages matched no rule (fix the rules if that is not what you want); the "
+        "first few:"
+    ),
     "inspect.plan_protected": (
         "The source restricts saving content: the downloaded part needs your statement, "
         "--yes-i-administer-this-channel (decision D3)."

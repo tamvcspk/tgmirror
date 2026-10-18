@@ -156,3 +156,47 @@ def test_without_routing_there_is_no_topic_breakdown() -> None:
     result = plan([unit(msg("a", hashtags=("#py",)))], transform=Transform())
 
     assert result.topics == ()
+
+
+def test_units_no_rule_named_are_counted_and_the_first_few_shown_to_fix_the_rules() -> None:
+    rules = Transform.from_data(
+        {
+            "topics": {
+                "route": [{"from": "text", "regex": r"(?P<n>[A-Z]\w+)\.mp4", "to": "{n}"}],
+                "default": "Misc",
+            }
+        }
+    )
+    hit = unit(msg("Alida.mp4", MediaKind.VIDEO))
+    misses = [unit(msg(f"clip number {i} " + "x" * 80, MediaKind.VIDEO)) for i in range(7)]
+    silent = unit(msg("", MediaKind.PHOTO))
+
+    result = plan([hit, *misses, silent], transform=rules)
+
+    assert dict(result.topics) == {"Alida": 1, "Misc": 8}  # the default took them: still unmatched
+    assert result.unmatched == 8
+    assert [i for i, _ in result.unmatched_samples] == [m.ids[0] for m in misses[:5]]
+    assert all(len(text) <= 60 for _, text in result.unmatched_samples)
+    assert result.unmatched_samples[0][1].endswith("…")
+    data = plan_to_dict(result)
+    assert data["unmatched"]["units"] == 8  # type: ignore[index]
+    assert len(data["unmatched"]["samples"]) == 5  # type: ignore[index]
+    assert plan([silent], transform=rules).unmatched_samples[0][1] == "(photo)"
+
+
+def test_a_rule_that_reads_the_source_topics_name_gets_the_titles_the_scan_knows() -> None:
+    rules = Transform.from_data({"topics": {"route": [{"from": "topic", "to": "{value|upper}"}]}})
+
+    result = plan(
+        [unit(msg("a", topic_id=5)), unit(msg("b", topic_id=6))],
+        transform=rules,
+        topic_titles={5: "news"},
+    )
+
+    assert dict(result.topics) == {"NEWS": 1, None: 1} and result.unmatched == 1
+
+
+def test_without_routing_there_are_no_unmatched_units_to_report() -> None:
+    result = plan([unit(msg("a"))], transform=Transform())
+
+    assert result.unmatched == 0 and "unmatched" not in plan_to_dict(result)

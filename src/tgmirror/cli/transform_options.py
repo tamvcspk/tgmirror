@@ -181,13 +181,13 @@ async def resolve(
 
 
 def with_topic_flags(base: Transform, flags: TopicFlags) -> Transform:
-    """``base`` with the ``topics`` flags on top: ``--hashtag-to-topic`` switches ``auto: all``
-    on, ``--topic-map`` adds renames, ``--topic-default`` and ``--strip-routing-hashtag`` set
-    their part of the routing (so they need routing, from the file or ``--hashtag-to-topic``).
-    Raises ``TransformError``."""
+    """``base`` with the ``topics`` flags on top: ``--hashtag-to-topic`` adds the rule ``auto:
+    all`` stands for, ``--topic-map`` adds renames, ``--topic-default`` and
+    ``--strip-routing-hashtag`` set their part of the routing (so they need routing, from the
+    file or ``--hashtag-to-topic``). Raises ``TransformError``."""
     rules = base.topics
-    if flags.hashtag_to_topic and not rules.auto_all:
-        rules = replace(rules, auto_all=True)
+    if flags.hashtag_to_topic:
+        rules = rules.with_auto_all()
     rules = rules.layered(
         renames=_renames_of(flags.topic_map),
         default=flags.topic_default,

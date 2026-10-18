@@ -76,7 +76,7 @@ from tgmirror.engine.runs import (
     check_options,
     check_runnable,
 )
-from tgmirror.engine.strategy import may_reupload
+from tgmirror.engine.strategy import labels_as_hashtags, may_reupload
 from tgmirror.engine.transform import Transform
 from tgmirror.filters.model import FilterSpec
 from tgmirror.store.db import Store, utc_now
@@ -565,7 +565,10 @@ class CloneFlow:
             and destination.kind is not ChatKind.FORUM
         )
         hashtag = o.topic_as_hashtag is not False and loses_topics
-        return may_reupload(o.mode, o.caption or "keep", hashtag, o.transform)
+        labels = labels_as_hashtags(
+            o.transform, destination.kind if isinstance(destination, ChannelInfo) else None
+        )
+        return may_reupload(o.mode, o.caption or "keep", hashtag, o.transform, labels)
 
     async def _confirm_unadministered(self, source: ChannelInfo) -> bool:
         """No CLI flag to type in an interactive flow (menu or classic wizard): typing the flag's
@@ -615,7 +618,10 @@ class CloneFlow:
             # a forum destination keeps the topics themselves: a hashtag would only make ``auto``
             # send every message again for nothing (``--mode copy`` still refuses the flag below)
             topic_hashtag = topic_hashtag and loses_topics
-        downloads = may_reupload(choice.mode, choice.caption, topic_hashtag, o.transform)
+        labels = labels_as_hashtags(
+            o.transform, plan.dst.kind if isinstance(plan.dst, ChannelInfo) else None
+        )
+        downloads = may_reupload(choice.mode, choice.caption, topic_hashtag, o.transform, labels)
         base = RunRequest(
             mode=choice.mode,
             batch_size=o.batch_size or self._rt.config().limits.batch_size,

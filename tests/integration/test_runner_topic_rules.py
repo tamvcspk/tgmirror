@@ -299,18 +299,29 @@ async def test_a_topic_kept_as_a_hashtag_takes_the_renamed_name_and_the_format(r
 # ---- what is refused ---------------------------------------------------------------------------
 
 
-async def test_hashtag_routing_to_a_destination_without_topics_is_refused_before_anything(
+async def test_hashtag_routing_to_a_destination_without_topics_keeps_the_names_as_hashtags(
     rig: Rig,
 ) -> None:
     rig.dst = rig.gw.add_channel("Plain copy")
     rig.gw.add_message(rig.src.id, "py", hashtags=("#python",))
+    rig.gw.add_message(rig.src.id, "nothing")
+    store = await rig.store()
+
+    final = await go(rig, store, transform_json=topics(**routing(auto=["#python"])))
+
+    assert final.status is RunStatus.DONE
+    assert [m.text for m in rig.gw.messages[rig.dst.id]] == ["py\n#python", "nothing"]
+    assert rig.gw.calls_to("create_topic") == []
+
+
+async def test_a_hashtag_label_cannot_be_added_by_a_forward(rig: Rig) -> None:
+    rig.dst = rig.gw.add_channel("Plain copy")
     store = await rig.store()
 
     with pytest.raises(InvalidOptions) as refused:
-        await begin(rig, store, transform_json=topics(**routing(auto=["#python"])))
+        await begin(rig, store, mode="copy", transform_json=topics(**routing(auto=["#python"])))
 
-    assert refused.value.key == "topics_need_forum"
-    assert rig.gw.messages.get(rig.dst.id, []) == []
+    assert refused.value.key == "route_needs_rewrite"
     assert await store.latest_run(rig.src.id, rig.dst.id) is None
 
 
@@ -326,3 +337,127 @@ def test_options_that_contradict_a_topic_transform_are_refused() -> None:
     # a forward can go to a topic: routing alone is fine with --mode copy and with --caption
     check_options(RunRequest(mode="copy", transform_json=routing_only))
     check_options(RunRequest(caption="strip-links", transform_json=routing_only))
+
+
+# ---- topics.route (phase 21) --------------------------------------------------------------------
+
+
+def route(*rules: dict[str, Any], **side: Any) -> str:
+    return Transform.from_data({"topics": {"route": list(rules), **side}}).to_json()
+
+
+FILE_NAME = r"(?m)^(?P<name>[^\s.]+?)(?:[_-]\d+)*\.(?:mp4|mkv|mov|jpe?g)\s*$"
+
+
+async def test_case_one_the_last_hashtag_names_the_topic_and_the_advertising_one_does_not(
+    rig: Rig,
+) -> None:
+    add = rig.gw.add_message
+    add(rig.src.id, "one", hashtags=("#alida", "#yylive"))  # 1
+    add(rig.src.id, "two", hashtags=("#alida", "#bob", "#yylive"))  # 2
+    add(rig.src.id, "three", hashtags=("#yylive",))  # 3: only the advertising one
+    store = await rig.store()
+    rules = route(
+        {"from": "hashtags", "pick": "last", "skip": ["#YYLive"], "to": "{value|tag_title}"},
+        default="Other",
+    )
+
+    final = await go(rig, store, transform_json=rules)
+
+    ids = topic_ids(rig)
+    assert (final.status, final.done) == (RunStatus.DONE, 3)
+    assert set(ids) == {"Alida", "Bob", "Other"}
+    assert landed(rig) == {"one": ids["Alida"], "two": ids["Bob"], "three": ids["Other"]}
+
+
+def placed(rig: Rig) -> list[tuple[str, int | None]]:
+    """(text, topic) of every destination message, in the order they were sent."""
+    return [(m.text, m.topic_id) for m in rig.gw.messages[rig.dst.id]]
+
+
+async def test_case_two_the_name_in_a_file_name_caption_names_the_topic_and_is_taken_out(
+    rig: Rig,
+) -> None:
+    add = rig.gw.add_message
+    add(rig.src.id, "Alida_0412.mp4\nlovely", media=MediaKind.VIDEO)  # 1
+    add(rig.src.id, "bob-7.mkv", media=MediaKind.VIDEO)  # 2
+    add(rig.src.id, "Alida_0413.mp4", media=MediaKind.VIDEO)  # 3
+    add(rig.src.id, "no file name here", media=MediaKind.VIDEO)  # 4
+    store = await rig.store()
+    rules = route(
+        {"from": "text", "regex": FILE_NAME, "to": "{name|title}"},
+        default="Misc",
+        strip="matched",
+    )
+
+    final = await go(rig, store, transform_json=rules)
+
+    ids = topic_ids(rig)
+    assert (final.status, final.done) == (RunStatus.DONE, 4)
+    assert set(ids) == {"Alida", "Bob", "Misc"}
+    # sent again by their file ids, the file name taken out; only the last one is left whole
+    assert placed(rig) == [
+        ("lovely", ids["Alida"]),
+        ("", ids["Bob"]),
+        ("", ids["Alida"]),
+        ("no file name here", ids["Misc"]),
+    ]
+    assert by_reference(rig) == [[1], [2], [3]]  # the unit with nothing to take out is forwarded
+
+
+async def test_a_rule_can_read_the_source_topics_name_and_a_rename_follows_the_label(
+    rig: Rig,
+) -> None:
+    rig.src = rig.gw.add_channel("Forum", kind=ChatKind.FORUM)
+    chat = rig.gw.add_topic(rig.src.id, "alida chat")
+    other = rig.gw.add_topic(rig.src.id, "General talk")
+    rig.gw.add_message(rig.src.id, "a", topic_id=chat.id)
+    rig.gw.add_message(rig.src.id, "b", topic_id=other.id)
+    store = await rig.store()
+    rules = route({"from": "topic", "regex": r"^(?P<n>\w+) chat$", "to": "{n|title} fans"})
+
+    final = await go(rig, store, transform_json=rules)
+
+    ids = topic_ids(rig)
+    assert final.done == 2
+    # the rule names the first; the second keeps its own topic through the ordinary mapping
+    assert placed(rig) == [("a", ids["Alida fans"]), ("b", ids["General talk"])]
+
+
+async def test_a_made_up_name_counts_against_limit_and_a_written_one_does_not(rig: Rig) -> None:
+    add = rig.gw.add_message
+    for i, tag in enumerate(("#a", "#b", "#c", "#vip"), start=1):
+        add(rig.src.id, f"m{i}", hashtags=(tag,))
+    store = await rig.store()
+    rules = route(
+        {"when": {"hashtag": ["#vip"]}, "to": "VIP"},
+        {"from": "hashtags", "to": "{value|tag_title}"},
+        limit=2,
+    )
+
+    await go(rig, store, transform_json=rules)
+
+    ids = topic_ids(rig)
+    assert set(ids) == {"A", "B", "VIP"}  # two made-up names, then General; VIP is not counted
+    assert dict(placed(rig)) == {"m1": ids["A"], "m2": ids["B"], "m3": None, "m4": ids["VIP"]}
+
+
+async def test_the_same_rules_in_a_chat_without_topics_give_the_names_as_hashtags(
+    rig: Rig,
+) -> None:
+    rig.dst = rig.gw.add_channel("Plain copy")
+    add = rig.gw.add_message
+    add(rig.src.id, "clip", media=MediaKind.VIDEO, hashtags=("#alida",))  # 1
+    add(rig.src.id, "words", hashtags=("#alida",))  # 2
+    add(rig.src.id, "none")  # 3
+    store = await rig.store()
+    rules = route({"from": "hashtags", "to": "{value|tag_title}"}, default="Misc")
+
+    final = await go(rig, store, transform_json=rules)
+
+    assert final.done == 3
+    # the label is a hashtag in the destination's own words (hashtag_format), each message routed
+    # is sent again (by file id when it is a file), the rest default included
+    assert [text for text, _ in placed(rig)] == ["clip\n#alida", "words\n#alida", "none\n#misc"]
+    assert by_reference(rig) == [[1]]
+    assert rig.gw.calls_to("create_topic") == []

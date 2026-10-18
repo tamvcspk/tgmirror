@@ -40,12 +40,14 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 
 **0.3.0 — Thao tác tại chỗ (D10)**
 
-- [ ] Phase 20 — `delete`/`edit`/`repost`/`undo`: plan → xác nhận → apply
+- [~] Phase 21 — Định tuyến tổng quát `topics.route`, cho cả topic lẫn hashtag (duyệt hướng 2026-10-18; `07-inspect-transform.md` mục 11). **Xong code 2026-10-18**: mô hình `route`, `hashtag_to_topic` thành cú pháp tắt, `strip: matched`, nhãn → hashtag cho đích không phải forum, bảng topic đích + mẫu tin không khớp trong `inspect --plan`; **chưa**: wizard/menu chọn luật, cột topic đích ở màn Khám phá, thử trên Telegram thật (xem "Phase 21 — ghi chú")
+- [ ] Phase 20 — `delete`/`edit`/`repost`/`undo`: plan → xác nhận → apply (kèm `edit` theo `msg_map`, `07` mục 11.4)
+- [ ] Phase 20b — Chia/gộp/đổi tên/xoá topic tại chỗ, trên `repost`/`delete` (duyệt hướng 2026-10-18; `07` mục 11.3)
 - [ ] Phase 17 — Đồng bộ edit/delete nguồn → đích (dời ra sau Phase 20, dựng trên máy của nó)
 
 ## Lộ trình
 
-Thứ tự làm tiếp (18a, 18b, 19 đã xong code): **18a ✓ → 19 (19a, 19b, 19b1, 19c1, 19c2, 19c3 ✓) → 18b ✓ → 19d (19d1, 19d2 ✓; 19d4 một phần ✓) → 20 → 17** (giữ số phase cũ để các tham chiếu không lệch). Phase 14 (các kênh phân phối còn lại) làm xen khi cần, không chặn release nào.
+Thứ tự làm tiếp (18a, 18b, 19 đã xong code): **18a ✓ → 19 (19a, 19b, 19b1, 19c1, 19c2, 19c3 ✓) → 18b ✓ → 19d (19d1, 19d2 ✓; 19d4 một phần ✓) → 21 → 20 → 20b → 17** (21 và 20b duyệt hướng 2026-10-18, thuộc 0.3.0) (giữ số phase cũ để các tham chiếu không lệch). Phase 14 (các kênh phân phối còn lại) làm xen khi cần, không chặn release nào.
 
 | Phase | Nội dung | Hoàn thành khi |
 |---|---|---|
@@ -59,7 +61,9 @@ Thứ tự làm tiếp (18a, 18b, 19 đã xong code): **18a ✓ → 19 (19a, 19b
 | 18b | **0.2.0** — Chỉ mục metadata, `inspect --quick`, màn hình "Khám phá" | Lọc lặp lại trên kênh 100k tin không gọi Telegram; từ Khám phá bấm `c` ra đúng wizard clone với filter điền sẵn |
 | 19d | **0.2.0** — Rate limit thích nghi: limiter theo làn, phân loại FloodWait theo `X`, sàn slow mode, ngân sách cửa sổ trượt có AIMD, `daily_cap` chỉ cảnh báo | `flood_log` đủ ngữ cảnh để phân tích (19d1 ✓ 2026-10-15); vượt `daily_cap` chỉ cảnh báo; một flood dài chỉ đặt/cắt ngân sách của đúng làn bị chặn, và lần chạy kế tiếp không vượt ngân sách đó, tiếp tục khi cửa sổ trượt nhả chỗ (19d2) |
 | 19d4 | Thăm dò giới hạn có người dùng đồng ý (người dùng chốt 2026-10-17: `tgmirror limits`, `limits reset`, `--reset-limits`, migration 7 và trần 95% của `bad` kèm 0.2.0; `--probe` và câu hỏi tự động sau 0.2.0) — `ok`/`bad`/`checked_at` theo làn, `--probe`, `--reset-limits`, `tgmirror limits`, câu hỏi khi giới hạn lâu chưa kiểm chứng | Một ngân sách bị kẹt dưới hạn mức thật nhích lên được qua vài lần `--probe` mà không cắt lại ngân sách sau một lần thăm dò hỏng; `--reset-limits` quên ngân sách của đích mà không hỏi; hai cờ không tạo cặp mới và không đổi filter |
+| 21 | **0.3.0** — Định tuyến tổng quát `topics.route`: điều kiện bằng filter, trích khoá bằng regex từ hashtag/caption/tên file/topic, `pick`, mẫu tên; một tin một topic; nhãn thành topic (đích forum) hoặc hashtag (đích khác); `hashtag_to_topic` thành cú pháp tắt (duyệt hướng 2026-10-18, `07-inspect-transform.md` mục 11) | Tin nhiều hashtag với `pick: last` và tên file trong caption vào đúng topic trên kênh thật; cùng file sang kênh thường cho đúng hashtag; transform 19b cũ cho đúng kết quả cũ |
 | 20 | **0.3.0** — `delete`/`edit`/`repost`/`undo` (D10), `ops`/`op_items` | Kill giữa `delete` 1000 tin rồi chạy lại: không sót, không xoá ngoài plan; `edit` rồi `undo` trả đúng text + định dạng gốc |
+| 20b | **0.3.0** — `topics split/merge/rename/close/delete` tại chỗ, dựng trên `repost`/`delete` của Phase 20: chia → topic mới đúng thứ tự gốc, xoá tin đã chuyển khỏi topic cũ; gộp → nối tin của topic sau vào cuối topic trước, rồi xoá topic sau (duyệt hướng 2026-10-18, `07` mục 11.3) | Gộp 2 topic nhỏ trên forum thử: không sót tin, không đụng topic khác; kill giữa chừng rồi chạy lại không đăng trùng |
 | 17 | **0.3.x** — Đồng bộ edit/delete | Theo nhu cầu |
 
 ### Tái thiết luồng job (2026-09-20)
@@ -1173,6 +1177,14 @@ Theo (a) ở trên: cài phần rẻ và an toàn, để `--probe` cho sau 0.2.0
 - **Khác bản kế hoạch**: trần là `floor(0.95 × bad)` = 1787 cho `bad = 1882` (kế hoạch viết 1788); `ok` chỉ nhận giá trị từ migration vì chưa có thăm dò hay nhích `ok`, nên một ngân sách vừa học (không qua migration) có `ok = None` cho tới khi bị quên/đặt lại; cột `flood_log.probe` để cùng `--probe`.
 - **Test**: `test_limiter.py` (trần, hết hạn, về `ok`, `bad` thấp nhất, `forget_budgets`), `test_store.py::test_v7_migration_…` (và khứ hồi, `forget_budgets`), `test_status.py`, `test_lines.py`, `test_cli_limits.py` (lệnh, `--reset-limits` trên `clone`/`run`/`retry`, không đổi cặp/filter/con trỏ), `test_runner_flood.py`. `scripts/mutation_check.py` thêm 7 cơ chế (chạy tay).
 
+### Phase 21 — ghi chú (2026-10-18; xong code, chưa thử trên Telegram thật)
+
+- **Mô hình** (`engine/routing.py`, mới): `RouteRule`/`Routed`/mẫu tên/`TransformError` (định nghĩa ở đây, `engine/transform.py` re-export). `TopicRules` còn `rules`, `default`, `limit`, `strip`, `renames`, `hashtag_format`; `routes`/`auto_*`/`strip_tag` của 19b đã bỏ. Dạng chuẩn lưu trong `RunOptions.transform_json` là `route`; JSON 19b đã lưu vẫn nạp (dịch khi đọc), nên `run`/`retry` của cặp cũ không đổi. Chi tiết kỹ thuật: `01-kien-truc.md`, "Luật định tuyến `route`".
+- **Khác bản đề xuất ở `07` mục 11.2**: (1) `regex` với nguồn không phải `text` chỉ **lọc** ứng viên và cho nhóm, `{value}` vẫn là ứng viên nguyên vẹn (với `text` mỗi lần khớp là một ứng viên); (2) `from: text` bắt buộc có `regex`; (3) `limit` chỉ hợp lệ khi có tên có biến (như `auto: all` trước đây); (4) `strip` ghi `matched` (nhận cả `true`); (5) `when` kết hợp theo "một tin của unit thỏa" (như `album: any`); (6) luật `from: topic` đọc tên topic nguồn qua `list_topics` một lần mỗi lần chạy.
+- **Q3 (nhãn thành hashtag)**: `begin_run`/`plan_endpoints` không còn từ chối đích không phải forum (`DestinationNotForum`, `topics_need_forum` đã xóa); thêm cảnh báo `route_hashtags` và `InvalidOptions("route_needs_rewrite")` cho `--mode copy`. `inspect --plan` luôn giả định đích forum (không biết đích), nên số unit gửi lại của luật→hashtag không hiện ở đó.
+- **Chưa làm (còn trong Phase 21)**: bước wizard/menu chọn luật cơ bản (luật 7 vẫn giữ: cờ là tập cha, `--transform` đủ dùng), cột topic đích của màn Khám phá, cờ cho `limit`/`skip`/`regex`. Tiêu chí hoàn thành (hai ca thật + cùng file sang kênh thường) là việc của người dùng.
+- **Test**: `tests/unit/test_routing.py` (mẫu, bộ lọc, hai ca, strip, đọc/từ chối luật, cú pháp tắt = cú pháp dài), `test_runner_topic_rules.py` (ca 1, ca 2, `from: topic`, `limit`, nhãn → hashtag), `test_preflight.py` (unit không khớp), `test_cli_transform.py`.
+
 ### Đã chốt (người dùng duyệt 2026-09-25)
 
 1. **Phase 11, restore một backup có lời tuyên bố D3**: restore **hỏi lại lời tuyên bố** (cờ `--yes-i-administer-this-channel`, hoặc câu gõ nguyên văn khi tương tác), dù nội dung đã nằm trên đĩa, cho nhất quán "không bao giờ âm thầm"; `begin_run` **bỏ qua** bước đọc lại nguồn khi nguồn là thư mục backup (kênh gốc có thể đã mất — đó chính là lúc cần restore), thay vào đó đọc cờ `noforwards` và lời tuyên bố ghi trong `backup.json`. Đây là cách áp D3 cho một đường mới, không đổi nội dung D3.
@@ -1235,7 +1247,7 @@ Theo (a) ở trên: cài phần rẻ và an toàn, để `--probe` cho sau 0.2.0
 
 ## Câu hỏi mở
 
-Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đã được trả lời (bảng dưới; ba câu của Phase 19d trả lời 2026-10-15, ở "Phase 19d — kế hoạch").
+Hiện không có. Năm câu của đề xuất 2026-10-18 (định tuyến tổng quát, gộp/chia topic, sửa tin) đã trả lời cùng ngày: `07-inspect-transform.md`, mục 11.6. Các câu hỏi phát sinh trong lúc thiết kế đều đã được trả lời (bảng dưới; ba câu của Phase 19d trả lời 2026-10-15, ở "Phase 19d — kế hoạch").
 
 ## Câu hỏi đã trả lời (2026-09-19)
 
@@ -1254,6 +1266,10 @@ Hiện không có. Các câu hỏi phát sinh trong lúc thiết kế đều đ�
 ## Nhật ký quyết định
 
 Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và lý do ở đây.
+
+- 2026-10-18: **Người dùng duyệt hướng mục 11 của `07-inspect-transform.md`** (trả lời 5 câu ở 11.6): (1) một tin một topic, không nhân bản; (2) ca tên file trong caption giải theo `from: text` + `regex` + `to` như đề xuất ("không có đường" = không có cách); (3) `route` dùng cho cả topic (đích forum) lẫn hashtag (đích khác, theo `hashtag_format`); (4) Phase 21 vào **0.3.0**; (5) làm Phase 20b: chia → đăng lại các tin chuyển vào topic mới đúng thứ tự gốc rồi xoá chúng khỏi topic cũ; gộp → đăng lại tin của topic sau vào cuối topic trước theo thứ tự rồi xoá topic sau. Chưa viết mã, không đổi D1–D10.
+
+- 2026-10-18: Theo yêu cầu người dùng, **bổ sung vào plan** gộp/chia topic và sửa tin cho forum, và brainstorm cho hai ca gặp khi dùng 19b (tin nhiều hashtag chỉ lấy hashtag đầu; tên file trong caption, không có hashtag, muốn trích bằng regex làm tên topic). Đề xuất một cơ chế chung thay cho xử lý từng ca: **luật định tuyến `topics.route`** (điều kiện = ngôn ngữ filter, trích khoá bằng regex từ hashtag/caption/tên file/topic nguồn, `pick`, mẫu tên với bộ lọc cố định; `hashtag_to_topic` thành cú pháp tắt) — Phase 21 mới; gộp/chia tại chỗ là Phase 20b trên `repost`/`delete` của Phase 20; `edit` thêm sửa theo `msg_map`. Toàn bộ ở `07-inspect-transform.md` mục 11, **chưa duyệt**, 5 câu hỏi ở mục 11.6. Không viết mã, không đổi D1–D10.
 
 - 2026-10-15: **Phase 19d2 xong code** (ngân sách tự học theo làn ghi, cửa sổ trượt, `daily_cap` chỉ cảnh báo, `BudgetReached` thay `DailyCapReached`, migration 5, `[limits] short_flood`); cùng `19d1`, thuộc 0.2.0. Chi tiết và chỗ khác bản kế hoạch ở "19d2 — đã cài". Tag `v0.2.0` còn chờ người dùng thử trên Telegram thật.
 - 2026-10-17: **Thêm Phase 19d4 (thăm dò giới hạn)** vào kế hoạch theo điểm mù người dùng chỉ ra (ngân sách học được chỉ giảm khi bị chặn và gần như không bao giờ được thử vượt; lần chạy 69, 70 tự dừng ở 1506 mà chưa biết hạn mức thật). Người dùng chốt ba điểm: reset/thăm dò là hành động chủ động bằng cờ (không hỏi lại), không có cờ thì hỏi khi đang trong giới hạn; các cờ này không đổi cặp/filter (một tùy chọn không đổi bộ lọc không tạo job mới, đúng với code hiện tại); câu hỏi theo tuổi của lần kiểm chứng giới hạn. Chưa code. Không đổi D1–D10.

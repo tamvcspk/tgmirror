@@ -12,10 +12,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from tgmirror.core.errors import TgMirrorError
-from tgmirror.core.gateway import CaptionMode, ChannelInfo, ChatKind, TelegramGateway
+from tgmirror.core.gateway import CaptionMode, ChannelInfo, TelegramGateway
 from tgmirror.engine import backupdir
 from tgmirror.engine.endpoints import SourceRestricted
-from tgmirror.engine.strategy import MODES, may_reupload
+from tgmirror.engine.strategy import MODES, labels_as_hashtags, may_reupload
 from tgmirror.engine.transform import Transform
 from tgmirror.store.db import Clock, Store, utc_now
 from tgmirror.store.runs import Run, RunOptions, RunSpec, RunStatus, StartedRun
@@ -171,10 +171,10 @@ async def begin_run(
     """
     request = request or RunRequest()
     check_options(request)
-    if Transform.from_json(request.transform_json).routes_to_topics and dst.kind is not (
-        ChatKind.FORUM
-    ):  # a hashtag cannot be sent to a topic a destination without topics does not have
-        raise InvalidOptions("topics_need_forum")
+    transform = Transform.from_json(request.transform_json)
+    label_hashtag = labels_as_hashtags(transform, dst.kind)
+    if label_hashtag and request.mode == "copy":  # the name becomes a hashtag: needs a rewrite
+        raise InvalidOptions("route_needs_rewrite")
     manifest = backupdir.read_manifest(Path(request.from_backup)) if request.from_backup else None
     if request.from_backup is not None:
         # N6, Phase 15b: never fall back to a live re-check just because the directory this pair
@@ -186,10 +186,7 @@ async def begin_run(
             raise WrongBackupSource(Path(request.from_backup), src.id, manifest.src_id)
     protected = False
     if may_reupload(
-        request.mode,
-        request.caption,
-        request.topic_as_hashtag,
-        Transform.from_json(request.transform_json),
+        request.mode, request.caption, request.topic_as_hashtag, transform, label_hashtag
     ):
         protected = (
             check_source_from_backup(manifest, request)

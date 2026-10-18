@@ -70,19 +70,20 @@ class TopicResolver:
         self._map: dict[int, int] | None = None
         self._titles: dict[int, str] | None = None
         self._dst_ids: dict[str, int] | None = None  # destination topic id by case-folded title
-        # ``auto: all`` names topics after hashtags nobody wrote down: a guard on how many a run
+        # a rule with a variable name makes topics nobody wrote down: a guard on how many a run
         # may create (``on_limit`` is told once, with the limit, when it holds one back)
-        self._named = {r.topic.strip().casefold() for r in self._rules.routes}
-        if self._rules.default:
-            self._named.add(self._rules.default.strip().casefold())
+        self._named = self._rules.fixed_names
         self._auto_created = 0
         self._on_limit = on_limit
         self._limit_told = False
 
     async def resolve(self, src_topic_id: int | None, dst_title: str | None = None) -> TopicRoute:
-        """``dst_title`` is the topic a hashtag rule chose; it wins over ``src_topic_id``."""
-        if dst_title is not None:  # needs a forum: ``begin_run`` refused any other destination
-            automatic = self._rules.auto_all and dst_title.strip().casefold() not in self._named
+        """``dst_title`` is the name a routing rule gave; it wins over ``src_topic_id``. A forum
+        has a topic of that name, any other destination gets it as a hashtag (phase 21)."""
+        if dst_title is not None:
+            if self._run.dst_kind is not ChatKind.FORUM:
+                return TopicRoute(hashtag=self._rules.hashtag_of(dst_title))
+            automatic = self._rules.variable and dst_title.strip().casefold() not in self._named
             found = await self._topic_titled(dst_title, automatic=automatic)
             # past the guard the message goes where it would with no rule: General
             return TopicRoute() if found is None else _topic_route(found)
@@ -108,11 +109,15 @@ class TopicResolver:
         self._map[src_topic_id] = dst_topic_id
         return _topic_route(dst_topic_id)
 
-    async def _title_of(self, src_topic_id: int) -> str:
+    async def source_titles(self) -> dict[int, str]:
+        """The source's topics by id: read once, for the rules that route by a topic's name."""
         if self._titles is None:
             topics = await self._reader.list_topics(self._run.src_id)
             self._titles = {t.id: t.title for t in topics}
-        return self._titles.get(src_topic_id, f"Topic {src_topic_id}")
+        return self._titles
+
+    async def _title_of(self, src_topic_id: int) -> str:
+        return (await self.source_titles()).get(src_topic_id, f"Topic {src_topic_id}")
 
     async def _topic_titled(self, title: str, *, automatic: bool = False) -> int | None:
         """The destination topic called ``title``: one that is there, else a new one. ``None``
@@ -126,10 +131,10 @@ class TopicResolver:
         key = title.strip().casefold()
         found = self._dst_ids.get(key)
         if found is None:
-            if automatic and self._auto_created >= self._rules.auto_limit:
+            if automatic and self._auto_created >= self._rules.limit:
                 if not self._limit_told and self._on_limit is not None:
                     self._limit_told = True
-                    self._on_limit(self._rules.auto_limit)
+                    self._on_limit(self._rules.limit)
                 return None
             found = self._dst_ids[key] = await self._create(title)
             if automatic:

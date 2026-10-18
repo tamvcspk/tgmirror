@@ -10,6 +10,7 @@ member excludes the album. ``date`` and ``id`` judge the unit by its first messa
 from collections.abc import Callable
 from datetime import UTC
 from fnmatch import fnmatchcase
+from functools import lru_cache
 
 import regex
 
@@ -130,6 +131,14 @@ def _search(pattern: "regex.Pattern[str]", message: SrcMessage) -> bool:
             f"the regex {pattern.pattern!r} took more than {REGEX_TIMEOUT}s on message "
             f"{message.id}; simplify it (nested repetition such as (a+)+ backtracks badly)"
         ) from None
+
+
+@lru_cache(maxsize=256)
+def rule_matcher(rule: Rule) -> Callable[[Unit], bool]:
+    """One rule as a test on a unit (phase 21, a routing rule's ``when``): some message of the
+    unit satisfies every predicate, as an include rule does with the default ``album: any``."""
+    checks = _compile(rule)
+    return lambda unit: any(_hit(checks, m) for m in unit.messages)
 
 
 class Matcher:

@@ -142,11 +142,12 @@ def unit(*texts_tags: tuple[str, ...], topic_id: int | None = None, album: bool 
 def test_topics_are_read_normalised_and_keep_their_priority_order() -> None:
     rules = parse(TOPICS).topics
 
-    assert [(r.tag, r.topic) for r in rules.routes] == [
-        ("#python", "Python"),
-        ("#rust", "Rust lang"),
-        ("#machine_learning", "Machine learning"),  # ``auto`` names the topic after the tag
-        ("#go", "Go"),
+    # the short form is read as the rules it stands for
+    assert [(r.when.hashtag if r.when else None, r.to) for r in rules.rules] == [
+        (("#python",), "Python"),
+        (("#rust",), "Rust lang"),
+        (("#machine_learning",), "Machine learning"),  # ``auto`` names the topic after the tag
+        (("#go",), "Go"),
     ]
     assert rules.default == "Misc" and rules.strip and rules.strips
     assert rules.renames == ((12, "Merged"), ("old name", "New name"))
@@ -173,11 +174,11 @@ def test_the_first_rule_a_unit_matches_decides_not_the_order_of_its_hashtags() -
 
     both = unit(("#rust", "#python"))
     assert rules.destination(both) == "Python"
-    assert rules.strip_tag(both) == "#python"
+    assert rules.strip_ops(both) == (RemoveHashtags(("#python",)),)
     # an album is judged as a whole: the caption (and its tags) is on one of its messages
     album = unit((), ("#Rust",), ())
     assert rules.destination(album) == "Rust lang"
-    assert rules.strip_tag(album) == "#rust"
+    assert rules.strip_ops(album) == (RemoveHashtags(("#rust",)),)
 
 
 def test_default_takes_only_a_message_that_sits_in_no_source_topic() -> None:
@@ -191,7 +192,7 @@ def test_default_takes_only_a_message_that_sits_in_no_source_topic() -> None:
     assert rules.destination(unit(("#go",), topic_id=5)) == "Go"
     # without ``strip`` nothing is taken out of a caption
     no_strip = parse('topics: {hashtag_to_topic: {map: {"#a": "A"}}}').topics
-    assert no_strip.strip_tag(unit(("#a",))) is None
+    assert no_strip.strip_ops(unit(("#a",))) == ()
 
 
 def test_topic_map_renames_by_id_then_by_title_and_names_the_hashtag() -> None:
@@ -251,13 +252,13 @@ def test_auto_all_names_a_topic_after_the_first_hashtag_written_in_the_message()
         "topics: {hashtag_to_topic: {map: {'#python': 'Python'}, auto: all, skip: ['#ads']}}"
     ).topics
 
-    assert rules.routing and rules.auto_all and rules.auto_limit == tf.DEFAULT_AUTO_LIMIT
+    assert rules.routing and rules.variable and rules.limit == tf.DEFAULT_AUTO_LIMIT
     # an explicit rule first, whatever the order in the message
     assert rules.destination(unit(("#go", "#python"))) == "Python"
     # no rule: the first hashtag that is not skipped, named after itself
     assert rules.destination(unit(("#machine_learning", "#go"))) == "Machine learning"
     assert rules.destination(unit(("#ads", "#Go"))) == "Go"
-    assert rules.strip_tag(unit(("#ads", "#Go"))) is None  # ``strip`` is off
+    assert rules.strip_ops(unit(("#ads", "#Go"))) == ()  # ``strip`` is off
     # only skipped tags, or none: no topic of its own
     assert rules.destination(unit(("#ads",))) is None
     assert rules.destination(unit(())) is None
@@ -268,10 +269,14 @@ def test_auto_all_with_its_limit_and_skip_round_trips() -> None:
         "topics: {hashtag_to_topic: {auto: all, limit: 5, skip: ['#ads', '#News'], strip: true}}"
     )
 
-    assert transform.topics.auto_limit == 5 and transform.topics.auto_skip == ("#ads", "#news")
+    assert transform.topics.limit == 5
+    assert transform.topics.rules[-1].is_auto_all and transform.topics.rules[-1].skip == (
+        "#ads",
+        "#news",
+    )
     assert Transform.from_json(transform.to_json()) == transform
     assert transform.routes_to_topics and transform.rewrites  # strip: sent again
-    assert parse("topics: {hashtag_to_topic: {auto: true}}").topics.auto_all  # YAML `true` too
+    assert parse("topics: {hashtag_to_topic: {auto: true}}").topics.rules[-1].is_auto_all
 
 
 def test_flags_layered_on_a_file_replace_a_single_value_and_add_to_the_renames() -> None:
@@ -284,7 +289,7 @@ def test_flags_layered_on_a_file_replace_a_single_value_and_add_to_the_renames()
     assert rules.default == "Else"  # the flag's, not the file's
     # the file's and the flag's together; a topic both name takes the flag's; sorted (canonical)
     assert rules.renames == ((12, "Twelve"), ("chat", "Talk"), ("old name", "Newer"))
-    assert rules.routes == base.routes and rules.strip == base.strip  # untouched
+    assert rules.rules == base.rules and rules.strip == base.strip  # untouched
     assert Transform.from_data(Transform(topics=rules).to_data()) == Transform(topics=rules)
 
 
@@ -300,8 +305,8 @@ def test_strip_is_only_ever_turned_on_by_a_flag_and_needs_routing() -> None:
 @pytest.mark.parametrize(
     ("flags", "fragment"),
     [
-        ({"default": "Else"}, "only mean something with hashtag routing"),
-        ({"strip": True}, "only mean something with hashtag routing"),
+        ({"default": "Else"}, "only mean something with routing"),
+        ({"strip": True}, "only mean something with routing"),
         ({"renames": [(1, "Home")]}, "General has no topic id"),
         ({"renames": [("Old", "A"), ("old", "B")]}, "twice"),
         ({"renames": [("Old", "")]}, "name of a topic"),

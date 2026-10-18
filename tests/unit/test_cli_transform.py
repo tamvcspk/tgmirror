@@ -271,7 +271,8 @@ def test_the_flag_alone_makes_a_topic_per_hashtag_in_a_new_forum(
     landed = {m.text: m.topic_id for m in gateway.messages[sorted_id]}
     assert landed == {"py #python": topics["Python"], "rs #rust": topics["Rust"], "other": None}
     (run,) = saved_runs(rt)
-    assert Transform.from_json(run.options.transform_json).topics.auto_all  # run remembers it
+    remembered = Transform.from_json(run.options.transform_json).topics
+    assert any(r.is_auto_all for r in remembered.rules)  # run remembers it
 
 
 def test_the_flag_fills_in_around_the_names_a_file_gives(
@@ -328,7 +329,8 @@ def test_default_and_strip_flags_need_no_file(
     }
     (run,) = saved_runs(rt)
     rules = Transform.from_json(run.options.transform_json).topics
-    assert rules.default == "Misc" and rules.strip and rules.auto_all  # run remembers all three
+    assert rules.default == "Misc" and rules.strip  # run remembers all three
+    assert any(r.is_auto_all for r in rules.rules)
 
 
 def test_topic_map_flags_rename_source_topics_by_title_or_id(
@@ -378,8 +380,8 @@ def test_topic_map_flags_go_on_top_of_the_files_and_win_for_the_same_topic(
 @pytest.mark.parametrize(
     ("extra", "needle"),
     [
-        (["--topic-default", "Misc"], "hashtag routing"),
-        (["--strip-routing-hashtag"], "hashtag routing"),
+        (["--topic-default", "Misc"], "only mean something with routing"),
+        (["--strip-routing-hashtag"], "only mean something with routing"),
         (["--hashtag-to-topic", "--topic-default", " "], "name of a topic"),
         (["--topic-map", "no sign"], "Old name=New name"),
         (["--topic-map", "=New"], "Old name=New name"),
@@ -465,19 +467,33 @@ def test_a_forum_source_routes_by_hashtag_into_topics_of_a_new_forum(
     }
 
 
-def test_an_existing_destination_without_topics_is_refused_before_anything_is_written(
+def test_an_existing_destination_without_topics_gets_the_names_as_hashtags(
     make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
 ) -> None:
-    _, dst = tagged(gateway)  # "Copy" is a broadcast channel
+    _, dst = tagged(gateway)  # "Copy" is a broadcast channel: no topics to put anything in
     rt = make_runtime(gateway=gateway)
     path = transform_file(tmp_path, ROUTING)
 
     result = runner.invoke(app, [*CLONE, "--transform", str(path)], obj=rt)
 
-    assert result.exit_code == 2, result.output
-    assert "forum" in result.output
-    assert gateway.messages.get(dst, []) == [] and saved_runs(rt) == []
+    assert result.exit_code == 0, result.output
+    assert "hashtag" in result.output  # the warning says what happens instead
     assert gateway.calls_to("create_topic") == []
+    # a routed message is sent again with its topic's name as a hashtag; the rest is forwarded
+    assert texts(gateway, dst) == ["py #python\n#python", "rs #rust\n#rust", "other"]
+
+
+def test_hashtags_for_names_need_a_message_that_can_be_sent_again(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    tagged(gateway)
+    rt = make_runtime(gateway=gateway)
+    path = transform_file(tmp_path, ROUTING)
+
+    result = runner.invoke(app, [*CLONE, "--mode", "copy", "--transform", str(path)], obj=rt)
+
+    assert result.exit_code == 2, result.output
+    assert "hashtag" in result.output and saved_runs(rt) == []
 
 
 def test_run_goes_on_routing_with_the_remembered_rules(
@@ -523,6 +539,26 @@ def test_the_preflight_says_how_many_units_go_to_each_topic(
         {"topic": "Rust", "units": 1},
         {"topic": None, "units": 1},  # "other": no rule, so General
     ]
+
+
+def test_the_preflight_shows_the_topics_and_the_messages_no_rule_named(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    src, _ = tagged(gateway)
+    gateway.add_message(src, "clip named by nobody", media=MediaKind.VIDEO)  # 4
+    rt = make_runtime(gateway=gateway)
+    path = transform_file(
+        tmp_path, "topics:\n  route:\n    - {from: hashtags, to: '{value|tag_title}'}\n"
+    )
+
+    result = runner.invoke(
+        app, ["inspect", "Source", "--plan", "clone", "--transform", str(path)], obj=rt
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Python (1)" in result.output and "Rust (1)" in result.output
+    assert "2 messages matched no rule" in result.output
+    assert "#4: clip named by nobody" in result.output and "#3: other" in result.output
 
 
 # ---- inspect ----------------------------------------------------------------------------------

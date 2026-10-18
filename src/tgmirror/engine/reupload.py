@@ -17,7 +17,7 @@ unit at a time on one account.
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -25,13 +25,13 @@ from pathlib import Path
 from tgmirror.core.errors import FileRefExpired
 from tgmirror.core.gateway import (
     CaptionMode,
+    CaptionOp,
     CaptionPolicy,
     LinkRewrite,
     MediaKind,
     MessageReader,
     OnTransfer,
     Prepared,
-    RemoveHashtags,
     TelegramGateway,
     Unit,
 )
@@ -157,7 +157,7 @@ async def send_unit(
     *,
     topic: int | None = None,
     hashtag: str | None = None,
-    strip: str | None = None,
+    strip: Sequence[CaptionOp] = (),
     reply_to: int | None = None,
     links: LinkRewrite | None = None,
 ) -> list[MessageResult]:
@@ -167,7 +167,8 @@ async def send_unit(
     targets a destination topic; ``hashtag`` (phase 8, ``RunOptions.topic_as_hashtag``) stands in
     for a topic the destination cannot hold — appended to the placeholder directly here, and to
     every caption/text ``gateway.send_prepared`` sends (``CaptionPolicy.hashtag``). ``strip``
-    (phase 19b) is the hashtag a rule routed the unit by, taken out of its caption first.
+    (phases 19b and 21) is what a rule routed the unit by (a hashtag, matched text), taken out of
+    its caption first.
     ``reply_to`` (phase 19c) is the message in ``dst`` the unit answers, ``links`` (19c3) says
     which links in its text point at which copies.
     """
@@ -197,7 +198,7 @@ async def send_unit_by_reference(
     on_fallback: Callable[[], None] = lambda: None,
     topic: int | None = None,
     hashtag: str | None = None,
-    strip: str | None = None,
+    strip: Sequence[CaptionOp] = (),
     reply_to: int | None = None,
     links: LinkRewrite | None = None,
 ) -> list[MessageResult]:
@@ -245,14 +246,17 @@ async def send_unit_by_reference(
 
 
 def _caption_of(
-    options: Options, hashtag: str | None, strip: str | None, links: LinkRewrite | None = None
+    options: Options,
+    hashtag: str | None,
+    strip: Sequence[CaptionOp],
+    links: LinkRewrite | None = None,
 ) -> CaptionPolicy:
-    """The run's caption policy with this unit's own additions: the hashtag its routing rule
-    matched comes out first (before the operations, which may add text of their own), the topic
-    hashtag goes last, and the links to the source (19c3) are re-pointed before any of it."""
+    """The run's caption policy with this unit's own additions: what its routing rule went by
+    comes out first (before the operations, which may add text of their own), the topic hashtag
+    goes last, and the links to the source (19c3) are re-pointed before any of it."""
     caption = replace(options.caption, links=links) if links is not None else options.caption
     if strip:
-        caption = replace(caption, ops=(RemoveHashtags((strip,)), *caption.ops))
+        caption = replace(caption, ops=(*strip, *caption.ops))
     if hashtag:
         caption = replace(caption, hashtag=hashtag)
     return caption

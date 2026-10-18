@@ -194,7 +194,17 @@ caption:                              # applied in this order, to the captions o
   # - clear: true                     # drop the caption (= --caption none)
   - text_too: true                    # also rewrite plain text messages (default: media captions only)
 topics:
-  hashtag_to_topic:                   # the destination must be a forum
+  # Rules (the first one that gives a name wins; one message goes to one topic). Each has `when`
+  # (a filter rule), `from` (hashtags | text | file_name | topic | forwarded_from), `regex`,
+  # `pick`, `skip` and `to` (a name template):
+  # route:
+  #   - {when: {hashtag: ["#vip"]}, to: "VIP"}
+  #   - {from: hashtags, pick: last, skip: ["#ads"], to: "{value|tag_title}"}
+  #   - {from: text, regex: '(?P<name>\\w+)\\.mp4', to: "{name|title}"}   # a name written in the caption
+  # default: "Other"
+  # strip: matched                    # take the hashtag / matched text out of the caption
+  # The short form below is the same thing:
+  hashtag_to_topic:
     map:                              # in priority order: the first rule a message's hashtag matches
       "#python": "Python"
       "#rust": "Rust lang"
@@ -212,7 +222,7 @@ topics:
 
 - **A transform never picks messages — a filter does.** `hashtag_to_topic` only says where a message goes; a message no rule matches is still cloned (into `default`, into the topic its source topic maps to, or into General). To take only some hashtags, filter them: `--hashtag "#python" --hashtag "#rust"`. Likewise `topic_map` only renames; to take some topics use `--topic`.
 - **Routing:** a message goes to the topic of the first *rule* (file order, not the order in the message) one of its hashtags matches. An album is judged as a whole and never split. Order *inside* each topic is the source order. Destination topics are looked up by title before one is created, so running the pair again — or two sources into one forum — shares them.
-- **The destination must be a forum** when routing: `--dst-new` creates one (even from a plain channel); an existing destination that is not a forum is refused before anything is written.
+- **A forum destination gets topics, any other destination gets hashtags:** the name a rule gives a message is a label. `--dst-new` creates a forum (even from a plain channel); an existing destination without topics gets the label as a hashtag (`#{slug}`, see `hashtag_format`) and those messages are sent again, so `--mode copy` is refused for it. `inspect --plan` shows how many messages land in each topic and the first few that no rule named, to fix a regex before anything is written.
 - **Cost:** routing alone is a plain server-side forward into a topic. What changes a caption (`caption:` operations, `strip`) sends those messages again — by file id when the source allows saving content, downloaded and re-uploaded otherwise (then the "Restrict saving content" statement applies, as for `--mode reupload`). So `--mode copy` together with those is an error; routing alone works with it. `inspect --plan` shows how many units go each way and how many land in each topic.
 - **A file that does nothing is an error**, not a plain clone: a key left with nothing under it (`hashtag_to_topic:` and no lines below — write `auto: all` for a topic per hashtag), or a `--transform` file with no operation and no rule, exits with code 2.
 - **Remembered with the pair:** `run` and `retry` reuse it. Changing the transform later does not rewrite messages already copied.
@@ -228,7 +238,7 @@ Without a file, the same things as flags (on `clone`, `restore` and `inspect --p
 | `--keep-replies` | `reply: keep` | switches it on |
 | `--caption …` / `--caption-text` | `caption:` operations | run **after** the file's operations |
 
-`--topic-default` and `--strip-routing-hashtag` only mean something with routing (`--hashtag-to-topic`, or `hashtag_to_topic:` in the file): without it they are a usage error, not silently ignored. `limit`, `skip` and `hashtag_format` have no flag; put them in the file.
+`--topic-default` and `--strip-routing-hashtag` only mean something with routing (`--hashtag-to-topic`, or `route:`/`hashtag_to_topic:` in the file): without it they are a usage error, not silently ignored. `limit`, `skip` and `hashtag_format` have no flag; put them in the file.
 
 ```bash
 # a new forum, one topic per first hashtag; the rest into "Other"; the routing hashtag leaves the caption

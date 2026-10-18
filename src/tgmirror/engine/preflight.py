@@ -11,7 +11,8 @@ bytes, and a FloodWait can add to it.
 """
 
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from tgmirror.core.config import Limits
 from tgmirror.core.gateway import CaptionMode, CaptionPolicy, Unit
@@ -20,6 +21,8 @@ from tgmirror.engine.strategy import Router, Strategy, router
 from tgmirror.engine.transform import Transform
 
 KINDS = ("clone", "backup", "restore")
+SAMPLES = 5  # unmatched units shown
+EXCERPT = 60  # characters of a sample
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +35,8 @@ class PlanOptions:
     caption_text: str = ""
     transform: Transform = Transform()  # phase 19
     topic_hashtag: bool = False  # a forum source into a destination without topics
+    # the source's topics by id, for the routing rules that go by a topic's name (phase 21)
+    topic_titles: Mapping[int, str] = field(default_factory=dict)
     by_reference: bool = True  # the source lets content be saved (not ``noforwards``)
     reset_polls: bool = False
     ignore_unsupported: bool = False
@@ -61,6 +66,11 @@ class Plan:
     # phase 19b: units by the destination topic a hashtag rule gives them (``None`` = no rule did:
     # the source topic's own mapping, or General); empty without ``hashtag_to_topic``
     topics: tuple[tuple[str | None, int], ...] = ()
+    # phase 21: how many units no routing rule named (the default, the source topic's own mapping
+    # or General took them), and the first few as (first message id, what it says): the way to
+    # see a regex that misses before anything is written
+    unmatched: int = 0
+    unmatched_samples: tuple[tuple[int, str], ...] = ()
 
 
 @dataclass(slots=True)
@@ -87,6 +97,7 @@ class Preflight:
             by_reference=options.by_reference,
             topic_hashtag=options.topic_hashtag,
             transform=options.transform,
+            topic_titles=options.topic_titles,
         )
         self._send = Options(
             CaptionPolicy(
@@ -101,6 +112,8 @@ class Preflight:
         )
         self._by: dict[str, _Counts] = {}
         self._topics: dict[str | None, int] = {}
+        self._unmatched = 0
+        self._samples: list[tuple[int, str]] = []
         # forwards go out one batch per stretch of units for the same place: a topic that changes
         # ends a batch (``engine/batcher.py``)
         self._segments: list[int] = []
@@ -116,6 +129,10 @@ class Preflight:
         title = self._title(unit)
         if self.options.transform.routes_to_topics and way != "left_out":
             self._topics[title] = self._topics.get(title, 0) + 1
+            if self._unrouted(unit):
+                self._unmatched += 1
+                if len(self._samples) < SAMPLES:
+                    self._samples.append((unit.ids[0], _excerpt(unit)))
         if way == Strategy.COPY.value:
             place = (None, title) if title is not None else (unit.topic_id, None)
             if place != self._place or not self._segments:
@@ -123,8 +140,11 @@ class Preflight:
             self._place = place
             self._segments[-1] += 1
 
+    def _unrouted(self, unit: Unit) -> bool:
+        return self.options.transform.topics.route(unit, self.options.topic_titles) is None
+
     def _title(self, unit: Unit) -> str | None:
-        return self.options.transform.topics.destination(unit)
+        return self.options.transform.topics.destination(unit, self.options.topic_titles)
 
     def _way(self, unit: Unit) -> str:
         if self.options.kind == "backup":
@@ -164,6 +184,8 @@ class Preflight:
             transfer_bytes=transfer,
             largest_file=self._largest,
             topics=tuple(sorted(self._topics.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))),
+            unmatched=self._unmatched,
+            unmatched_samples=tuple(self._samples),
         )
 
     def _write_calls(self) -> int:
@@ -181,9 +203,17 @@ class Preflight:
         return calls * self._limits.min_delay + pauses * (low + high) / 2
 
 
+def _excerpt(unit: Unit) -> str:
+    """What a unit says, on one short line: its first text, else the kind of its first message."""
+    text = next((" ".join(m.text.split()) for m in unit.messages if m.text.strip()), "")
+    if not text:
+        return f"({unit.messages[0].media.value})"
+    return text if len(text) <= EXCERPT else text[: EXCERPT - 1] + "…"
+
+
 def plan_to_dict(plan: Plan) -> dict[str, object]:
     """The plan as plain JSON-able data (``tgmirror inspect --plan ... --json``)."""
-    return {
+    data: dict[str, object] = {
         "kind": plan.kind,
         "ways": [
             {"strategy": w.strategy, "units": w.units, "messages": w.messages, "bytes": w.bytes}
@@ -197,3 +227,9 @@ def plan_to_dict(plan: Plan) -> dict[str, object]:
         "largest_file": plan.largest_file,
         "topics": [{"topic": topic, "units": units} for topic, units in plan.topics],
     }
+    if plan.topics:
+        data["unmatched"] = {
+            "units": plan.unmatched,
+            "samples": [{"id": i, "text": text} for i, text in plan.unmatched_samples],
+        }
+    return data
