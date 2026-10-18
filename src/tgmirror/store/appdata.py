@@ -68,6 +68,8 @@ async def export_appdata(store: Store, paths: Paths, dest: Path) -> Manifest:
         raise ExportBusy()
     if await store.active_backup() is not None:
         raise ExportBusy()
+    if await store.active_op() is not None:  # phase 20: a delete half done, run twice elsewhere
+        raise ExportBusy()
 
     with tempfile.TemporaryDirectory(prefix="tgmirror-export-") as tmp:
         db_snapshot = Path(tmp) / DB_ENTRY

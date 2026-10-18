@@ -184,6 +184,70 @@ VI: dict[str, str] = {
         "Telegram giới hạn liên tiếp: tạm nghỉ {delay}s giữa các lần đọc, "
         "cho tới khi yên ổn trở lại."
     ),
+    # delete (phase 20, decision D10)
+    "delete.no_admin_channels": ("Bạn không quản trị kênh/nhóm nào, nên không có gì để xoá tin."),
+    "delete.pick_source": "Xoá tin khỏi kênh/nhóm nào?",
+    "delete.needs_filter": (
+        "Bộ lọc trống sẽ xoá TẤT CẢ tin của kênh. Nếu đúng ý bạn, thêm --all; nếu không, thêm "
+        "bộ lọc (--media, --hashtag, --since, --selection, ...)."
+    ),
+    "delete.confirm_all": (
+        "Không có bộ lọc: kế hoạch sẽ gồm TẤT CẢ tin của «{chat}». Vẫn lập kế hoạch?"
+    ),
+    "delete.nothing": "Bộ lọc không chọn tin nào trong «{chat}»: không có gì để xoá.",
+    "delete.plan_header": (
+        "Kế hoạch xoá O{id} khỏi «{chat}»: {messages} tin ({units} đơn vị, {albums} album)."
+    ),
+    "delete.plan_media": "  theo loại: {items}",
+    "delete.plan_months": "  theo tháng: {items}",
+    "delete.plan_years": "  theo năm: {items}",
+    "delete.plan_sample": "  id {id} · {date} · {media} · {text}",
+    "delete.plan_gap": "  …",
+    "delete.type_count": (
+        "Việc này xoá {count} tin khỏi «{chat}» và không hoàn tác được. Gõ {count} để xoá"
+    ),
+    "delete.needs_expect": (
+        "--yes cần đi kèm --expect N, với N là số tin trong kế hoạch ({count}): để một bộ lọc "
+        "khớp nhiều hơn bạn nghĩ không xoá nhầm."
+    ),
+    "delete.expect_mismatch": (
+        "Kế hoạch có {count} tin, không phải {expected} như --expect. Chưa xoá gì."
+    ),
+    "delete.needs_yes": (
+        "Chưa xoá gì. Kế hoạch O{id} ({count} tin) đã được lưu; để xoá, chạy: "
+        "tgmirror delete --resume O{id} --yes --expect {count}"
+    ),
+    "delete.cancelled": "Đã bỏ kế hoạch O{id}; chưa xoá gì.",
+    "delete.finished": "Thao tác O{id} đã {status}; không còn gì để làm.",
+    "delete.start": "Thao tác O{id}: xoá {count} tin khỏi «{chat}».",
+    "delete.progress": (
+        "O{id}: {done}/{planned} tin đã xoá, {skipped} để nguyên (đã đổi), {gone} đã mất sẵn."
+    ),
+    "delete.result": "Thao tác O{id}: {status}. {done}/{planned} tin đã xoá.",
+    "delete.left_alone": (
+        "{count} tin đã thay đổi từ lúc lập kế hoạch, không còn khớp bộ lọc nên được để nguyên."
+    ),
+    "delete.gone": "{count} tin đã không còn khi tới lượt (có người xoá trước).",
+    "delete.continue_hint": "Xoá tiếp phần còn lại: tgmirror delete --resume O{id}",
+    "delete.paused": "Đã tạm dừng. Bấm r để chạy tiếp, q để dừng.",
+    "delete.resumed": "Chạy tiếp.",
+    "delete.settled": (
+        "Lần trước dừng giữa một lô: {deleted} tin đã xoá xong, {again} tin còn nguyên sẽ xoá tiếp."
+    ),
+    "delete.flood_stopped": (
+        "Telegram yêu cầu chờ {seconds}s. Thao tác được lưu ở trạng thái chờ đến {resume_at}; "
+        "chạy lại với `tgmirror delete --resume` sau đó."
+    ),
+    "delete.flood_waiting": (
+        "Telegram yêu cầu chờ {seconds}s; đang chờ (Ctrl+C để dừng, tiến độ đã lưu)."
+    ),
+    "delete.throttled": (
+        "Telegram giới hạn liên tiếp: tạm nghỉ {delay}s giữa các lần, cho tới khi yên ổn trở lại."
+    ),
+    "delete.budget_learned": (
+        "Telegram bắt chờ {seconds}s: ngân sách của làn {action} giờ là {budget} tin/{window} giờ."
+    ),
+    "delete.cap_warning": "Đã thao tác {sent} tin trong 24 giờ qua (nhắc daily_cap: {cap}).",
     # restore (phase 11b)
     "restore.pick_dir": "Thư mục backup cần restore",
     "restore.pick_dir_empty": "Đường dẫn không được để trống.",
@@ -200,6 +264,8 @@ VI: dict[str, str] = {
     "status.stopped": "đã dừng",
     "status.waiting_flood": "chờ flood",
     "status.done": "xong",
+    "status.planned": "đã lập kế hoạch",
+    "status.cancelled": "đã huỷ",
     "status.failed": "lỗi",
     "control.pause_requested": "Đã yêu cầu tạm dừng lần chạy {id}; nó dừng sau batch hiện tại.",
     "control.stop_requested": "Đã yêu cầu dừng lần chạy {id}; nó dừng sau batch hiện tại.",
@@ -373,6 +439,13 @@ VI: dict[str, str] = {
         "Lần backup {id} đang được một tiến trình khác giữ. Nếu chắc chắn nó đã chết, "
         "chạy lại với --force-takeover."
     ),
+    "err.not_admin": ("Bạn không phải quản trị viên của «{title}», nên không xoá được tin ở đó."),
+    "err.op_none": "Chưa có thao tác nào.",
+    "err.op_not_found": "Không có thao tác {ref!r}.",
+    "err.op_busy": (
+        "Thao tác O{id} đang được một tiến trình khác giữ. Nếu chắc chắn nó đã chết, "
+        "chạy lại với --force-takeover."
+    ),
     "err.corrupt_messages_file": (
         "{path}: dòng {line} không phải JSON hợp lệ. Tệp có thể đã hỏng — sửa hoặc xoá dòng đó "
         "rồi thử lại; tgmirror sẽ không tự bỏ qua để tránh mất dữ liệu phía sau dòng hỏng."
@@ -477,6 +550,7 @@ VI: dict[str, str] = {
     ),
     "clone.confirm_start": "Sao chép {src} → {dst} ngay bây giờ?",
     "clone.dst_will_be_created": "«{title}» (kênh mới sẽ được tạo)",
+
     "clone.topic_as_hashtag": (
         "Giữ tên topic dưới dạng hashtag trong mỗi tin? (forward không thêm được hashtag, nên "
         "các tin trong topic sẽ được gửi lại thay vì forward)"
@@ -520,6 +594,12 @@ VI: dict[str, str] = {
     "history.title": "Các lần chạy gần đây",
     "history.col_run": "Mã",
     "history.kind_run": "Chạy",
+    "history.op_header": "Thao tác O{id}: {kind} · «{chat}»",
+    "history.op_kind_delete": "xoá tin",
+    "history.line_counts_op": (
+        "Kết quả:     {done} đã xoá, {skipped} để nguyên, {gone} đã mất sẵn, {failed} lỗi "
+        "(kế hoạch {planned} tin)"
+    ),
     "history.kind_backup": "Backup",
     "history.col_started": "Bắt đầu",
     "history.col_pair": "Nguồn → đích",
@@ -700,6 +780,7 @@ VI: dict[str, str] = {
     "explore.filter": "Lọc: {steps}",
     "explore.no_filter": "(chưa lọc)",
     "explore.not_filterable": "Dòng này không thành bộ lọc được.",
+
     "explore.hidden_forward": "Nguồn forward ẩn tên: không lọc theo nó được.",
     "explore.channel_post": "Bài đăng của kênh không có người gửi để lọc.",
     "explore.exclude_month": "Không loại trừ theo tháng được: chọn tháng để lọc vào.",
@@ -808,6 +889,7 @@ VI: dict[str, str] = {
     "inspect.by.domain": "Theo domain của link",
     "inspect.by.size": "Theo cỡ file",
     "inspect.by.duplicate": "File đăng nhiều lần",
+
     "inspect.col.value": "Giá trị",
     "inspect.col.messages": "Tin",
     "inspect.col.size": "Dung lượng",
@@ -872,6 +954,7 @@ VI: dict[str, str] = {
     "inspect.plan_left_out": "Sẽ bỏ qua: {what}.",
     "inspect.plan_topics": "Vào topic (theo luật `topics.route`): {what}.",
     "inspect.plan_topics_rest": "không luật nào khớp (theo topic nguồn, hoặc General)",
+
     "inspect.plan_unmatched": (
         "{count} tin không khớp luật nào (sửa luật nếu đó không phải điều bạn muốn); vài tin đầu:"
     ),
@@ -1066,6 +1149,80 @@ EN: dict[str, str] = {
     "backup.throttled": (
         "Telegram limited us repeatedly: pausing {delay}s between reads until things calm down."
     ),
+    # delete (phase 20, decision D10)
+    "delete.no_admin_channels": (
+        "You administer no channel or group, so there is nothing to delete from."
+    ),
+    "delete.pick_source": "Delete messages from which channel or group?",
+    "delete.needs_filter": (
+        "An empty filter would delete EVERY message of the chat. If that is what you mean, add "
+        "--all; otherwise add a filter (--media, --hashtag, --since, --selection, ...)."
+    ),
+    "delete.confirm_all": (
+        "No filter: the plan will hold EVERY message of '{chat}'. Make the plan anyway?"
+    ),
+    "delete.nothing": "The filter selects no message in '{chat}': nothing to delete.",
+    "delete.plan_header": (
+        "Delete plan O{id} for '{chat}': {messages} messages ({units} units, {albums} albums)."
+    ),
+    "delete.plan_media": "  by kind: {items}",
+    "delete.plan_months": "  by month: {items}",
+    "delete.plan_years": "  by year: {items}",
+    "delete.plan_sample": "  id {id} · {date} · {media} · {text}",
+    "delete.plan_gap": "  …",
+    "delete.type_count": (
+        "This deletes {count} messages from '{chat}' and cannot be undone. Type {count} to delete"
+    ),
+    "delete.needs_expect": (
+        "--yes needs --expect N, N being the number of messages in the plan ({count}): so a "
+        "filter that matches more than you thought deletes nothing by mistake."
+    ),
+    "delete.expect_mismatch": (
+        "The plan holds {count} messages, not {expected} as --expect said. Nothing deleted."
+    ),
+    "delete.needs_yes": (
+        "Nothing deleted. Plan O{id} ({count} messages) is saved; to delete, run: "
+        "tgmirror delete --resume O{id} --yes --expect {count}"
+    ),
+    "delete.cancelled": "Plan O{id} dropped; nothing deleted.",
+    "delete.finished": "Operation O{id} is already {status}; nothing left to do.",
+    "delete.start": "Operation O{id}: deleting {count} messages from '{chat}'.",
+    "delete.progress": (
+        "O{id}: {done}/{planned} messages deleted, {skipped} left alone (changed), "
+        "{gone} already gone."
+    ),
+    "delete.result": "Operation O{id}: {status}. {done}/{planned} messages deleted.",
+    "delete.left_alone": (
+        "{count} messages changed since the plan and no longer match the filter, so they were "
+        "left alone."
+    ),
+    "delete.gone": (
+        "{count} messages were no longer there when their turn came (deleted by someone else)."
+    ),
+    "delete.continue_hint": "Delete the rest with: tgmirror delete --resume O{id}",
+    "delete.paused": "Paused. Press r to resume, q to stop.",
+    "delete.resumed": "Resumed.",
+    "delete.settled": (
+        "The last run stopped in the middle of a batch: {deleted} messages were deleted, {again} "
+        "are still there and will be deleted now."
+    ),
+    "delete.flood_stopped": (
+        "Telegram asked to wait {seconds}s. The operation is saved as waiting until {resume_at}; "
+        "run `tgmirror delete --resume` again after that."
+    ),
+    "delete.flood_waiting": (
+        "Telegram asks to wait {seconds}s; waiting (Ctrl+C to stop, progress is saved)."
+    ),
+    "delete.throttled": (
+        "Telegram limited us repeatedly: pausing {delay}s between calls until things calm down."
+    ),
+    "delete.budget_learned": (
+        "Telegram made us wait {seconds}s: the budget of lane {action} is now {budget} messages "
+        "per {window} h."
+    ),
+    "delete.cap_warning": (
+        "{sent} messages handled in the last 24 hours (daily_cap reminder: {cap})."
+    ),
     # restore (phase 11b)
     "restore.pick_dir": "Backup directory to restore",
     "restore.pick_dir_empty": "The path cannot be empty.",
@@ -1082,6 +1239,8 @@ EN: dict[str, str] = {
     "status.stopped": "stopped",
     "status.waiting_flood": "waiting (flood)",
     "status.done": "done",
+    "status.planned": "planned",
+    "status.cancelled": "cancelled",
     "status.failed": "failed",
     "control.pause_requested": "Asked run {id} to pause; it holds after the current batch.",
     "control.stop_requested": "Asked run {id} to stop; it stops after the current batch.",
@@ -1260,6 +1419,15 @@ EN: dict[str, str] = {
         "Backup {id} is being run by another process. If you are sure it is dead, "
         "run again with --force-takeover."
     ),
+    "err.not_admin": (
+        "You are not an administrator of '{title}', so you cannot delete messages there."
+    ),
+    "err.op_none": "There is no operation yet.",
+    "err.op_not_found": "No operation {ref!r}.",
+    "err.op_busy": (
+        "Operation O{id} is being run by another process. If you are sure it is dead, "
+        "run again with --force-takeover."
+    ),
     "err.corrupt_messages_file": (
         "{path}: line {line} is not valid JSON. The file may be damaged — fix or remove that "
         "line and try again; tgmirror will not silently skip it, to avoid losing what comes after."
@@ -1364,6 +1532,7 @@ EN: dict[str, str] = {
     ),
     "clone.confirm_start": "Clone {src} → {dst} now?",
     "clone.dst_will_be_created": "'{title}' (a new channel will be created)",
+
     "clone.topic_as_hashtag": (
         "Keep the topic name as a hashtag in each message? (a forward cannot add one, so "
         "messages in a topic are sent again instead of forwarded)"
@@ -1409,6 +1578,12 @@ EN: dict[str, str] = {
     "history.title": "Recent runs",
     "history.col_run": "ID",
     "history.kind_run": "Run",
+    "history.op_header": "Operation O{id}: {kind} · '{chat}'",
+    "history.op_kind_delete": "delete messages",
+    "history.line_counts_op": (
+        "Result:      {done} deleted, {skipped} left alone, {gone} already gone, {failed} failed "
+        "(plan of {planned} messages)"
+    ),
     "history.kind_backup": "Backup",
     "history.col_started": "Started",
     "history.col_pair": "Source → destination",
@@ -1595,6 +1770,7 @@ EN: dict[str, str] = {
     "explore.filter": "Filter: {steps}",
     "explore.no_filter": "(not filtered yet)",
     "explore.not_filterable": "This row cannot become a filter.",
+
     "explore.hidden_forward": "The forward hides its origin: it cannot be filtered on.",
     "explore.channel_post": "A channel post has no sender to filter on.",
     "explore.exclude_month": "A month cannot be excluded: pick a month to keep instead.",
@@ -1707,6 +1883,7 @@ EN: dict[str, str] = {
     "inspect.by.domain": "By link domain",
     "inspect.by.size": "By file size",
     "inspect.by.duplicate": "Files posted more than once",
+
     "inspect.col.value": "Value",
     "inspect.col.messages": "Messages",
     "inspect.col.size": "Size",
@@ -1774,6 +1951,7 @@ EN: dict[str, str] = {
     "inspect.plan_left_out": "It would leave out: {what}.",
     "inspect.plan_topics": "Into topics (by the `topics.route` rules): {what}.",
     "inspect.plan_topics_rest": "no rule matched (the source topic's own, or General)",
+
     "inspect.plan_unmatched": (
         "{count} messages matched no rule (fix the rules if that is not what you want); the "
         "first few:"

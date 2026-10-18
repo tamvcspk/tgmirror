@@ -66,6 +66,10 @@ When adding or changing a code path that can raise flood errors:
 
 - **`tgmirror inspect` (Phase 18a)** reads through `FloodGuard` like a run's source, with `FloodOwner.of_inspect()` (neither `run_id` nor `backup_id` in `flood_log`); a FloodWait longer than `max_auto_wait` ends the scan with the partial report and exit code 3. It is a long scan, so it is *not* in the one-shot exception list.
 
+## Operations (Phase 20)
+
+`delete_messages` is a write on its own limiter lane, `delete` (`core/limiter.py::DELETE`, `engine/flood.py::LANES`), per chat (`FloodOwner.of_op(op)` sets `dst` to the chat): AIMD delay, learned budget and `flood_log` rows (`op_id` column, `action = delete`) like any write lane, but `Limiter.sent_total` — what `daily_cap` reminds about — leaves it out, since deleting is not posting. The plan's scan of the chat is a long read, so it goes through `inspect_guard` (`FloodOwner.of_inspect`), never raw. Real numbers for the `delete` lane do not exist yet (spike 2 in `docs/07-inspect-transform.md`): do not tune its defaults from the forward/send ones.
+
 ## Doc sync
 
 Before finishing, run the `doc-sync` skill. Typical updates from this area: changed defaults or new `[limits]` keys (`docs/05-chong-flood.md` **and** `docs/02-cli-ux.md` config block, with the reason for the change), new error handling rows in `docs/01-kien-truc.md`, and this skill's spec section if behaviour changed.

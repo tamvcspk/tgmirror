@@ -644,3 +644,11 @@ class TelegramGateway(Protocol):
         """Post a plain text message (the stub that stands for what cannot be copied). ``topic``
         targets a destination topic (phase 8), ``reply_to`` is as in ``send_prepared``."""
         ...
+
+    async def delete_messages(self, chat: int, ids: list[int]) -> int:
+        """Delete messages of ``chat`` by id (phase 20, decision D10): 1..``MAX_IDS_PER_CALL`` ids
+        in one request, for everybody (a channel has no other kind of delete). Returns how many
+        messages Telegram says it deleted; an id that is already gone is no error and counts for
+        nothing, so repeating a call after a cut connection is safe. Raises ``NoPermission`` when
+        the account may not delete there."""
+        ...

@@ -26,12 +26,24 @@ from typing import Self
 
 import aiosqlite
 
-from tgmirror.core.errors import BackupBusy, RunBusy, SchemaTooNew, StoreError
+from tgmirror.core.errors import BackupBusy, OpBusy, RunBusy, SchemaTooNew, StoreError
 from tgmirror.core.gateway import Unit
 from tgmirror.core.limiter import LimiterState
 from tgmirror.store import floodlog, limiterstate, msgmap, topicmap
+from tgmirror.store import ops as opsmod
 from tgmirror.store.backups import BACKUP_SELECT, Backup, BackupSpec, backup_from_row
 from tgmirror.store.msgmap import MessageResult, PendingRow
+from tgmirror.store.ops import (
+    OP_SELECT,
+    RESUMABLE,
+    ItemStatus,
+    Op,
+    OpItem,
+    OpSpec,
+    OpStatus,
+    PlannedItem,
+    op_from_row,
+)
 from tgmirror.store.runs import (
     RUN_SELECT,
     Control,
@@ -176,6 +188,49 @@ _V7_LIMITS = (
 )
 
 
+# Version 8 (phase 20, decision D10): operations on a chat's own messages. ``ops`` is the log (as
+# ``runs``/``backups``: status, control, heartbeat, stats) and ``op_items`` the frozen plan, one row
+# per message with its own status — unlike a backup, the progress of an operation lives here,
+# because it cannot be undone and a crash must leave an exact record (``pending`` is written ahead
+# of the Telegram call). ``unit_id`` is the first message of the item's unit: an album's items
+# share it, so a batch is always cut between units (rule 4). ``before_json`` (what ``edit`` changed,
+# for ``undo``) and ``new_msg_id`` (``repost``) are there for the operations that come later.
+_V8_OPS = (
+    "CREATE TABLE ops (\n"
+    "  id           INTEGER PRIMARY KEY,\n"
+    "  account      TEXT NOT NULL,\n"
+    "  kind         TEXT NOT NULL,\n"
+    "  chat_id      INTEGER NOT NULL,\n"
+    "  chat_title   TEXT,\n"
+    "  chat_kind    TEXT NOT NULL,\n"
+    "  filters_json TEXT NOT NULL,\n"
+    "  options_json TEXT NOT NULL DEFAULT '{}',\n"
+    "  status       TEXT NOT NULL,\n"
+    "  control      TEXT NOT NULL DEFAULT 'none',\n"
+    "  resume_at    TEXT,\n"
+    "  fail_reason  TEXT,\n"
+    "  stats_json   TEXT NOT NULL DEFAULT '{}',\n"
+    "  created_at   TEXT NOT NULL,\n"
+    "  ended_at     TEXT,\n"
+    "  updated_at   TEXT NOT NULL\n"
+    ");\n"
+    "CREATE INDEX ops_chat ON ops(chat_id, id);\n"
+    "CREATE TABLE op_items (\n"
+    "  op_id      INTEGER NOT NULL REFERENCES ops(id) ON DELETE CASCADE,\n"
+    "  msg_id     INTEGER NOT NULL,\n"
+    "  unit_id    INTEGER NOT NULL,\n"
+    "  grouped_id INTEGER,\n"
+    "  status     TEXT NOT NULL,\n"
+    "  reason     TEXT,\n"
+    "  before_json TEXT,\n"
+    "  new_msg_id INTEGER,\n"
+    "  PRIMARY KEY (op_id, msg_id)\n"
+    ");\n"
+    "CREATE INDEX op_items_status ON op_items(op_id, status, unit_id);\n"
+    "ALTER TABLE flood_log ADD COLUMN op_id INTEGER;\n"
+)
+
+
 def default_migrations() -> tuple[str, ...]:
     """SQL scripts by version: ``migrations[i]`` upgrades ``user_version`` ``i`` to ``i + 1``.
 
@@ -190,6 +245,7 @@ def default_migrations() -> tuple[str, ...]:
         _V5_BUDGETS,
         _V6_BUCKETS,
         _V7_LIMITS,
+        _V8_OPS,
     )
 
 
@@ -648,6 +704,7 @@ class Store:
         delay_ms: int | None,
         batch_size: int | None,
         backup_id: int | None = None,
+        op_id: int | None = None,
         action: str | None = None,
         dst: int | None = None,
         sent_1h: int | None = None,
@@ -659,6 +716,7 @@ class Store:
                 db,
                 run_id=run_id,
                 backup_id=backup_id,
+                op_id=op_id,
                 ts=self._ts(),
                 kind=kind,
                 seconds=seconds,
@@ -885,6 +943,216 @@ class Store:
                 (cursor, json.dumps(merged, sort_keys=True), ts, backup_id),
             )
         return await self._require_backup(backup_id)
+
+    # ---- operations on a chat's own messages (phase 20) -------------------------------------
+
+    async def create_op(self, spec: OpSpec, items: Sequence[PlannedItem]) -> Op:
+        """Freeze a plan: the operation as ``planned`` and one ``planned`` item per message, in one
+        transaction. Nothing has been touched on Telegram yet."""
+        ts = self._ts()
+        async with self._tx() as db:
+            cur = await db.execute(
+                "INSERT INTO ops(account, kind, chat_id, chat_title, chat_kind, filters_json, "
+                "options_json, status, control, stats_json, created_at, updated_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, 'planned', 'none', ?, ?, ?)",
+                (
+                    spec.account,
+                    spec.kind,
+                    spec.chat.id,
+                    spec.chat.title,
+                    spec.chat.kind,
+                    spec.filters_json,
+                    spec.options_json,
+                    json.dumps({"planned": len(items)}),
+                    ts,
+                    ts,
+                ),
+            )
+            op_id = cur.lastrowid
+            assert op_id is not None
+            await opsmod.insert_items(db, op_id, list(items))
+        return await self._require_op(op_id)
+
+    async def get_op(self, op_id: int) -> Op | None:
+        async with self._lock:
+            cur = await self._conn.execute(OP_SELECT + " WHERE id = ?", (op_id,))
+            row = await cur.fetchone()
+        return op_from_row(row) if row is not None else None
+
+    async def _require_op(self, op_id: int) -> Op:
+        op = await self.get_op(op_id)
+        if op is None:
+            raise StoreError(f"operation {op_id} does not exist")
+        return op
+
+    async def latest_op(self) -> Op | None:
+        async with self._lock:
+            cur = await self._conn.execute(OP_SELECT + " ORDER BY id DESC LIMIT 1")
+            row = await cur.fetchone()
+        return op_from_row(row) if row is not None else None
+
+    async def list_ops(self, limit: int = 20) -> list[Op]:
+        """The newest operations first."""
+        async with self._lock:
+            cur = await self._conn.execute(OP_SELECT + " ORDER BY id DESC LIMIT ?", (limit,))
+            return [op_from_row(r) for r in await cur.fetchall()]
+
+    async def active_op(self) -> Op | None:
+        """The operation some process holds right now (fresh heartbeat), as ``active_run``."""
+        now = self._now()
+        async with self._lock:
+            cur = await self._conn.execute(
+                OP_SELECT + " WHERE status IN ('running', 'paused') ORDER BY id DESC"
+            )
+            rows = await cur.fetchall()
+        for row in rows:
+            op = op_from_row(row)
+            if now - op.updated_at < HEARTBEAT_TIMEOUT:
+                return op
+        return None
+
+    async def start_op(self, op_id: int, *, force: bool = False) -> Op:
+        """Take an operation up: ``running``, one transaction. Refuses (``OpBusy``) when another
+        process works on the same chat with a fresh heartbeat, unless ``force``; one whose
+        heartbeat is stale is closed as ``failed`` with the reason ``interrupted`` (mirrors
+        ``start_backup``). Only a ``planned``/``stopped``/``waiting_flood``/``failed`` operation
+        can be taken up; the items a dead process left ``pending`` are for the engine to settle."""
+        now = self._now()
+        async with self._tx() as db:
+            cur = await db.execute("SELECT status, chat_id FROM ops WHERE id = ?", (op_id,))
+            row = await cur.fetchone()
+            if row is None:
+                raise StoreError(f"operation {op_id} does not exist")
+            if OpStatus(row["status"]) not in RESUMABLE:
+                raise StoreError(f"operation {op_id} is {row['status']}, it cannot be taken up")
+            await self._close_dead_ops(db, row["chat_id"], op_id, now, force)
+            await db.execute(
+                "UPDATE ops SET status = 'running', control = 'none', fail_reason = NULL, "
+                "resume_at = NULL, ended_at = NULL, updated_at = ? WHERE id = ?",
+                (now.isoformat(), op_id),
+            )
+        return await self._require_op(op_id)
+
+    async def _close_dead_ops(
+        self, db: aiosqlite.Connection, chat_id: int, own_id: int, now: datetime, force: bool
+    ) -> None:
+        cur = await db.execute(
+            "SELECT id, updated_at FROM ops WHERE chat_id = ? AND id != ? "
+            "AND status IN ('running', 'paused')",
+            (chat_id, own_id),
+        )
+        for row in await cur.fetchall():
+            fresh = now - datetime.fromisoformat(row["updated_at"]) < HEARTBEAT_TIMEOUT
+            if fresh and not force:
+                raise OpBusy(row["id"])
+            reason, ended = ("taken_over", now.isoformat()) if fresh else ("interrupted", row[1])
+            await db.execute(
+                "UPDATE ops SET status = 'failed', control = 'none', fail_reason = ?, "
+                "ended_at = ? WHERE id = ?",
+                (reason, ended, row["id"]),
+            )
+
+    async def cancel_op(self, op_id: int) -> None:
+        """Give up on a plan nobody confirmed. Only a ``planned`` operation can be cancelled."""
+        ts = self._ts()
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE ops SET status = 'cancelled', ended_at = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'planned'",
+                (ts, ts, op_id),
+            )
+
+    async def heartbeat_op(self, op_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute("UPDATE ops SET updated_at = ? WHERE id = ?", (self._ts(), op_id))
+
+    async def read_op_control(self, op_id: int) -> Control:
+        async with self._lock:
+            cur = await self._conn.execute("SELECT control FROM ops WHERE id = ?", (op_id,))
+            row = await cur.fetchone()
+        return Control(row[0]) if row is not None else Control.NONE
+
+    async def set_op_control(self, op_id: int, control: Control) -> bool:
+        async with self._tx() as db:
+            cur = await db.execute(
+                "UPDATE ops SET control = ? WHERE id = ? AND status IN ('running', 'paused')",
+                (control, op_id),
+            )
+            return cur.rowcount > 0
+
+    async def set_op_status(self, op_id: int, status: OpStatus) -> None:
+        assert status in (OpStatus.RUNNING, OpStatus.PAUSED)
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE ops SET status = ?, updated_at = ? "
+                "WHERE id = ? AND status IN ('running', 'paused')",
+                (status, self._ts(), op_id),
+            )
+
+    async def finish_op(
+        self,
+        op_id: int,
+        status: OpStatus,
+        *,
+        fail_reason: str | None = None,
+        resume_at: datetime | None = None,
+    ) -> None:
+        ts = self._ts()
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE ops SET status = ?, control = 'none', fail_reason = ?, "
+                "resume_at = ?, ended_at = ?, updated_at = ? WHERE id = ?",
+                (status, fail_reason, resume_at.isoformat() if resume_at else None, ts, ts, op_id),
+            )
+
+    async def op_units(
+        self, op_id: int, status: ItemStatus = ItemStatus.PLANNED, limit: int = 50
+    ) -> list[list[OpItem]]:
+        """The first ``limit`` units of the plan that still have items in ``status``, whole."""
+        async with self._lock:
+            return await opsmod.next_units(self._conn, op_id, status, limit)
+
+    async def op_items_in(self, op_id: int, status: ItemStatus) -> list[OpItem]:
+        async with self._lock:
+            return await opsmod.items_in(self._conn, op_id, status)
+
+    async def op_counts(self, op_id: int) -> dict[ItemStatus, int]:
+        async with self._lock:
+            return await opsmod.counts(self._conn, op_id)
+
+    async def mark_op_items(
+        self,
+        op_id: int,
+        msg_ids: Sequence[int],
+        status: ItemStatus,
+        *,
+        reason: str | None = None,
+        stats: Mapping[str, int] | None = None,
+    ) -> Op:
+        """Move items to ``status`` and add ``stats`` to the operation's counters, in one
+        transaction: the write-ahead (``pending``) and the commit (``done``) of a batch."""
+        ts = self._ts()
+        async with self._tx() as db:
+            cur = await db.execute("SELECT stats_json FROM ops WHERE id = ?", (op_id,))
+            row = await cur.fetchone()
+            if row is None:
+                raise StoreError(f"operation {op_id} does not exist")
+            merged: dict[str, int] = json.loads(row[0])
+            for key, amount in (stats or {}).items():
+                merged[key] = merged.get(key, 0) + amount
+            await db.executemany(
+                "UPDATE op_items SET status = ?, reason = ? WHERE op_id = ? AND msg_id = ?",
+                [(status, reason, op_id, msg_id) for msg_id in msg_ids],
+            )
+            await db.execute(
+                "UPDATE ops SET stats_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(merged, sort_keys=True), ts, op_id),
+            )
+        return await self._require_op(op_id)
+
+    async def op_flood_events(self, op_id: int) -> list[FloodEvent]:
+        async with self._lock:
+            return await floodlog.events_of_op(self._conn, op_id)
 
     # ---- app data export (phase 10) --------------------------------------------------------
 

@@ -203,6 +203,7 @@ def map_exception(exc: BaseException) -> GatewayError | None:
             | errors.ChannelPrivateError()
             | errors.ChannelInvalidError()
             | errors.UserBannedInChannelError()
+            | errors.MessageDeleteForbiddenError()
         ):
             return NoPermission(_rpc_name(exc))
         case errors.ChatForwardsRestrictedError():
@@ -2296,6 +2297,14 @@ class TelethonGateway:
                 peer, text, parse_mode=None, link_preview=False, reply_to=_reply_of(topic, reply_to)
             )
         return int(sent.id)
+
+    async def delete_messages(self, chat: int, ids: list[int]) -> int:
+        peer = await self._peer(chat)
+        with mapped_errors():
+            affected = await self._client.delete_messages(peer, ids, revoke=True)
+        # one ``AffectedMessages`` per request; ``pts_count`` is how many messages it removed (an
+        # id that was already gone adds nothing, which is what makes repeating a call safe)
+        return sum(int(a.pts_count) for a in affected)
 
 
 @asynccontextmanager

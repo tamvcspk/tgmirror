@@ -45,6 +45,7 @@ from tgmirror.core.gateway import (
     Unit,
 )
 from tgmirror.core.limiter import (
+    DELETE,
     FILE,
     FORWARD,
     HISTORY,
@@ -55,6 +56,7 @@ from tgmirror.core.limiter import (
 )
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store
+from tgmirror.store.ops import Op
 from tgmirror.store.runs import Run
 
 T = TypeVar("T")
@@ -71,6 +73,7 @@ LANES: dict[str, str] = {
     "send_by_reference": SEND,
     "upload_prepared": SEND,
     "create_topic": SEND,
+    "delete_messages": DELETE,
     "iter_messages": HISTORY,
     "get_messages": HISTORY,
     "count": HISTORY,
@@ -97,16 +100,18 @@ class Notifier(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class FloodOwner:
-    """What ``FloodGuard`` paces for and logs flood events against: a run or a backup (phase 11).
+    """What ``FloodGuard`` paces for and logs flood events against: a run, a backup (phase 11) or
+    an operation on a chat's own messages (phase 20).
 
-    ``flood_log`` has a column for each (``run_id``/``backup_id``): the two tables number their
-    rows independently, so a run's events must never be logged under a backup's id or vice versa.
+    ``flood_log`` has a column for each (``run_id``/``backup_id``/``op_id``): the tables number
+    their rows independently, so one kind's events must never be logged under another's id.
     """
 
     account: str
     batch_size: int  # the base batch size ``Limiter.batch_size`` scales (a backup: 1, no batching)
     run_id: int | None = None
     backup_id: int | None = None
+    op_id: int | None = None
     dst: int | None = None  # where a run writes: the destination half of a write lane
 
     @classmethod
@@ -116,6 +121,12 @@ class FloodOwner:
     @classmethod
     def of_backup(cls, backup: Backup) -> "FloodOwner":
         return cls(backup.account, 1, backup_id=backup.id)
+
+    @classmethod
+    def of_op(cls, op: Op) -> "FloodOwner":
+        """An operation writes into the very chat it reads (``dst`` = that chat): its write lane is
+        ``(delete, chat)``."""
+        return cls(op.account, 1, op_id=op.id, dst=op.chat_id)
 
     @classmethod
     def of_inspect(cls, account: str = "default") -> "FloodOwner":
@@ -273,6 +284,7 @@ class FloodGuard:
         await self._store.log_flood(
             self._owner.run_id,
             backup_id=self._owner.backup_id,
+            op_id=self._owner.op_id,
             kind=kind,
             seconds=seconds,
             method=method,

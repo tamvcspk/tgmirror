@@ -1,7 +1,8 @@
-"""``tgmirror pause`` / ``tgmirror stop``: ask the clone (or backup, phase 11) running in another
-terminal to rest.
+"""``tgmirror pause`` / ``tgmirror stop``: ask the clone (or backup, phase 11, or delete, phase
+20) running in another terminal to rest.
 
-They only write ``runs.control``/``backups.control``; the other process reads it between batches,
+They only write ``runs.control``/``backups.control``/``ops.control``; the other process reads it
+between batches,
 finishes its batch and holds (pause) or saves and exits (stop)
 (docs/04-state-checkpoint.md, "Điều khiển"). No Telegram connection. In the terminal of the clone
 or backup itself the keys p/r/q and Ctrl+C do the same.
@@ -45,6 +46,10 @@ def _request(rt: Runtime, control: Control) -> None:
             live_backup = await store.active_backup()
             if live_backup is not None and await store.set_backup_control(live_backup.id, control):
                 typer.echo(t(f"control.{control}_requested", id=live_backup.id))
+                return
+            live_op = await store.active_op()
+            if live_op is not None and await store.set_op_control(live_op.id, control):
+                typer.echo(t(f"control.{control}_requested", id=f"O{live_op.id}"))
                 return
             typer.echo(t("control.nothing_running"), err=True)
             raise typer.Exit(1)

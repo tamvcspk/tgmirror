@@ -27,6 +27,7 @@ from tgmirror.core.errors import (
     MissingCredentials,
     NoPermission,
     NotLoggedIn,
+    OpBusy,
     PeerFlood,
     RunBusy,
     SchemaTooNew,
@@ -54,6 +55,7 @@ from tgmirror.engine.endpoints import (
     SameChannel,
     SourceRestricted,
 )
+from tgmirror.engine.ops import NotAdmin, OpNotFound
 from tgmirror.engine.reupload import UnsupportedMedia
 from tgmirror.engine.runs import (
     BackupDirMissing,
@@ -122,6 +124,8 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.dest_not_writable", title=exc.dst.title)
         case ForwardsRestricted():
             return t("err.forwards_restricted")
+        case NotAdmin():
+            return t("err.not_admin", title=exc.chat.title)
         case NoPermission():
             return t("err.no_permission", detail=str(exc))
         case TooManyChannels():
@@ -144,6 +148,8 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.same_channel")
         case InvalidChannelTitle():
             return t(f"err.{exc.reason}")
+        case OpNotFound():
+            return t("err.op_none") if exc.ref is None else t("err.op_not_found", ref=exc.ref)
         case RunNotFound():
             return t("err.run_none") if exc.ref is None else t("err.run_not_found", ref=exc.ref)
         case ModeUnsupported():
@@ -183,6 +189,8 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.backup_wrong_source", dir=exc.directory, title=exc.existing_title)
         case BackupBusy():
             return t("err.backup_busy", id=exc.backup_id)
+        case OpBusy():
+            return t("err.op_busy", id=exc.op_id)
         case CorruptMessagesFile():
             return t("err.corrupt_messages_file", path=exc.path, line=exc.line_number)
         case BackupDirMissing():

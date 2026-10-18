@@ -5,8 +5,10 @@ the full-screen menu (``ui/menu/run_screen.py``/``backup_screen.py``, appended t
 list of lines) never drift apart from writing the same thing twice.
 """
 
+from tgmirror.engine.ops import PlanSummary, Sample
 from tgmirror.engine.status import StatusReport, rest_hours
 from tgmirror.store.backups import Backup
+from tgmirror.store.ops import Op, OpStatus
 from tgmirror.store.runs import FilterChange, FloodEvent, Run, RunStatus, StartedRun
 from tgmirror.ui.messages import t
 
@@ -174,4 +176,71 @@ def budget_lines(report: StatusReport) -> list[str]:
         )
     if not report.budgets and report.delay is not None:
         lines.append(t("status.line_budget_none"))
+    return lines
+
+
+YEARLY_FROM = 13  # a plan spanning this many months or more is summed up by year
+
+
+def _counts(counts: dict[str, int]) -> str:
+    return ", ".join(f"{name} {amount:,}" for name, amount in counts.items())
+
+
+def delete_plan_lines(op: Op, summary: PlanSummary) -> list[str]:
+    """The frozen plan of a ``delete`` (phase 20), for the person to judge before confirming."""
+    lines = [
+        t(
+            "delete.plan_header",
+            id=op.id,
+            chat=op.chat_title,
+            messages=summary.messages,
+            units=summary.units,
+            albums=summary.albums,
+        ),
+        t("delete.plan_media", items=_counts(summary.by_media)),
+    ]
+    if len(summary.by_month) >= YEARLY_FROM:
+        years: dict[str, int] = {}
+        for month, amount in summary.by_month.items():
+            years[month[:4]] = years.get(month[:4], 0) + amount
+        lines.append(t("delete.plan_years", items=_counts(years)))
+    else:
+        lines.append(t("delete.plan_months", items=_counts(summary.by_month)))
+
+    def sample(item: Sample) -> str:
+        return t(
+            "delete.plan_sample",
+            id=item.id,
+            date=item.date.astimezone().strftime("%Y-%m-%d"),
+            media=item.media,
+            text=item.text,
+        )
+
+    lines.extend(sample(item) for item in summary.first)
+    if summary.last:
+        lines.append(t("delete.plan_gap"))
+        lines.extend(sample(item) for item in summary.last)
+    return lines
+
+
+def delete_start_line(op: Op) -> str:
+    return t("delete.start", id=op.id, count=op.planned, chat=op.chat_title)
+
+
+def delete_result_lines(final: Op) -> list[str]:
+    lines = [
+        t(
+            "delete.result",
+            id=final.id,
+            status=t(f"status.{final.status}"),
+            done=final.done,
+            planned=final.planned,
+        )
+    ]
+    if final.skipped:
+        lines.append(t("delete.left_alone", count=final.skipped))
+    if final.gone:
+        lines.append(t("delete.gone", count=final.gone))
+    if final.status in (OpStatus.STOPPED, OpStatus.WAITING_FLOOD, OpStatus.FAILED):
+        lines.append(t("delete.continue_hint", id=final.id))
     return lines

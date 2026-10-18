@@ -16,6 +16,7 @@ from tgmirror.cli.commands import (
     clone,
     config,
     control,
+    delete,
     doctor,
     history,
     inspect,
@@ -127,6 +128,7 @@ app.command("clone")(clone.clone)
 app.command("run")(run.run_clone)
 app.command("backup", cls=SourceCommand)(backup.backup)
 app.command("restore")(restore.restore)
+app.command("delete", cls=SourceCommand)(delete.delete)
 app.command("inspect", cls=SourceCommand)(inspect.inspect_command)
 app.command("pause")(control.pause)
 app.command("stop")(control.stop)

@@ -160,6 +160,10 @@ Map Telethon exceptions to tgmirror errors at the gateway boundary (`core/errors
 
 Anything new in the gateway needs a `FakeGateway` counterpart and an engine-level test. Only `scripts/smoke.py` (manual, dedicated test channels) talks to real Telegram.
 
+## Deleting messages (Phase 20)
+
+`TelegramGateway.delete_messages(chat, ids)` wraps `client.delete_messages(peer, ids, revoke=True)` (1..100 ids a call; for a channel it is `channels.DeleteMessages`) and returns the sum of `pts_count`, i.e. how many were really removed: an id that is already gone adds nothing and is no error, which is what makes repeating a call after a cut connection safe. `MESSAGE_DELETE_FORBIDDEN` and `CHAT_ADMIN_REQUIRED` map to `NoPermission`. `FakeGateway.delete_messages` needs `is_admin` like Telegram. Not tried on a real account yet (spike 2).
+
 ## Doc sync
 
 Before finishing, run the `doc-sync` skill. Typical updates from this area: resolved spikes (remove the matching "verify" caveats here and tick them in `docs/06-lo-trinh.md`), gateway/strategy changes in `docs/01-kien-truc.md`, new or changed error mappings.

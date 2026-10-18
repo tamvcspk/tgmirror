@@ -265,6 +265,23 @@ Quyết định D3 áp dụng y như chiến lược B (`engine.backup.check_sou
 
 Không có phân tích/ETA (`Runner._analyze`-tương đương), không có dòng tiến độ truyền file, không tải ảnh bìa video, không ghi `reply_to`, chưa nối vào `tgmirror history`, chưa có mục trong giao diện full-screen (menu). Wizard cổ điển (`tgmirror backup` không cờ) đã có, xem `02-cli-ux.md`. Xem `06-lo-trinh.md`, "Phase 11 — ghi chú" để biết đầy đủ.
 
+## Thao tác tại chỗ (Phase 20, D10)
+
+`tgmirror delete` (`store/ops.py`, `engine/ops.py`) làm việc trên **chính** một kênh nên không có `mirrors`/`msg_map`. Migration 8 thêm hai bảng và một cột:
+
+```sql
+ops(id, account, kind, chat_id, chat_title, chat_kind, filters_json, options_json,
+    status, control, resume_at, fail_reason, stats_json, created_at, ended_at, updated_at)
+op_items(op_id, msg_id, unit_id, grouped_id, status, reason, before_json, new_msg_id,
+         PRIMARY KEY (op_id, msg_id))   -- unit_id = id tin đầu của đơn vị (album chung một unit_id)
+flood_log.op_id
+```
+
+- `ops.status`: `planned` (danh sách đã đóng băng, chờ xác nhận) → `running`/`paused` → `done`/`stopped`/`waiting_flood`/`failed`; `cancelled` là plan bị bỏ. `stats_json`: `planned` (số tin trong plan, đặt lúc tạo), `done`, `skipped` (đã đổi, không còn khớp filter), `gone` (đã mất khi tới lượt), `failed`. Heartbeat/`control` như `runs`/`backups`; `start_op` từ chối (`OpBusy`) khi một thao tác khác trên **cùng kênh** còn sống, `--force-takeover` ghi đè.
+- `op_items.status`: `planned` → `pending` → `done`, hoặc `skipped` (+ `reason` `changed`/`gone`) hoặc `failed`. Khác backup, **tiến độ thật nằm trong SQLite** (luật 3): `pending` được ghi trong một transaction **trước** lời gọi xoá, `done` trong một transaction sau nó (`Store.mark_op_items` cộng luôn bộ đếm). `before_json` (văn bản + entity gốc của `edit`, cho `undo`) và `new_msg_id` (`repost`) có sẵn cột nhưng chưa dùng.
+- **Resume/reconcile** (`OpRunner._settle_pending`, chạy trước mọi batch): với các item `pending` của lần chạy trước, đọc kênh theo id — id vắng mặt = lời gọi đã xoá nó (`done`); id còn nguyên = chưa xoá (`planned`, batch kế tiếp đọc lại và xoá như mọi item khác). Một lỗi mà Telegram từ chối rõ ràng (FloodWait, mất quyền) trả luôn lô về `planned` ngay tại chỗ; chỉ `Transient`/kill để `pending` lại.
+- `tgmirror pause|stop` thử `active_run`, `active_backup`, rồi `active_op`. `appdata export` từ chối khi có thao tác sống.
+
 ## Restore (Phase 11b)
 
 Ngược với backup, `tgmirror restore` **là** một `Run` bình thường — dùng lại nguyên `mirrors`/`msg_map`/write-ahead/reconcile ở trên, không phải một cơ chế mới. Chỉ khác hai chỗ:

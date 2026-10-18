@@ -73,6 +73,23 @@ def test_the_runner_reaches_telegram_only_through_the_flood_guard() -> None:
             )
 
 
+def test_operations_reach_telegram_only_through_the_flood_guard() -> None:
+    """Hard rule 1: deleting is a write, and the scan of its plan thousands of reads — so
+    ``engine/ops.py`` calls a gateway method only inside ``guard.write(...)``, or for the one-shot
+    setup (``get_channel``: the rights that count now); everything it reads goes through
+    ``guard.reader(...)``."""
+    text = (SRC / "engine" / "ops.py").read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    assert "guard.reader(" in text and "guard.write(" in text
+    for number, line in enumerate(lines):
+        if re.search(r"gateway\.\w+\(", line) and "get_channel" not in line:
+            nearby = " ".join(lines[max(number - 4, 0) : number + 1])
+            assert "guard.write(" in nearby, (
+                f"ops.py line {number + 1} calls the gateway outside the flood guard"
+            )
+
+
 def test_inspect_reads_a_channel_only_through_the_flood_guard() -> None:
     """Hard rule 1: a scan is thousands of read requests, so ``tgmirror inspect`` is no one-shot
     command — its reader is ``guard.reader(...)`` and the raw gateway is only asked for the

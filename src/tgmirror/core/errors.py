@@ -169,6 +169,15 @@ class BackupBusy(StoreError):
         self.backup_id = backup_id
 
 
+class OpBusy(StoreError):
+    """Another process is already working on this chat's messages (fresh heartbeat);
+    ``--force-takeover`` overrides (phase 20)."""
+
+    def __init__(self, op_id: int) -> None:
+        super().__init__(f"operation {op_id} is being run by another process")
+        self.op_id = op_id
+
+
 class AppDataError(TgMirrorError):
     """A problem exporting or importing tgmirror's own state (docs/06-lo-trinh.md, Phase 10)."""
 

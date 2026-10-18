@@ -444,6 +444,18 @@ async def test_the_total_counts_every_write_lane_of_the_account() -> None:
     assert limiter.sent_total(24) == 7 and limiter.sent_in("send", 8, 1) == 4
 
 
+async def test_deleting_has_a_lane_of_its_own_and_is_not_a_daily_cap_matter() -> None:
+    """Phase 20: removing messages is paced and learns a budget like a post, per chat, but it is
+    not something ``daily_cap`` reminds about (that counts what the account posted)."""
+    limiter, _, _ = make(Limits(daily_cap=10, jitter=0.0))
+    await put(limiter, 50, "delete", 7)
+    await put(limiter, 4, "send", 8)
+
+    assert limiter.sent_in("delete", 7, 1) == 50
+    assert limiter.sent_total(24) == 4 and limiter.cap_warning() is None
+    assert limiter.delay_of("delete", 7) == limiter.delay_of("send", 8)  # a lane like any
+
+
 # ---- throttling -----------------------------------------------------------------------------
 
 

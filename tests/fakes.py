@@ -355,6 +355,19 @@ class FakeGateway:
         """The message disappears from the channel (a later read no longer finds it)."""
         self.messages[channel] = [m for m in self.messages[channel] if m.id != msg_id]
 
+    async def delete_messages(self, chat: int, ids: list[int]) -> int:
+        """Phase 20: removes the messages that exist, counts only those (an id already gone adds
+        nothing), and needs an administrator like Telegram does."""
+        self._enter("delete_messages", chat, list(ids))
+        if not ids or len(ids) > MAX_IDS_PER_CALL:
+            raise ValueError(f"delete_messages takes 1..{MAX_IDS_PER_CALL} ids, got {len(ids)}")
+        if not self._channel(chat).is_admin:
+            raise NoPermission(f"cannot delete in channel {chat}")
+        wanted = set(ids)
+        gone = [m for m in self.messages[chat] if m.id in wanted]
+        self.messages[chat] = [m for m in self.messages[chat] if m.id not in wanted]
+        return len(gone)
+
     async def slowmode_seconds(self, chat: int) -> int:
         self._enter("slowmode_seconds", chat)
         self._channel(chat)

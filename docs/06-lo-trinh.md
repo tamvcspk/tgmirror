@@ -41,7 +41,7 @@ Cập nhật bởi skill `doc-sync` khi một phase bắt đầu/kết thúc. M�
 **0.3.0 — Thao tác tại chỗ (D10)**
 
 - [~] Phase 21 — Định tuyến tổng quát `topics.route`, cho cả topic lẫn hashtag (duyệt hướng 2026-10-18; `07-inspect-transform.md` mục 11). **Xong code 2026-10-18**: mô hình `route`, `hashtag_to_topic` thành cú pháp tắt, `strip: matched`, nhãn → hashtag cho đích không phải forum, bảng topic đích + mẫu tin không khớp trong `inspect --plan`; **chưa**: wizard/menu chọn luật, cột topic đích ở màn Khám phá, thử trên Telegram thật (xem "Phase 21 — ghi chú")
-- [ ] Phase 20 — `delete`/`edit`/`repost`/`undo`: plan → xác nhận → apply (kèm `edit` theo `msg_map`, `07` mục 11.4)
+- [~] Phase 20 — `delete`/`edit`/`repost`/`undo`: plan → xác nhận → apply (kèm `edit` theo `msg_map`, `07` mục 11.4). **Lát 20.1 `delete` xong code 2026-10-18** (chưa thử trên Telegram thật); còn: 20.2 lưới an toàn backup + `status`/menu, 20.3 `edit`/`undo`, 20.4 `repost`, 20.5 `edit` theo `msg_map` (xem "Phase 20 — ghi chú")
 - [ ] Phase 20b — Chia/gộp/đổi tên/xoá topic tại chỗ, trên `repost`/`delete` (duyệt hướng 2026-10-18; `07` mục 11.3)
 - [ ] Phase 17 — Đồng bộ edit/delete nguồn → đích (dời ra sau Phase 20, dựng trên máy của nó)
 
@@ -1177,6 +1177,30 @@ Theo (a) ở trên: cài phần rẻ và an toàn, để `--probe` cho sau 0.2.0
 - **Khác bản kế hoạch**: trần là `floor(0.95 × bad)` = 1787 cho `bad = 1882` (kế hoạch viết 1788); `ok` chỉ nhận giá trị từ migration vì chưa có thăm dò hay nhích `ok`, nên một ngân sách vừa học (không qua migration) có `ok = None` cho tới khi bị quên/đặt lại; cột `flood_log.probe` để cùng `--probe`.
 - **Test**: `test_limiter.py` (trần, hết hạn, về `ok`, `bad` thấp nhất, `forget_budgets`), `test_store.py::test_v7_migration_…` (và khứ hồi, `forget_budgets`), `test_status.py`, `test_lines.py`, `test_cli_limits.py` (lệnh, `--reset-limits` trên `clone`/`run`/`retry`, không đổi cặp/filter/con trỏ), `test_runner_flood.py`. `scripts/mutation_check.py` thêm 7 cơ chế (chạy tay).
 
+### Phase 20 — ghi chú (bắt đầu 2026-10-18; lát 20.1 `delete` xong code, chưa thử trên Telegram thật)
+
+**Chia lát cắt** (như 11a/11b, 19a–c; không đổi D1–D10, D10 đã duyệt 2026-10-12), mỗi lát một commit chạy được:
+
+1. **20.1 `delete`** — *xong code 2026-10-18*. Nền cho cả Phase 20: migration 8 (`ops`, `op_items`, `flood_log.op_id`), `Store` (`create_op`, `start_op`, `mark_op_items`, `op_units`, ...), gateway `delete_messages` (+ `FakeGateway`, `MessageDeleteForbidden` → `NoPermission`), làn `delete` của limiter, `FloodOwner.of_op`, `engine/ops.py` (`plan_delete`, `begin_op`, `OpRunner`), `tgmirror delete`, `O<n>` trong `history`, `pause`/`stop` tới được thao tác, luật cứng 11 trong `CLAUDE.md`.
+2. **20.2** — hỏi backup trước khi xoá (Q5, `--backup-to DIR`/`--no-backup`; D3 áp cho bước backup), `O<n>` trong `status`, mục trong menu/`TaskScreen`, wizard chọn filter từ màn hình Khám phá (phím `d`).
+3. **20.3** — `edit` (diff trước/sau, `before_json`) và `undo`; cần spike 3 (`messages.editMessage`).
+4. **20.4** — `repost` (đăng lại ở cuối rồi xoá bản cũ, `new_msg_id`); điều kiện của 20b.
+5. **20.5** — `edit --mirror` theo `msg_map` (`07` mục 11.4, kể cả lượt sửa bù link tiến của 19c3).
+
+**Khác với đề xuất ở `07` mục 6** (không đụng D1–D10):
+
+1. **`op_items.unit_id`** (cột thêm): id tin đầu của đơn vị, để một lô luôn cắt giữa các đơn vị (luật 4) mà không phải đoán album từ `grouped_id` lúc đọc lại.
+2. **Plan không đếm "tin bị loại"**: khi filter được đẩy xuống server (một hashtag, một loại media), tin không khớp không bao giờ tới `Matcher`, nên số "bị loại" sẽ thiếu. Plan chỉ nói điều nó biết chắc: số tin được chọn.
+3. **Filter rỗng cần `--all`** (hoặc một câu hỏi ở terminal): `07` không nói; một lệnh `delete` quên filter là cách dễ nhất để xoá cả kênh, và `--expect` chỉ chặn được khi người viết script biết con số.
+4. **`--resume O<n>` vừa áp một plan đã lưu vừa làm tiếp một thao tác dở**; không có lệnh `delete` riêng cho từng việc. Plan chưa từng áp cần xác nhận như bình thường, thao tác đã bắt đầu thì không hỏi lại (đã xác nhận khi bắt đầu). Một xác nhận sai (gõ khác số, `--expect` lệch) **huỷ** plan (`cancelled`) thay vì để lại.
+5. **Lô xoá** tối đa 100 id nhưng luôn nguyên đơn vị: 99 tin lẻ rồi một album 3 tin thành hai lô (99 và 3), không phải một lô 102.
+6. **`pending` quay về `planned` ngay khi Telegram từ chối rõ ràng** (FloodWait, mất quyền, `Interrupted` trong lúc chờ) vì lúc đó chắc chắn chưa xoá gì; chỉ `Transient` và kill để `pending` lại cho lần chạy sau đọc kênh mà phân xử. Xoá một id đã mất không phải lỗi nên lặp lại một lời gọi là an toàn.
+7. **`daily_cap` không đếm `delete`** (`Limiter.sent_total`): xoá không phải đăng. Làn `delete` vẫn có delay AIMD và ngân sách tự học riêng như mọi làn ghi — chưa có số liệu thật (spike 2: tốc độ xoá và FloodWait khi xoá hàng nghìn tin).
+
+**Chưa thử trên Telegram thật** (người dùng chạy): `tgmirror delete` trên một kênh thử (xoá vài tin có hashtag, album, kill giữa chừng rồi `--resume`), và spike 2 để chọn delay/ngân sách của làn `delete`. Tiêu chí hoàn thành của cả Phase 20 vẫn ở bảng đầu file.
+
+**Test**: `tests/integration/test_ops.py` (plan, áp dụng, album không cắt, tin đã đổi/đã mất, kill/mất kết nối giữa lô, FloodWait, mất quyền, stop/pause, một thao tác mỗi kênh), `tests/unit/test_store_ops.py` (migration 8, trạng thái item), `tests/unit/test_cli_delete.py` (xác nhận, `--expect`, `--all`, `--resume`, `history`, `stop`), `test_limiter.py` (làn `delete`), `test_architecture.py` (`engine/ops.py` chỉ chạm gateway qua `FloodGuard`).
+
 ### Phase 21 — ghi chú (2026-10-18; xong code, chưa thử trên Telegram thật)
 
 - **Mô hình** (`engine/routing.py`, mới): `RouteRule`/`Routed`/mẫu tên/`TransformError` (định nghĩa ở đây, `engine/transform.py` re-export). `TopicRules` còn `rules`, `default`, `limit`, `strip`, `renames`, `hashtag_format`; `routes`/`auto_*`/`strip_tag` của 19b đã bỏ. Dạng chuẩn lưu trong `RunOptions.transform_json` là `route`; JSON 19b đã lưu vẫn nạp (dịch khi đọc), nên `run`/`retry` của cặp cũ không đổi. Chi tiết kỹ thuật: `01-kien-truc.md`, "Luật định tuyến `route`".
@@ -1267,6 +1291,7 @@ Hiện không có. Năm câu của đề xuất 2026-10-18 (định tuyến tổ
 
 Khi đổi một quyết định D1..D9 trong `00-tong-quan.md`, ghi ngày và lý do ở đây.
 
+- 2026-10-18: **Phase 20 bắt đầu: lát 20.1 `delete` xong code** theo yêu cầu người dùng ("tiếp tục việc kế tiếp" sau Phase 21): `ops`/`op_items` (migration 8), làn `delete`, `plan_delete`/`OpRunner`, `tgmirror delete`, `O<n>` trong `history`/`pause`/`stop`. Theo D10 (đã duyệt 2026-10-12) và lệ "khi Phase 20 bắt đầu" của `07` mục 7: thêm luật cứng 11 vào `CLAUDE.md`, sửa "Mục tiêu" của `00-tong-quan.md`. Không đổi D1–D10. Chia Phase 20 thành năm lát (20.1–20.5), xem "Phase 20 — ghi chú".
 - 2026-10-18: **Người dùng duyệt hướng mục 11 của `07-inspect-transform.md`** (trả lời 5 câu ở 11.6): (1) một tin một topic, không nhân bản; (2) ca tên file trong caption giải theo `from: text` + `regex` + `to` như đề xuất ("không có đường" = không có cách); (3) `route` dùng cho cả topic (đích forum) lẫn hashtag (đích khác, theo `hashtag_format`); (4) Phase 21 vào **0.3.0**; (5) làm Phase 20b: chia → đăng lại các tin chuyển vào topic mới đúng thứ tự gốc rồi xoá chúng khỏi topic cũ; gộp → đăng lại tin của topic sau vào cuối topic trước theo thứ tự rồi xoá topic sau. Chưa viết mã, không đổi D1–D10.
 
 - 2026-10-18: Theo yêu cầu người dùng, **bổ sung vào plan** gộp/chia topic và sửa tin cho forum, và brainstorm cho hai ca gặp khi dùng 19b (tin nhiều hashtag chỉ lấy hashtag đầu; tên file trong caption, không có hashtag, muốn trích bằng regex làm tên topic). Đề xuất một cơ chế chung thay cho xử lý từng ca: **luật định tuyến `topics.route`** (điều kiện = ngôn ngữ filter, trích khoá bằng regex từ hashtag/caption/tên file/topic nguồn, `pick`, mẫu tên với bộ lọc cố định; `hashtag_to_topic` thành cú pháp tắt) — Phase 21 mới; gộp/chia tại chỗ là Phase 20b trên `repost`/`delete` của Phase 20; `edit` thêm sửa theo `msg_map`. Toàn bộ ở `07-inspect-transform.md` mục 11, **chưa duyệt**, 5 câu hỏi ở mục 11.6. Không viết mã, không đổi D1–D10.

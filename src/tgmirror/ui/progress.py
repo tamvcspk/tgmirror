@@ -16,6 +16,7 @@ from rich.text import Text
 from tgmirror.core.gateway import TransferPhase
 from tgmirror.engine.transfer import Transfer
 from tgmirror.store.backups import Backup
+from tgmirror.store.ops import Op
 from tgmirror.store.runs import Run
 from tgmirror.ui.lines import rest_phrase
 from tgmirror.ui.messages import t
@@ -235,3 +236,38 @@ class BackupLineReporter:
         ``run.transfer_download`` is the only key this ever emits (``TransferLines`` doesn't know
         or care which task it's for)."""
         self._transfer_lines.update(transfer)
+
+
+class OpLineReporter:
+    """Plain-line progress for ``tgmirror delete`` (implements ``engine.ops.Reporter``)."""
+
+    def __init__(
+        self,
+        emit: Callable[[str], None],
+        *,
+        interval: float = 5.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._emit = emit
+        self._interval = interval
+        self._clock = clock
+        self._last: float | None = None
+
+    def notice(self, code: str, **params: object) -> None:
+        self._emit(t(f"delete.{code}", **{k: _plain(v) for k, v in params.items()}))
+
+    def progress(self, op: Op) -> None:
+        now = self._clock()
+        if self._last is not None and now - self._last < self._interval:
+            return
+        self._last = now
+        self._emit(
+            t(
+                "delete.progress",
+                id=op.id,
+                done=op.done,
+                planned=op.planned,
+                skipped=op.skipped,
+                gone=op.gone,
+            )
+        )
