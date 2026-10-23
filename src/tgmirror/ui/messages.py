@@ -218,7 +218,7 @@ VI: dict[str, str] = {
         "tgmirror delete --resume O{id} --yes --expect {count}"
     ),
     "delete.cancelled": "Đã bỏ kế hoạch O{id}; chưa xoá gì.",
-    "delete.finished": "Thao tác O{id} đã {status}; không còn gì để làm.",
+    "delete.finished": "Thao tác O{id} đang ở trạng thái «{status}»; không còn gì để làm.",
     "delete.start": "Thao tác O{id}: xoá {count} tin khỏi «{chat}».",
     "delete.progress": (
         "O{id}: {done}/{planned} tin đã xoá, {skipped} để nguyên (đã đổi), {gone} đã mất sẵn."

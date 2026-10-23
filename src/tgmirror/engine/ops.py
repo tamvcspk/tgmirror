@@ -321,6 +321,9 @@ class OpRunner:
                         status = OpStatus.STOPPED
                         break
                     op = await self._delete_batch(op, guard, reader, matcher, batch)
+                    # what the lane has sent is kept with the batch, so a later run (and a budget
+                    # learned from a long flood) counts the messages this one deleted
+                    await self._store.save_limiter_state(op.account, limiter.state)
             await self._store.finish_op(op.id, status)
         except Interrupted:
             await self._store.finish_op(op.id, OpStatus.STOPPED)

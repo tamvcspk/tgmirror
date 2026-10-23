@@ -207,6 +207,20 @@ async def test_apply_deletes_the_plan_and_only_the_plan(rig: Rig) -> None:
     assert counts == {ItemStatus.DONE: 3}
 
 
+async def test_what_the_delete_lane_sent_is_kept_for_the_next_run(rig: Rig) -> None:
+    rig.fill(ads=3)
+    store = await rig.store()
+    plan = await rig.plan(store)
+    assert plan.op is not None
+
+    await rig.apply(store, plan.op)
+
+    state = await store.load_limiter_state("default")
+    assert state is not None
+    sent = {(b.action, b.dst): b.sent for b in state.buckets}
+    assert sent == {("delete", rig.chat.id): 3}
+
+
 async def test_batches_hold_at_most_100_messages_and_never_split_an_album(rig: Rig) -> None:
     rig.fill(ads=99)
     album = rig.gw.add_album(rig.chat.id, [MediaKind.PHOTO] * 3, "#ads")
