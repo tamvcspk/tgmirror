@@ -1,13 +1,16 @@
 """Operations on a chat's own messages: ``tgmirror delete`` (docs/07-inspect-transform.md section 6,
 docs/06-lo-trinh.md Phase 20, decision D10).
 
-Three steps, each of which stands alone:
+Four steps, each of which stands alone (the second only when the person asked for it):
 
 1. ``plan_delete`` reads the chat with the filter and **freezes** the ids it would remove into the
    store (``ops`` + ``op_items``, status ``planned``). Nothing on Telegram changes. The CLI shows
    the summary and asks for the confirmation (typing the number back, or ``--yes --expect N``).
-2. ``begin_op`` takes a confirmed plan up (``running``).
-3. ``OpRunner.run`` applies it batch by batch. For each batch it **reads the messages again by
+2. ``begin_op_backup`` + ``BackupWriter.run(only_ids=...)`` + ``settle_op_backup``: the safety net
+   (phase 20.2, docs/07 section 6.3 point 3) saves exactly the frozen ids into a backup directory
+   *before* anything is deleted, and the plan only goes on if that backup finished.
+3. ``begin_op`` takes a confirmed plan up (``running``).
+4. ``OpRunner.run`` applies it batch by batch. For each batch it **reads the messages again by
    id** and checks the filter against what is there now (a message edited or removed since the
    plan is left alone), writes the batch ``pending`` ahead of the call, deletes, and marks it
    ``done`` — one transaction each (rule 3). After a crash the ``pending`` rows are settled first:
@@ -28,6 +31,7 @@ from collections.abc import Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Protocol
 
 from tgmirror.core.config import Limits
@@ -50,6 +54,8 @@ from tgmirror.core.gateway import (
 )
 from tgmirror.core.limiter import DELETE, Limiter, Sleep
 from tgmirror.engine import planner
+from tgmirror.engine.backup import begin_backup
+from tgmirror.engine.backupdir import BackupManifest
 from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted, inspect_guard, learn_context
 from tgmirror.engine.planner import Skip
 from tgmirror.engine.runner import RunControl
@@ -57,8 +63,11 @@ from tgmirror.engine.runs import DAILY_CAP, RunError
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 from tgmirror.filters.pushdown import plan_read
+from tgmirror.store.backups import Backup
 from tgmirror.store.db import Clock, Store, utc_now
 from tgmirror.store.ops import (
+    BACKUP_DIR,
+    BACKUP_DONE,
     ItemStatus,
     Op,
     OpItem,
@@ -67,7 +76,7 @@ from tgmirror.store.ops import (
     OpStatus,
     PlannedItem,
 )
-from tgmirror.store.runs import Control
+from tgmirror.store.runs import Control, RunStatus
 
 UNITS_PER_READ = MAX_IDS_PER_CALL  # units taken from the plan at a time: enough to fill a batch
 SAMPLE_EDGE = 5  # messages shown from each end of the plan
@@ -232,6 +241,49 @@ async def begin_op(store: Store, op_id: int, *, force: bool = False) -> Op:
     """Take a confirmed (or interrupted) operation up: ``running``. ``OpBusy`` when another process
     works on the same chat."""
     return await store.start_op(op_id, force=force)
+
+
+# ---- the safety net ------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class OpBackup:
+    """A backup of a plan, opened and ready for ``BackupWriter.run(..., only_ids=ids)``."""
+
+    backup: Backup
+    manifest: BackupManifest
+    directory: Path
+    ids: tuple[int, ...]
+
+
+async def begin_op_backup(
+    store: Store,
+    gateway: TelegramGateway,
+    op: Op,
+    directory: Path,
+    *,
+    ack: bool = False,
+    force: bool = False,
+) -> OpBackup:
+    """Open the backup that goes before ``op`` is applied: the messages the plan froze, into
+    ``directory`` (D3 as for any backup, ``begin_backup``). Remembers the directory on the plan, so
+    an attempt that did not finish is carried on by the next one and ``history`` can say where it
+    is. Nothing is deleted by this."""
+    src = await gateway.get_channel(op.chat_id)
+    backup, manifest = await begin_backup(
+        store, gateway, src, directory, filters_json=op.filters_json, protected_ack=ack, force=force
+    )
+    await store.set_op_options(op.id, **{BACKUP_DIR: str(directory), BACKUP_DONE: False})
+    items = await store.op_items_in(op.id, ItemStatus.PLANNED)
+    return OpBackup(backup, manifest, directory, tuple(sorted(i.msg_id for i in items)))
+
+
+async def settle_op_backup(store: Store, op: Op, final: Backup) -> bool:
+    """Record how the safety-net backup ended. ``True``: it finished, so the plan may be applied;
+    anything else (stopped, a flood, a failure) leaves the plan unapplied and ``False``."""
+    finished = final.status is RunStatus.DONE
+    await store.set_op_options(op.id, **{BACKUP_DONE: finished})
+    return finished
 
 
 # ---- applying ------------------------------------------------------------------------------------

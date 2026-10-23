@@ -26,6 +26,7 @@ class Screen:
     tick_interval: float = 1.5  # how often ``tick()`` runs when no key arrives meanwhile
     run_id: int | None = None  # the run this screen drives, if any (``MenuApp`` calls it "ours")
     backup_id: int | None = None  # as ``run_id``, for a backup (T1, Phase 15b)
+    op_id: int | None = None  # as ``run_id``, for a delete (Phase 20.2)
 
     def render(self) -> RenderableType:
         raise NotImplementedError

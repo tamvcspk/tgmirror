@@ -3,16 +3,25 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tests.fakes import FakeGateway
 from tgmirror.core.gateway import ChatKind, MediaKind, SrcMessage, Unit
 from tgmirror.core.limiter import LaneBudget, LaneState, LimiterState, SentBucket
-from tgmirror.engine.status import MIN_SAMPLE, backup_estimate, build_report, estimate, rest_hours
+from tgmirror.engine.status import (
+    MIN_SAMPLE,
+    backup_estimate,
+    build_report,
+    estimate,
+    op_estimate,
+    rest_hours,
+)
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store
 from tgmirror.store.msgmap import MessageResult
+from tgmirror.store.ops import Op, OpKind, OpStatus
 from tgmirror.store.runs import Control, Run, RunOptions, RunSpec, RunStatus
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -530,3 +539,46 @@ async def test_a_retry_report_knows_how_many_failures_are_left(
     report = await build_report(store, current, now=clock.now, daily_cap=1)
 
     assert report.retry_left == 2 and report.estimate.fraction == pytest.approx(1 / 3)
+
+
+def make_op(**changes: object) -> Op:
+    fields: dict[str, Any] = {
+        "id": 1,
+        "account": "default",
+        "kind": OpKind.DELETE,
+        "chat_id": -1001,
+        "chat_title": "Chat",
+        "chat_kind": ChatKind.BROADCAST,
+        "filters_json": "{}",
+        "options_json": "{}",
+        "status": OpStatus.RUNNING,
+        "control": Control.NONE,
+        "resume_at": None,
+        "fail_reason": None,
+        "stats": {"planned": 100, "done": 25},
+        "created_at": NOW,
+        "ended_at": None,
+        "updated_at": NOW,
+    }
+    return Op(**{**fields, **changes})
+
+
+def test_a_delete_knows_its_total_from_the_plan() -> None:
+    est = op_estimate(make_op(), NOW + timedelta(seconds=50), live=True)
+
+    assert est.fraction == 0.25
+    assert est.speed == pytest.approx(0.5)
+    assert est.eta == timedelta(seconds=150)
+
+
+def test_a_finished_delete_is_complete_even_if_some_were_left_alone() -> None:
+    op = make_op(
+        status=OpStatus.DONE,
+        stats={"planned": 100, "done": 90, "skipped": 6, "gone": 4},
+        ended_at=NOW + timedelta(seconds=20),
+    )
+
+    est = op_estimate(op, NOW + timedelta(hours=1), live=False)
+
+    assert est.fraction == 1.0
+    assert est.speed == pytest.approx(5.0)  # measured to its end, not to now

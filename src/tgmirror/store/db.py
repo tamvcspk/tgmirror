@@ -1052,6 +1052,22 @@ class Store:
                 (reason, ended, row["id"]),
             )
 
+    async def set_op_options(self, op_id: int, **updates: object) -> Op:
+        """Merge ``updates`` into the operation's ``options_json`` (what a plan remembers beyond its
+        filter: where its safety-net backup went, whether that finished)."""
+        async with self._tx() as db:
+            cur = await db.execute("SELECT options_json FROM ops WHERE id = ?", (op_id,))
+            row = await cur.fetchone()
+            if row is None:
+                raise StoreError(f"operation {op_id} does not exist")
+            merged: dict[str, object] = json.loads(row[0])
+            merged.update(updates)
+            await db.execute(
+                "UPDATE ops SET options_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(merged, sort_keys=True), self._ts(), op_id),
+            )
+        return await self._require_op(op_id)
+
     async def cancel_op(self, op_id: int) -> None:
         """Give up on a plan nobody confirmed. Only a ``planned`` operation can be cancelled."""
         ts = self._ts()

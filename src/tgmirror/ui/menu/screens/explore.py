@@ -22,6 +22,7 @@ from rich.text import Text
 from tgmirror.cli import wizard
 from tgmirror.cli.commands.backup import BackupOptions
 from tgmirror.cli.commands.clone import CloneOptions
+from tgmirror.cli.commands.delete import DeleteOptions
 from tgmirror.cli.errors import describe
 from tgmirror.cli.keys import MenuKey
 from tgmirror.core.errors import FloodWait, TgMirrorError
@@ -41,6 +42,7 @@ from tgmirror.ui.menu.prompter import MenuPrompter
 from tgmirror.ui.menu.screen import Screen, ScreenResult
 from tgmirror.ui.menu.screens.backup import backup_screen
 from tgmirror.ui.menu.screens.clone import clone_screen
+from tgmirror.ui.menu.screens.delete import delete_screen
 from tgmirror.ui.menu.screens.info import InfoScreen
 from tgmirror.ui.menu.screens.wizard import WizardScreen
 from tgmirror.ui.menu.widgets import Fit, SelectList
@@ -317,6 +319,9 @@ class ExploreScreen(Screen):
         elif letter in ("b", "B"):
             backup = BackupOptions(src=str(self._channel.id), filters=explorer.spec)
             return ("push", backup_screen(self._app, backup))
+        elif letter in ("d", "D"):
+            delete = DeleteOptions(src=str(self._channel.id), filters=explorer.spec)
+            return ("push", delete_screen(self._app, delete))
         elif letter == "u":
             return ("replace", ExploreScreen(self._app, self._channel))
         elif letter == "R":

@@ -248,6 +248,20 @@ VI: dict[str, str] = {
         "Telegram bắt chờ {seconds}s: ngân sách của làn {action} giờ là {budget} tin/{window} giờ."
     ),
     "delete.cap_warning": "Đã thao tác {sent} tin trong 24 giờ qua (nhắc daily_cap: {cap}).",
+    # the safety net before a delete (phase 20.2)
+    "delete.confirm_backup": (
+        "Backup {count} tin này trước khi xoá? Telegram không cho hoàn tác; từ bản backup có thể "
+        "`tgmirror restore` lại, nhưng tin sẽ quay về ở cuối kênh."
+    ),
+    "delete.confirm_backup_dir": "Lưu backup vào {dir}?",
+    "delete.backup_stopped": (
+        "Backup chưa xong ({status}) nên chưa xoá gì. Kế hoạch O{id} vẫn được giữ; backup tiếp "
+        "rồi xoá: tgmirror delete --resume O{id} --yes --expect {count}"
+    ),
+    "delete.backup_done": (
+        "Backup xong: {dir}. Lấy lại bằng `tgmirror restore {dir}` (tin quay về ở cuối kênh)."
+    ),
+    "delete.backup_note": "Bản backup trước khi xoá: {dir}",
     # restore (phase 11b)
     "restore.pick_dir": "Thư mục backup cần restore",
     "restore.pick_dir_empty": "Đường dẫn không được để trống.",
@@ -605,6 +619,8 @@ VI: dict[str, str] = {
     "history.kind_run": "Chạy",
     "history.op_header": "Thao tác O{id}: {kind} · «{chat}»",
     "history.op_kind_delete": "xoá tin",
+    "history.line_backup": "Backup:      {dir}{note}",
+    "history.line_backup_unfinished": " (chưa xong)",
     "history.line_counts_op": (
         "Kết quả:     {done} đã xoá, {skipped} để nguyên, {gone} đã mất sẵn, {failed} lỗi "
         "(kế hoạch {planned} tin)"
@@ -779,7 +795,8 @@ VI: dict[str, str] = {
     "explore.title": "Khám phá ▸ {src}",
     "explore.footer": (
         "←→ cột · ↑↓ dòng · Enter lọc · x loại trừ · ⌫ bỏ bước · Tab đổi cột · l danh sách · "
-        "s lưu @last · t transform · c clone · b backup · u cập nhật · R đọc lại · Esc thoát"
+        "s lưu @last · t transform · c clone · b backup · d xoá · u cập nhật · R đọc lại · "
+        "Esc thoát"
     ),
     "explore.footer_building": "q hoặc Esc: dừng đọc và dùng phần đã có",
     "explore.index_line": "{messages} tin trong chỉ mục · cập nhật lúc {when}",
@@ -808,6 +825,7 @@ VI: dict[str, str] = {
     "explore.saved": "Đã lưu bộ lọc ({count} tin) thành @last: dùng `--selection @last`.",
     "explore.list_title": "Tin khớp (hiện {shown} trên {total})",
     "menu.item_backup": "Backup…",
+    "menu.item_delete": "Xoá tin trong kênh của mình…",
     "menu.item_restore": "Restore…",
     "menu.item_resume": "Chạy tiếp",
     "menu.item_retry": "Thử lại tin lỗi",
@@ -1255,6 +1273,21 @@ EN: dict[str, str] = {
     "delete.cap_warning": (
         "{sent} messages handled in the last 24 hours (daily_cap reminder: {cap})."
     ),
+    # the safety net before a delete (phase 20.2)
+    "delete.confirm_backup": (
+        "Back up these {count} messages before deleting? Telegram cannot undo a delete; a backup "
+        "can be put back with `tgmirror restore`, but the messages return at the end of the chat."
+    ),
+    "delete.confirm_backup_dir": "Save the backup in {dir}?",
+    "delete.backup_stopped": (
+        "The backup is not finished ({status}), so nothing was deleted. Plan O{id} is kept; back "
+        "up the rest and delete: tgmirror delete --resume O{id} --yes --expect {count}"
+    ),
+    "delete.backup_done": (
+        "Backup finished: {dir}. Put it back with `tgmirror restore {dir}` (the messages return "
+        "at the end of the chat)."
+    ),
+    "delete.backup_note": "Backup taken before deleting: {dir}",
     # restore (phase 11b)
     "restore.pick_dir": "Backup directory to restore",
     "restore.pick_dir_empty": "The path cannot be empty.",
@@ -1619,6 +1652,8 @@ EN: dict[str, str] = {
     "history.kind_run": "Run",
     "history.op_header": "Operation O{id}: {kind} · '{chat}'",
     "history.op_kind_delete": "delete messages",
+    "history.line_backup": "Backup:      {dir}{note}",
+    "history.line_backup_unfinished": " (not finished)",
     "history.line_counts_op": (
         "Result:      {done} deleted, {skipped} left alone, {gone} already gone, {failed} failed "
         "(plan of {planned} messages)"
@@ -1799,8 +1834,8 @@ EN: dict[str, str] = {
     "explore.title": "Explore > {src}",
     "explore.footer": (
         "left/right column - up/down row - Enter filter - x exclude - Backspace undo - Tab "
-        "other column - l list - s save @last - t transform - c clone - b backup - u "
-        "update - R re-read - Esc"
+        "other column - l list - s save @last - t transform - c clone - b backup - d "
+        "delete - u update - R re-read - Esc"
     ),
     "explore.footer_building": "q or Esc: stop reading and use what there is",
     "explore.index_line": "{messages} messages in the index - updated {when}",
@@ -1829,6 +1864,7 @@ EN: dict[str, str] = {
     "explore.saved": "Filter saved ({count} messages) as @last: use `--selection @last`.",
     "explore.list_title": "Matching messages (showing {shown} of {total})",
     "menu.item_backup": "Backup...",
+    "menu.item_delete": "Delete messages from a chat of mine...",
     "menu.item_restore": "Restore...",
     "menu.item_resume": "Continue",
     "menu.item_retry": "Retry failures",

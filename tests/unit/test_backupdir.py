@@ -345,3 +345,34 @@ def test_a_line_from_before_phase_18a_reads_with_the_new_fields_unset(tmp_path) 
 
     assert not record.is_forward and record.fwd_from_id is None and record.edit_date is None
     assert record.link_domains == () and record.forwards is None and not record.pinned
+
+
+def _message(msg_id: int) -> ExportedMessage:
+    return ExportedMessage(
+        id=msg_id,
+        date=NOW,
+        grouped_id=None,
+        topic_id=None,
+        from_user_id=None,
+        text_html="ok",
+        views=None,
+    )
+
+
+def test_recorded_ids_are_every_id_on_disk_and_last_id_is_the_highest(tmp_path) -> None:
+    """A safety-net backup (explicit ids) can append an id below the last one already there."""
+    assert backupdir.recorded_ids(tmp_path) == set()
+    backupdir.append_records(tmp_path, [_message(5), _message(9)])
+    backupdir.append_records(tmp_path, [_message(7)])
+
+    assert backupdir.recorded_ids(tmp_path) == {5, 7, 9}
+    assert backupdir.last_id(tmp_path) == 9  # not 7, the last line
+
+
+def test_recorded_ids_tolerate_only_a_broken_last_line(tmp_path) -> None:
+    backupdir.append_records(tmp_path, [_message(1), _message(2)])
+    path = backupdir.messages_path(tmp_path)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"id": 3, "da')  # killed mid-write
+
+    assert backupdir.recorded_ids(tmp_path) == {1, 2}

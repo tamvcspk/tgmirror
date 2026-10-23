@@ -158,3 +158,19 @@ async def test_cancel_only_drops_a_plan(store: Store) -> None:
 
     assert (await store.get_op(plan.id)).status is OpStatus.CANCELLED  # type: ignore[union-attr]
     assert (await store.get_op(running.id)).status is OpStatus.RUNNING  # type: ignore[union-attr]
+
+
+async def test_options_are_merged_and_read_back_as_the_plans_backup(store: Store) -> None:
+    op = await store.create_op(OpSpec(OpKind.DELETE, CHAT), items(1))
+    assert op.backup_dir is None and not op.backup_done
+
+    await store.set_op_options(op.id, backup_dir="/safe/O1", backup_done=False)
+    again = await store.set_op_options(op.id, backup_done=True)  # keeps what was there
+
+    assert again.backup_dir == "/safe/O1" and again.backup_done
+    assert (await store.get_op(op.id)) == again
+
+
+async def test_options_of_a_missing_operation_are_an_error(store: Store) -> None:
+    with pytest.raises(StoreError):
+        await store.set_op_options(99, backup_done=True)

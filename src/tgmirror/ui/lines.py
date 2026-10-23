@@ -87,7 +87,9 @@ def backup_start_line(backup_id: int, src: str, directory: str) -> str:
     return t("backup.start", id=backup_id, src=src, dir=directory)
 
 
-def backup_result_lines(final: Backup) -> list[str]:
+def backup_result_lines(final: Backup, *, hint: bool = True) -> list[str]:
+    """``hint=False``: no "carry on with `tgmirror backup`" line, for the safety-net backup of a
+    ``delete``, which is carried on by `delete --resume` instead."""
     lines = [
         t(
             "backup.result",
@@ -101,7 +103,7 @@ def backup_result_lines(final: Backup) -> list[str]:
         lines.append(t("run.skipped", count=final.skipped_filter))
     if final.gone:
         lines.append(t("retry.gone", count=final.gone))
-    if final.status is RunStatus.STOPPED:
+    if hint and final.status is RunStatus.STOPPED:
         lines.append(t("backup.continue_hint", dir=final.dir))
     return lines
 
@@ -223,6 +225,21 @@ def delete_plan_lines(op: Op, summary: PlanSummary) -> list[str]:
     return lines
 
 
+def delete_backup_done_line(directory: str) -> str:
+    """Said when the safety-net backup of a plan finished, just before the delete starts."""
+    return t("delete.backup_done", dir=directory)
+
+
+def delete_backup_stopped_line(op: Op, final: Backup) -> str:
+    """Said when it did not finish: nothing is deleted and the plan stays for another go."""
+    return t(
+        "delete.backup_stopped",
+        status=t(f"status.{final.status}"),
+        id=op.id,
+        count=op.planned,
+    )
+
+
 def delete_start_line(op: Op) -> str:
     return t("delete.start", id=op.id, count=op.planned, chat=op.chat_title)
 
@@ -241,6 +258,8 @@ def delete_result_lines(final: Op) -> list[str]:
         lines.append(t("delete.left_alone", count=final.skipped))
     if final.gone:
         lines.append(t("delete.gone", count=final.gone))
+    if final.backup_dir is not None and final.backup_done:
+        lines.append(t("delete.backup_note", dir=final.backup_dir))
     if final.status in (OpStatus.STOPPED, OpStatus.WAITING_FLOOD, OpStatus.FAILED):
         lines.append(t("delete.continue_hint", id=final.id))
     return lines

@@ -446,8 +446,11 @@ async def execute(
     manifest: BackupManifest,
     *,
     pushdown: bool = True,
-) -> None:
-    """Carry out an opened backup in the foreground; print progress and the result."""
+    only_ids: Sequence[int] | None = None,
+) -> Backup:
+    """Carry out an opened backup in the foreground; print progress and the result. ``only_ids``:
+    back up exactly those messages (the safety net of ``tgmirror delete``, phase 20.2). Returns the
+    finished row, so a caller that goes on only if it finished can look."""
     control = RunControl()
     limits = rt.config().limits
     with (
@@ -458,8 +461,11 @@ async def execute(
         writer = BackupWriter(store, gateway, limits, reporter=reporter, control=control)
         if listening:
             typer.echo(t("run.keys_hint"))
-        final = await writer.run(backup_row, directory, manifest, pushdown=pushdown)
-    for line in backup_result_lines(final):
+        final = await writer.run(
+            backup_row, directory, manifest, pushdown=pushdown, only_ids=only_ids
+        )
+    for line in backup_result_lines(final, hint=only_ids is None):
         typer.echo(line)
     if interrupt.hit:
         raise typer.Exit(EXIT_INTERRUPTED)
+    return final

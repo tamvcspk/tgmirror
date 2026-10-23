@@ -17,13 +17,15 @@ An empty filter means *every* message, so it needs ``--all`` (or, at a terminal,
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from tgmirror.cli import wizard
+from tgmirror.cli.commands.backup import execute as run_backup
 from tgmirror.cli.errors import EXIT_INTERRUPTED, Declined, UsageProblem, run
 from tgmirror.cli.filter_options import (
     AlbumOption,
@@ -59,12 +61,26 @@ from tgmirror.cli.selection_options import (
 from tgmirror.core.gateway import ChannelInfo, ChatKind, TelegramGateway, TopicInfo
 from tgmirror.engine import selection
 from tgmirror.engine.endpoints import find_channel
-from tgmirror.engine.ops import OpRunner, begin_op, plan_delete, resolve_op
+from tgmirror.engine.ops import (
+    OpRunner,
+    begin_op,
+    begin_op_backup,
+    plan_delete,
+    resolve_op,
+    settle_op_backup,
+)
 from tgmirror.engine.runner import RunControl
 from tgmirror.filters.model import FilterSpec
 from tgmirror.store.db import Store
 from tgmirror.store.ops import Op, OpStatus
-from tgmirror.ui.lines import delete_plan_lines, delete_result_lines, delete_start_line
+from tgmirror.ui.lines import (
+    backup_start_line,
+    delete_backup_done_line,
+    delete_backup_stopped_line,
+    delete_plan_lines,
+    delete_result_lines,
+    delete_start_line,
+)
 from tgmirror.ui.messages import t
 from tgmirror.ui.progress import OpLineReporter
 from tgmirror.ui.prompts import Choice, Prompter
@@ -102,6 +118,28 @@ def delete(
             "deletes nothing.",
         ),
     ] = None,
+    backup_to: Annotated[
+        Path | None,
+        typer.Option(
+            "--backup-to",
+            help="Back the planned messages up into this directory before deleting anything "
+            "(a plan that is not backed up completely is not applied).",
+        ),
+    ] = None,
+    no_backup: Annotated[
+        bool,
+        typer.Option(
+            "--no-backup", help="Delete without a backup, and do not ask whether to make one."
+        ),
+    ] = False,
+    admin_ack: Annotated[
+        bool,
+        typer.Option(
+            "--yes-i-administer-this-channel",
+            help="For the backup of a chat that restricts saving content: say that you own it "
+            "and may copy it. You take full responsibility for that: tgmirror cannot check it.",
+        ),
+    ] = False,
     media: MediaOption = None,
     hashtag: HashtagOption = None,
     contains: ContainsOption = None,
@@ -152,6 +190,9 @@ def delete(
     Each message is read again just before it is deleted: one that changed so that it no longer
     matches the filter is left alone. Albums are deleted whole.
 
+    At a terminal it asks whether to back the messages up first; without one, `--backup-to DIR`
+    does (or `--no-backup` says no). Nothing is deleted unless the backup finished.
+
     Keys while it runs: p pause, r resume, q stop.
 
     Example: tgmirror delete "@my_channel" --hashtag "#ads" --since 2024-01-01
@@ -184,11 +225,16 @@ def delete(
             src is not None or filters is not None or selection_file is not None or all_messages
         ):
             raise UsageProblem("err.conflicting_flags", flags="--resume / SRC / filter / --all")
+        if backup_to is not None and no_backup:
+            raise UsageProblem("err.conflicting_flags", flags="--backup-to / --no-backup")
         options = DeleteOptions(
             src=src,
             all_messages=all_messages,
             resume=resume,
             expect=expect,
+            backup_to=backup_to,
+            no_backup=no_backup,
+            admin_ack=admin_ack,
             filters=filters,
             pushdown=pushdown,
             force_takeover=force_takeover,
@@ -218,6 +264,10 @@ def delete(
                     op = planned
                 if not await flow.confirmed(op):
                     return
+                if (backup := await flow.backup_plan(op)) is not None:
+                    await back_up(
+                        rt, store, conn.gateway, op, backup, force_takeover=force_takeover
+                    )
                 await execute(rt, store, conn.gateway, op, force_takeover=force_takeover)
 
     run(rt, command())
@@ -231,10 +281,22 @@ class DeleteOptions:
     all_messages: bool = False
     resume: str | None = None
     expect: int | None = None
+    backup_to: Path | None = None
+    no_backup: bool = False
+    admin_ack: bool = False
     filters: FilterSpec | None = None
     pushdown: bool = True
     force_takeover: bool = False
     yes: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class BackupPlan:
+    """Where the plan is backed up before it is applied, and whether the person said (D3) that the
+    chat's restriction on saving content is theirs to lift."""
+
+    directory: Path
+    ack: bool
 
 
 class DeleteFlow:
@@ -251,7 +313,9 @@ class DeleteFlow:
         *,
         prompter: Prompter | None = None,
         interactive: bool | None = None,
+        echo: Callable[..., None] = typer.echo,
     ) -> None:
+        self._echo = echo
         self._rt = rt
         self._store = store
         self._gateway = gateway
@@ -287,10 +351,10 @@ class DeleteFlow:
             pushdown=self._o.pushdown,
         )
         if plan.op is None:
-            typer.echo(t("delete.nothing", chat=chat.title))
+            self._echo(t("delete.nothing", chat=chat.title))
             return None
         for line in delete_plan_lines(plan.op, plan.summary):
-            typer.echo(line)
+            self._echo(line)
         return plan.op
 
     async def _pick_chat(self) -> ChannelInfo:
@@ -348,13 +412,92 @@ class DeleteFlow:
                 raise UsageProblem("delete.needs_expect", count=op.planned)
             return True
         if not self._interactive:
+            if o.backup_to is not None:  # the wish for a backup is part of the saved plan
+                resolved = await asyncio.to_thread(o.backup_to.expanduser().resolve)
+                await self._store.set_op_options(op.id, backup_dir=str(resolved))
             raise UsageProblem("delete.needs_yes", id=op.id, count=op.planned)
         question = t("delete.type_count", count=op.planned, chat=op.chat_title)
         if (await self._prompter.text(question)).strip() != str(op.planned):
             await self._store.cancel_op(op.id)
-            typer.echo(t("delete.cancelled", id=op.id))
+            self._echo(t("delete.cancelled", id=op.id))
             raise Declined
         return True
+
+    # ---- 3. the safety net -----------------------------------------------------------------
+
+    async def backup_plan(self, op: Op) -> BackupPlan | None:
+        """Whether, and where, the plan is backed up before anything is deleted (docs/07 section
+        6.3 point 3). At a terminal it asks (default yes); without one only ``--backup-to`` does,
+        and ``--no-backup`` never. A plan whose backup is already complete needs no second one;
+        one an earlier attempt left unfinished carries on in the same directory."""
+        o = self._o
+        if op.status is not OpStatus.PLANNED or op.backup_done or o.no_backup:
+            return None  # already started or backed up, or the person said no
+        directory = o.backup_to
+        if directory is None and op.backup_dir is not None:
+            directory = Path(op.backup_dir)
+        if directory is None:
+            if not (self._interactive and not o.yes):
+                return None
+            if not await self._prompter.confirm(t("delete.confirm_backup", count=op.planned)):
+                return None
+            directory = await self._ask_backup_dir(op)
+        resolved = await asyncio.to_thread(directory.expanduser().resolve)
+        if op.backup_dir != str(resolved):
+            # remembered at once: a plan whose backup was asked for is never applied without one,
+            # even if this attempt stops at D3 below and `--resume` comes without the flag
+            await self._store.set_op_options(op.id, backup_dir=str(resolved))
+        return BackupPlan(resolved, await self._acknowledged(op))
+
+    async def _ask_backup_dir(self, op: Op) -> Path:
+        suggested = self._rt.paths.data_dir / "safety" / f"O{op.id}"
+        if await self._prompter.confirm(t("delete.confirm_backup_dir", dir=suggested)):
+            return suggested
+        return await wizard.ask_backup_dir(self._prompter)
+
+    async def _acknowledged(self, op: Op) -> bool:
+        """Decision D3 for the backup, as ``BackupFlow._confirm_d3``: a chat that restricts saving
+        content needs the person's statement. The account administers it (the plan needed that),
+        so a question can stand in for the flag at a terminal."""
+        o = self._o
+        chat = find_channel(self._channels, str(op.chat_id))
+        if not chat.noforwards or o.admin_ack:
+            return o.admin_ack
+        if not (self._interactive and not o.yes):
+            raise UsageProblem("err.needs_admin_ack", title=chat.title)
+        if not await self._prompter.confirm(t("clone.confirm_protected", title=chat.title), False):
+            raise Declined
+        return True
+
+
+async def back_up(
+    rt: Runtime,
+    store: Store,
+    gateway: TelegramGateway,
+    op: Op,
+    plan: BackupPlan,
+    *,
+    force_takeover: bool = False,
+) -> None:
+    """Save the plan's messages before anything is deleted. Goes on only if the backup finished;
+    otherwise the plan stays as it was and the command ends (exit 1)."""
+    started = await begin_op_backup(
+        store, gateway, op, plan.directory, ack=plan.ack, force=force_takeover
+    )
+    typer.echo(backup_start_line(started.backup.id, op.chat_title, str(plan.directory)))
+    final = await run_backup(
+        rt,
+        store,
+        gateway,
+        started.backup,
+        started.directory,
+        started.manifest,
+        only_ids=started.ids,
+    )
+    if not await settle_op_backup(store, op, final):
+        typer.echo(delete_backup_stopped_line(op, final))
+        raise typer.Exit(1)
+    typer.echo(delete_backup_done_line(str(plan.directory)))
 
 
 async def execute(

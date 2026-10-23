@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from tgmirror.core.limiter import BAD_TTL, LimiterState, grow_budget, window_sent
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import HEARTBEAT_TIMEOUT, Store
+from tgmirror.store.ops import Op, OpStatus
 from tgmirror.store.runs import FloodEvent, Run, RunStatus
 
 MIN_SAMPLE = 5.0  # seconds a run must have lasted before its speed and ETA mean anything
@@ -283,6 +284,61 @@ async def build_backup_report(
         live=live,
         abandoned=holds and not live,
         speed=speed,
+        delay=limiter.delay if limiter else None,
+        sent_24h=window_sent(limiter.buckets, now, 24) if limiter else 0,
+        daily_cap=daily_cap,
+        floods_24h=await store.flood_count_since(now - FLOOD_WINDOW),
+        last_flood=floods[-1] if floods else None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class OpStatusReport:
+    """As ``BackupStatusReport``, for an operation on a chat's own messages (phase 20.2). Unlike a
+    backup it knows its total from the start (the plan froze it), so it has a fraction and an ETA,
+    from the same arithmetic as a run's."""
+
+    op: Op
+    now: datetime
+    live: bool
+    abandoned: bool
+    estimate: Estimate
+    left: int  # planned messages not handled yet
+    delay: float | None
+    sent_24h: int
+    daily_cap: int
+    floods_24h: int
+    last_flood: FloodEvent | None
+
+
+def op_estimate(op: Op, now: datetime, *, live: bool) -> Estimate:
+    """Progress, speed and ETA of ``op``: the plan is the span, what is handled the progress."""
+    end = now if live else (op.ended_at or op.updated_at)
+    elapsed = max((end - op.created_at).total_seconds(), 0.0)
+    return _estimate(
+        elapsed=elapsed,
+        handled=op.handled,
+        span=max(op.planned, op.handled),
+        progressed=op.handled,
+        done=op.status is OpStatus.DONE,
+        running=op.status is OpStatus.RUNNING,
+        live=live,
+    )
+
+
+async def build_op_report(store: Store, op: Op, *, now: datetime, daily_cap: int) -> OpStatusReport:
+    """Gather what ``status`` needs about ``op`` from the store."""
+    holds = op.status in (OpStatus.RUNNING, OpStatus.PAUSED)
+    live = holds and now - op.updated_at < HEARTBEAT_TIMEOUT
+    limiter = await store.load_limiter_state(op.account)
+    floods = await store.op_flood_events(op.id)
+    return OpStatusReport(
+        op=op,
+        now=now,
+        live=live,
+        abandoned=holds and not live,
+        estimate=op_estimate(op, now, live=live),
+        left=max(op.planned - op.handled, 0),
         delay=limiter.delay if limiter else None,
         sent_24h=window_sent(limiter.buckets, now, 24) if limiter else 0,
         daily_cap=daily_cap,

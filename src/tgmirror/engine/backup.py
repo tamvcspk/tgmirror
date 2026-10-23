@@ -13,6 +13,7 @@ restricts saving content needs the user's statement, exactly as strategy B does)
 import asyncio
 import contextlib
 import random
+from collections.abc import AsyncIterator, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import timedelta
@@ -34,7 +35,7 @@ from tgmirror.core.limiter import Limiter, Sleep
 from tgmirror.engine import backupdir, planner
 from tgmirror.engine.endpoints import SourceRestricted
 from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted, learn_context
-from tgmirror.engine.planner import Skip
+from tgmirror.engine.planner import Gone, Skip
 from tgmirror.engine.runner import RunControl
 from tgmirror.engine.runs import check_runnable
 from tgmirror.engine.transfer import Transfer, TransferTracker
@@ -218,7 +219,12 @@ class BackupWriter:
         manifest: backupdir.BackupManifest,
         *,
         pushdown: bool = True,
+        only_ids: Sequence[int] | None = None,
     ) -> Backup:
+        """Back up ``backup``'s source into ``directory``. With ``only_ids`` it backs up exactly
+        those messages, read by id (phase 20.2: the safety net of a ``delete`` saves the ids its
+        plan froze, not whatever the filter selects by the time this runs) and skips the ones the
+        directory already holds; the filter is then not applied."""
         limiter = Limiter(
             self._limits,
             lambda seconds: self._nap(seconds, backup.id),
@@ -242,14 +248,14 @@ class BackupWriter:
         media_dir.mkdir(parents=True, exist_ok=True)
         try:
             await learn_context(guard, self._gateway)  # Premium, for the flood log (phase 19d1)
-            cursor = backupdir.last_id(directory)
-            spec = FilterSpec.from_json(manifest.filters_json)
-            plan = plan_read(spec, cursor, pushdown=pushdown)
-            matcher = None if spec.is_empty else Matcher(spec)
-            backup = await self._analyze(backup, reader, plan)
             status = RunStatus.DONE
-            async with aclosing(
-                planner.units(
+            if only_ids is None:
+                cursor = backupdir.last_id(directory)
+                spec = FilterSpec.from_json(manifest.filters_json)
+                plan = plan_read(spec, cursor, pushdown=pushdown)
+                matcher = None if spec.is_empty else Matcher(spec)
+                backup = await self._analyze(backup, reader, plan)
+                items: AsyncIterator[Unit | Skip | Gone] = planner.units(
                     reader,
                     backup.src_id,
                     min_id=plan.min_id,
@@ -257,7 +263,13 @@ class BackupWriter:
                     matcher=matcher,
                     complete_albums=plan.complete_albums,
                 )
-            ) as stream:
+            else:
+                recorded = await asyncio.to_thread(backupdir.recorded_ids, directory)
+                todo = sorted(set(only_ids) - recorded)
+                backup = await self._store.set_backup_total(backup.id, len(todo))
+                self._reporter.notice("analyzed", total=len(todo))
+                items = planner.failed_units(reader, backup.src_id, todo)
+            async with aclosing(items) as stream:
                 async for item in stream:
                     if not await self._gate(backup):
                         status = RunStatus.STOPPED
@@ -320,10 +332,17 @@ class BackupWriter:
         self,
         backup: Backup,
         reader: MessageReader,
-        item: Unit | Skip,
+        item: Unit | Skip | Gone,
         directory: Path,
         media_dir: Path,
     ) -> Backup:
+        if isinstance(item, Gone):  # ids asked for by number that the chat no longer has
+            self._reporter.notice("gone", id=item.ids[0])
+            updated = await self._store.advance_backup(
+                backup.id, item.ids[-1], extra_stats={"gone": len(item.ids)}
+            )
+            self._reporter.progress(updated)
+            return updated
         if isinstance(item, Skip):
             updated = await self._store.advance_backup(
                 backup.id, item.last_id, extra_stats={"skipped_filter": item.count}

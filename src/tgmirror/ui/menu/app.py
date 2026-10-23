@@ -49,6 +49,7 @@ class MenuApp:
         self.account = account
         self.own_run_id: int | None = None  # the run *this* process drives, if any (see below)
         self.own_backup_id: int | None = None  # as ``own_run_id``, for a backup (T1, Phase 15b)
+        self.own_op_id: int | None = None  # as ``own_run_id``, for a delete (Phase 20.2)
         self._badge: str | None = None
         self._conn_stack: AsyncExitStack | None = None  # set when this app opened ``conn``
         self._stack: list[Screen] = [MainMenuScreen(self)]
@@ -168,6 +169,8 @@ class MenuApp:
                     self.own_run_id = screen.run_id  # this process now holds that run itself
                 if screen.backup_id is not None:
                     self.own_backup_id = screen.backup_id  # as above, for a backup
+                if screen.op_id is not None:
+                    self.own_op_id = screen.op_id  # as above, for a delete
                 debug.log("apply.push", top=type(screen).__name__)
                 await self._apply(await screen.on_enter())  # may itself decide to push/pop again
 
@@ -182,9 +185,13 @@ class MenuApp:
             self._badge = t("menu.running_elsewhere")
             return
         live_backup = await self.store.active_backup()
+        if live_backup is not None and live_backup.id != self.own_backup_id:
+            self._badge = t("menu.running_elsewhere")
+            return
+        live_op = await self.store.active_op()
         self._badge = (
             t("menu.running_elsewhere")
-            if live_backup is not None and live_backup.id != self.own_backup_id
+            if live_op is not None and live_op.id != self.own_op_id
             else None
         )
 

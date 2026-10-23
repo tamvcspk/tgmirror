@@ -127,6 +127,21 @@ class Op:
     def handled(self) -> int:
         return self.done + self.skipped + self.gone + self.failed
 
+    @property
+    def backup_dir(self) -> str | None:
+        """The directory the plan is backed up into before it is applied (phase 20.2): set when
+        the person asked for the safety net, whether or not that backup finished yet."""
+        found = json.loads(self.options_json).get(BACKUP_DIR)
+        return found if isinstance(found, str) else None
+
+    @property
+    def backup_done(self) -> bool:
+        """The safety-net backup of this plan finished: applying it needs no second one."""
+        return json.loads(self.options_json).get(BACKUP_DONE) is True
+
+
+BACKUP_DIR = "backup_dir"  # keys of ``ops.options_json`` (phase 20.2)
+BACKUP_DONE = "backup_done"
 
 OP_SELECT = (
     "SELECT id, account, kind, chat_id, chat_title, chat_kind, filters_json, options_json, status, "

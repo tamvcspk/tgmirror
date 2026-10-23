@@ -277,7 +277,30 @@ def last_id(directory: Path) -> int:
         if not line.strip():
             continue
         try:
-            found = json.loads(line)["id"]
+            # max: a safety-net backup (explicit ids) may append ids below the last one
+            found = max(found, json.loads(line)["id"])
+        except json.JSONDecodeError:
+            if i == len(lines) - 1:
+                break
+            raise CorruptMessagesFile(path, i + 1) from None
+    return found
+
+
+def recorded_ids(directory: Path) -> set[int]:
+    """The ids of every message already in ``messages.jsonl`` (empty: no file yet) — what a backup
+    of an explicit list of ids (``engine.ops``'s safety net before a ``delete``) skips, since it
+    cannot tell what is done by a cursor. Same last-line tolerance and mid-file
+    ``CorruptMessagesFile`` as ``last_id``."""
+    path = messages_path(directory)
+    if not path.exists():
+        return set()
+    lines = _split_lines(path.read_text(encoding="utf-8"))
+    found: set[int] = set()
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            found.add(json.loads(line)["id"])
         except json.JSONDecodeError:
             if i == len(lines) - 1:
                 break

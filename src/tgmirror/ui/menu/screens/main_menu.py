@@ -15,6 +15,7 @@ from tgmirror.ui.menu.screens.backup import backup_screen
 from tgmirror.ui.menu.screens.channels import ChannelsScreen
 from tgmirror.ui.menu.screens.clone import clone_screen
 from tgmirror.ui.menu.screens.config import ConfigScreen
+from tgmirror.ui.menu.screens.delete import delete_screen
 from tgmirror.ui.menu.screens.explore import explore_screen
 from tgmirror.ui.menu.screens.history import HistoryScreen
 from tgmirror.ui.menu.screens.login import login_screen
@@ -29,6 +30,7 @@ _Action = Literal[
     "clone",
     "explore",
     "backup",
+    "delete",
     "restore",
     "resume",
     "retry",
@@ -74,6 +76,7 @@ class MainMenuScreen(Screen):
                 (t("menu.item_clone"), "clone"),
                 (t("menu.item_explore"), "explore"),
                 (t("menu.item_backup"), "backup"),
+                (t("menu.item_delete"), "delete"),
                 (t("menu.item_restore"), "restore"),
             ]
             if await self._app.store.list_pairs(1):
@@ -113,6 +116,8 @@ class MainMenuScreen(Screen):
                 return ("push", explore_screen(self._app))
             case "backup":
                 return ("push", backup_screen(self._app))
+            case "delete":
+                return ("push", delete_screen(self._app))
             case "restore":
                 return ("push", restore_screen(self._app))
             case "resume" | "retry":

@@ -1,4 +1,5 @@
-"""``tgmirror status``: how the running clone or backup is doing (or how the latest one ended).
+"""``tgmirror status``: how the running clone, backup or delete is doing (or how the latest one
+ended).
 
 No Telegram connection: it reads the store, so it works from a second terminal while the clone or
 backup holds the session. Progress, speed and ETA are estimates (``engine/status.py`` says how).
@@ -7,6 +8,9 @@ T1, Phase 15b: a backup (``tgmirror backup``) never showed up here at all — on
 looked at, so a backup running in another terminal, or the newest thing in the log, was invisible.
 A live one takes priority (one process per session, hard rule 10, means at most one of a run/backup
 is ever live at once in practice); at rest, whichever is newer wins.
+
+Phase 20.2: an operation on a chat's own messages (``tgmirror delete``, ``O<n>``) is the third
+kind, with a fraction and an ETA of its own since the plan froze its total.
 """
 
 import json
@@ -20,12 +24,15 @@ from tgmirror.cli.runtime import Runtime, opened_store
 from tgmirror.engine.runs import RunNotFound
 from tgmirror.engine.status import (
     BackupStatusReport,
+    OpStatusReport,
     StatusReport,
     build_backup_report,
+    build_op_report,
     build_report,
 )
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store, utc_now
+from tgmirror.store.ops import Op, OpStatus
 from tgmirror.store.runs import Run, RunStatus
 from tgmirror.ui.lines import budget_lines, flood_kind
 from tgmirror.ui.messages import t
@@ -36,10 +43,11 @@ def status(
     ctx: typer.Context,
     as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
 ) -> None:
-    """Show progress, speed, ETA, failures and Telegram's limits for the running clone or backup.
+    """Show progress, speed, ETA, failures and Telegram's limits for the running clone, backup or
+    delete.
 
-    With nothing running, it shows the latest one (run or backup) instead. Works while a clone or
-    backup runs in another terminal. Progress and ETA are estimates, by source message id.
+    With nothing running, it shows the latest one (run, backup or delete) instead. Works while one
+    runs in another terminal. Progress and ETA are estimates, by source message id.
 
     Example: tgmirror status        (or: tgmirror status --json)
     """
@@ -54,7 +62,14 @@ def status(
             limits = rt.config().limits
             daily_cap = limits.daily_cap
             bad_ttl = timedelta(hours=limits.probe_after_hours)
-            if isinstance(target, Backup):
+            if isinstance(target, Op):
+                op_report = await build_op_report(store, target, now=now, daily_cap=daily_cap)
+                out = (
+                    json.dumps(_op_record(op_report), ensure_ascii=False, indent=2)
+                    if as_json
+                    else _op_text(op_report)
+                )
+            elif isinstance(target, Backup):
                 backup_report = await build_backup_report(
                     store, target, now=now, daily_cap=daily_cap
                 )
@@ -77,18 +92,29 @@ def status(
     run(rt, command())
 
 
-async def _pick(store: Store) -> Run | Backup | None:
+async def _pick(store: Store) -> Run | Backup | Op | None:
     if (live_run := await store.active_run()) is not None:
         return live_run
     if (live_backup := await store.active_backup()) is not None:
         return live_backup
-    latest_run = await store.latest_run()
-    latest_backup = await store.latest_backup()
-    if latest_run is None:
-        return latest_backup
-    if latest_backup is None:
-        return latest_run
-    return latest_run if latest_run.started_at >= latest_backup.started_at else latest_backup
+    if (live_op := await store.active_op()) is not None:
+        return live_op
+    latest: list[Run | Backup | Op] = [
+        found
+        for found in (
+            await store.latest_run(),
+            await store.latest_backup(),
+            await store.latest_op(),
+        )
+        if found is not None
+    ]
+    return max(latest, key=_last_activity, default=None)
+
+
+def _last_activity(item: Run | Backup | Op) -> datetime:
+    """When it last did anything: a delete's safety-net backup starts after its plan was made, but
+    the delete is what happened last."""
+    return item.ended_at or item.updated_at
 
 
 def _local(value: datetime) -> str:
@@ -275,6 +301,111 @@ def _backup_text(report: BackupStatusReport) -> str:
             )
         lines.append(t("status.line_floods", count=report.floods_24h, last=last))
     return "\n".join(lines)
+
+
+def _op_text(report: OpStatusReport) -> str:
+    """As ``_text``, for an operation (phase 20.2)."""
+    op, est = report.op, report.estimate
+    lines: list[str] = []
+    if not report.live:
+        lines.append(t("status.none_live"))
+    kind = t(f"history.op_kind_{op.kind}")
+    lines.append(t("history.op_header", id=op.id, kind=kind, chat=op.chat_title))
+    note = f" ({op.fail_reason})" if op.fail_reason else ""
+    lines.append(t("history.line_status", status=t(f"status.{op.status}"), note=note))
+    if report.abandoned:
+        lines.append(t("status.abandoned", at=_local(op.updated_at)))
+    if op.status is OpStatus.WAITING_FLOOD and op.resume_at is not None:
+        lines.append(t("status.line_resume", at=_local(op.resume_at), note=""))
+    if est.fraction is not None:
+        lines.append(
+            t(
+                "status.line_progress_items",
+                percent=round(est.fraction * 100),
+                handled=op.handled,
+                total=max(op.planned, op.handled),
+            )
+        )
+    if est.speed is None:
+        lines.append(t("status.line_speed_unknown"))
+    else:
+        eta = t("status.eta", eta=duration(est.eta)) if est.eta is not None else ""
+        lines.append(t("status.line_speed", speed=f"{est.speed:.1f}", eta=eta))
+    lines.append(
+        t(
+            "history.line_counts_op",
+            done=op.done,
+            skipped=op.skipped,
+            gone=op.gone,
+            failed=op.failed,
+            planned=op.planned,
+        )
+    )
+    if op.backup_dir is not None:
+        unfinished = "" if op.backup_done else t("history.line_backup_unfinished")
+        lines.append(t("history.line_backup", dir=op.backup_dir, note=unfinished))
+    if report.delay is not None:
+        lines.append(
+            t(
+                "status.line_limiter",
+                delay=f"{report.delay:.1f}",
+                sent=report.sent_24h,
+                cap=report.daily_cap,
+            )
+        )
+    if report.floods_24h == 0:
+        lines.append(t("status.line_floods_none"))
+    else:
+        last = ""
+        if report.last_flood is not None:
+            last = t(
+                "status.last_flood",
+                ago=duration(report.now - report.last_flood.ts),
+                kind=flood_kind(report.last_flood),
+                seconds=report.last_flood.seconds if report.last_flood.seconds is not None else "-",
+            )
+        lines.append(t("status.line_floods", count=report.floods_24h, last=last))
+    if not report.live and op.status in (OpStatus.STOPPED, OpStatus.WAITING_FLOOD, OpStatus.FAILED):
+        lines.append(t("delete.continue_hint", id=op.id))
+    return "\n".join(lines)
+
+
+def _op_record(report: OpStatusReport) -> dict[str, object]:
+    op, est = report.op, report.estimate
+    flood = report.last_flood
+    return {
+        "kind": op.kind.value,
+        "operation": op.id,
+        "chat": {"id": op.chat_id, "title": op.chat_title},
+        "status": op.status.value,
+        "live": report.live,
+        "abandoned": report.abandoned,
+        "note": op.fail_reason,
+        "resume_at": op.resume_at.isoformat() if op.resume_at else None,
+        "progress": est.fraction,
+        "speed_per_second": est.speed,
+        "eta_seconds": est.eta.total_seconds() if est.eta is not None else None,
+        "planned": op.planned,
+        "done": op.done,
+        "left_alone": op.skipped,
+        "gone": op.gone,
+        "failed": op.failed,
+        "left": report.left,
+        "backup": {"directory": op.backup_dir, "finished": op.backup_done}
+        if op.backup_dir is not None
+        else None,
+        "limiter": None
+        if report.delay is None
+        else {
+            "delay_seconds": report.delay,
+            "sent_24h": report.sent_24h,
+            "daily_cap": report.daily_cap,
+        },
+        "floods_24h": report.floods_24h,
+        "last_flood": None
+        if flood is None
+        else {"at": flood.ts.isoformat(), "kind": flood.kind, "seconds": flood.seconds},
+    }
 
 
 def _backup_record(report: BackupStatusReport) -> dict[str, object]:

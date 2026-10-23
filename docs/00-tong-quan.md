@@ -13,7 +13,7 @@ Người dùng đã join một kênh Telegram. Họ muốn tạo bản sao của
 5. Tốc độ tốt: ưu tiên copy phía server, gom batch.
 6. Tránh FLOOD_WAIT và hạn chế bị đánh dấu spam.
 7. Backup một nguồn ra đĩa (`tgmirror backup`, Phase 11a, 2026-09-25) và restore từ đó lên một kênh (`tgmirror restore`, Phase 11b, 2026-09-26, chưa thử trên Telegram thật): cùng D3 (restore hỏi lại lời tuyên bố mỗi lần), cùng pause/stop/resume, luôn tải lên lại (không có copy phía server từ một thư mục); khác `clone` ở chỗ backup có đích là một thư mục thay vì một kênh khác, còn restore có nguồn là một thư mục.
-8. Xoá tin hàng loạt trên chính một kênh user quản trị (`tgmirror delete`, Phase 20, D10, 2026-10-18; đã thử trên Telegram thật 2026-10-23): luôn plan → xác nhận bằng cách gõ lại số tin → apply, đọc lại từng tin ngay trước khi xoá. `edit`/`repost`/`undo` (cùng D10) chưa có.
+8. Xoá tin hàng loạt trên chính một kênh user quản trị (`tgmirror delete`, Phase 20, D10, 2026-10-18; đã thử trên Telegram thật 2026-10-23): luôn plan → xác nhận bằng cách gõ lại số tin → (tùy chọn, Phase 20.2) backup đúng các tin đó → apply, đọc lại từng tin ngay trước khi xoá. `edit`/`repost`/`undo` (cùng D10) chưa có.
 
 ## Không phải mục tiêu (v1)
 

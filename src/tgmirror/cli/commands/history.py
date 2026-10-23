@@ -84,6 +84,9 @@ def _record(item: Run | Backup | Op) -> dict[str, object]:
             "gone": item.gone,
             "failed": item.failed,
             "filter": json.loads(item.filters_json),
+            "backup": {"directory": item.backup_dir, "finished": item.backup_done}
+            if item.backup_dir is not None
+            else None,
         }
     if isinstance(item, Backup):
         return {
@@ -282,6 +285,9 @@ async def _detail_op(store: Store, item: Op, as_json: bool) -> None:
     )
     filter_text = t("history.no_filter") if item.filters_json == "{}" else item.filters_json
     say(t("history.line_filter", filter=filter_text))
+    if item.backup_dir is not None:
+        unfinished = "" if item.backup_done else t("history.line_backup_unfinished")
+        say(t("history.line_backup", dir=item.backup_dir, note=unfinished))
     if floods:
         say(t("history.floods_title"))
         for e in floods:
