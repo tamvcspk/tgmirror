@@ -1,6 +1,6 @@
 [project]
 name = "tgmirror"
-version = "0.2.0"
+version = "0.3.0"
 description = "Clone a Telegram channel you joined into another channel (MTProto, Telethon)."
 readme = "README.md"
 license = "MIT"
