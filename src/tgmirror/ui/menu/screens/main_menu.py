@@ -16,12 +16,16 @@ from tgmirror.ui.menu.screens.channels import ChannelsScreen
 from tgmirror.ui.menu.screens.clone import clone_screen
 from tgmirror.ui.menu.screens.config import ConfigScreen
 from tgmirror.ui.menu.screens.delete import delete_screen
+from tgmirror.ui.menu.screens.edit import edit_screen
 from tgmirror.ui.menu.screens.explore import explore_screen
 from tgmirror.ui.menu.screens.history import HistoryScreen
 from tgmirror.ui.menu.screens.login import login_screen
+from tgmirror.ui.menu.screens.repost import repost_screen
 from tgmirror.ui.menu.screens.restore import restore_screen
 from tgmirror.ui.menu.screens.resume import ResumeScreen
 from tgmirror.ui.menu.screens.status_dashboard import StatusDashboardScreen
+from tgmirror.ui.menu.screens.sync import sync_screen
+from tgmirror.ui.menu.screens.topics import topics_screen
 from tgmirror.ui.menu.widgets import SelectList
 from tgmirror.ui.messages import t
 
@@ -31,6 +35,10 @@ _Action = Literal[
     "explore",
     "backup",
     "delete",
+    "edit",
+    "repost",
+    "topics",
+    "sync",
     "restore",
     "resume",
     "retry",
@@ -77,9 +85,13 @@ class MainMenuScreen(Screen):
                 (t("menu.item_explore"), "explore"),
                 (t("menu.item_backup"), "backup"),
                 (t("menu.item_delete"), "delete"),
+                (t("menu.item_edit"), "edit"),
+                (t("menu.item_repost"), "repost"),
+                (t("menu.item_topics"), "topics"),
                 (t("menu.item_restore"), "restore"),
             ]
             if await self._app.store.list_pairs(1):
+                items.append((t("menu.item_sync"), "sync"))
                 items.append((t("menu.item_resume"), "resume"))
                 items.append((t("menu.item_retry"), "retry"))
             items += [
@@ -118,6 +130,14 @@ class MainMenuScreen(Screen):
                 return ("push", backup_screen(self._app))
             case "delete":
                 return ("push", delete_screen(self._app))
+            case "edit":
+                return ("push", edit_screen(self._app))
+            case "repost":
+                return ("push", repost_screen(self._app))
+            case "topics":
+                return ("push", topics_screen(self._app))
+            case "sync":
+                return ("push", sync_screen(self._app))
             case "restore":
                 return ("push", restore_screen(self._app))
             case "resume" | "retry":

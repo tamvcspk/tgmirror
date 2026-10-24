@@ -84,6 +84,8 @@ class SyncSummary:
     delete_first: tuple[Sample, ...]
     delete_last: tuple[Sample, ...]
     edits_off: str | None = None  # a reason edits were not looked at (``EDITS_OFF_*``)
+    min_id: int = 0  # only copies of source messages from this id ...
+    max_id: int | None = None  # ... up to this one were looked at
 
     @property
     def total(self) -> int:
@@ -123,6 +125,8 @@ async def plan_sync(
     edits: bool = True,
     deletes: bool = True,
     links: LinkRewrite | None = None,
+    min_id: int = 0,
+    max_id: int | None = None,
     notifier: Reporter | None = None,
     nap: Sleep = asyncio.sleep,
 ) -> SyncPlan:
@@ -137,7 +141,11 @@ async def plan_sync(
     guard = await inspect_guard(store, limits, notifier=notifier or NullReporter(), nap=nap)
     reader = guard.reader(gateway)
 
-    rows = await store.mirror_copy_rows(run.mirror_id)
+    rows = [
+        r
+        for r in await store.mirror_copy_rows(run.mirror_id)
+        if r.src_id >= min_id and (max_id is None or r.src_id <= max_id)
+    ]
     edits_off = EDITS_OFF_TOPIC_HASHTAG if run.options.topic_as_hashtag else None
     look_at_edits = edits and edits_off is None
 
@@ -170,7 +178,7 @@ async def plan_sync(
         delete_op = await store.create_op(
             OpSpec(OpKind.DELETE, dst, "{}", json.dumps(common, sort_keys=True)), delete_items
         )
-    return SyncPlan(edit_op, delete_op, summary.of(src, len(rows), edits_off))
+    return SyncPlan(edit_op, delete_op, summary.of(src, len(rows), edits_off, min_id, max_id))
 
 
 class _Counts:
@@ -184,7 +192,14 @@ class _Counts:
         self.delete_first: list[Sample] = []
         self.delete_last: deque[Sample] = deque(maxlen=SAMPLE_EDGE)
 
-    def of(self, src: ChannelInfo, copies: int, edits_off: str | None) -> SyncSummary:
+    def of(
+        self,
+        src: ChannelInfo,
+        copies: int,
+        edits_off: str | None,
+        min_id: int = 0,
+        max_id: int | None = None,
+    ) -> SyncSummary:
         return SyncSummary(
             src_title=src.title,
             copies=copies,
@@ -199,6 +214,8 @@ class _Counts:
             delete_first=tuple(self.delete_first),
             delete_last=tuple(self.delete_last),
             edits_off=edits_off,
+            min_id=min_id,
+            max_id=max_id,
         )
 
 

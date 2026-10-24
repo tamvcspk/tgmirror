@@ -242,6 +242,12 @@ async def resolve(
     return with_topic_flags(loaded, topics or TopicFlags())
 
 
+async def resolve_typed(text: str) -> Transform:
+    """The transform file a person typed at a prompt (the full-screen menu has no flag to give)."""
+    path = await asyncio.to_thread(lambda: Path(text.strip()).expanduser())
+    return await resolve(path)
+
+
 def with_topic_flags(base: Transform, flags: TopicFlags) -> Transform:
     """``base`` with the ``topics`` flags on top: ``--hashtag-to-topic`` adds the rule ``auto:
     all`` stands for, ``--topic-map`` adds renames, ``--topic-default`` and

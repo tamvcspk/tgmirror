@@ -12,6 +12,7 @@ the deletes only start once they finished, and the optional safety-net backup of
 go (``--backup-to``) sits between the two.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
@@ -23,6 +24,8 @@ from tgmirror.cli.commands.delete import DeleteFlow, DeleteOptions, back_up, exe
 from tgmirror.cli.commands.edit import mirror_target
 from tgmirror.cli.errors import Declined, UsageProblem, run
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.core.gateway import ChannelInfo
+from tgmirror.engine.endpoints import find_channel
 from tgmirror.engine.runs import resolve_run
 from tgmirror.engine.sync import SyncPlan, plan_sync
 from tgmirror.engine.transform import Transform
@@ -35,10 +38,13 @@ from tgmirror.ui.messages import t
 
 @dataclass(frozen=True, slots=True)
 class SyncRequest:
-    """What was asked: which of the two kinds of change to look for."""
+    """What was asked: which of the two kinds of change to look for, and among which copies (by
+    the id of the source message)."""
 
     edits: bool = True
     deletes: bool = True
+    min_id: int = 0
+    max_id: int | None = None
 
 
 class SyncFlow(DeleteFlow):
@@ -61,6 +67,8 @@ class SyncFlow(DeleteFlow):
             edits=request.edits,
             deletes=request.deletes,
             links=mirror.links,
+            min_id=request.min_id,
+            max_id=request.max_id,
         )
         if not plan.ops:
             self._echo(t("sync.nothing", dst=mirror.dst.title, **_left(plan)))
@@ -129,9 +137,27 @@ def _resume_commands(plan: SyncPlan) -> str:
     return "; ".join(parts)
 
 
-async def _pick_run(rt: Runtime, store: Store, ref: str | None) -> Run:
-    """The run whose pair is synced: the one named (``R12`` or ``12``), else — at a terminal with
-    more than one pair in history — the person's choice, else the latest run."""
+async def pick_run(
+    rt: Runtime,
+    store: Store,
+    channels: Sequence[ChannelInfo],
+    ref: str | None,
+    src: str | None = None,
+    dst: str | None = None,
+) -> Run:
+    """The run whose pair is synced: the one named (``R12`` or ``12``), the latest of the pair
+    ``--src``/``--dst`` name, else — at a terminal with more than one pair in history — the
+    person's choice, else the latest run."""
+    if src is not None or dst is not None:
+        if ref is not None:
+            raise UsageProblem("sync.pair_and_run")
+        if src is None or dst is None:
+            raise UsageProblem("err.missing_flag", flag="--src" if src is None else "--dst")
+        source, target = find_channel(channels, src), find_channel(channels, dst)
+        found = await store.latest_run(source.id, target.id)
+        if found is None:
+            raise UsageProblem("sync.no_pair", src=source.title, dst=target.title)
+        return found
     if ref is None and rt.interactive:
         pairs = await store.list_pairs(wizard.PAIR_CHOICES)
         if len(pairs) > 1:
@@ -146,6 +172,28 @@ def sync_changes(
         typer.Argument(
             metavar="[R<N>]",
             help="A run of the pair to sync (see `tgmirror history`; default: the latest run).",
+        ),
+    ] = None,
+    src: Annotated[
+        str | None,
+        typer.Option("--src", help="The source of the pair, instead of a run number (with --dst)."),
+    ] = None,
+    dst: Annotated[
+        str | None,
+        typer.Option(
+            "--dst", help="The destination of the pair, instead of a run number (with --src)."
+        ),
+    ] = None,
+    min_id: Annotated[
+        int,
+        typer.Option(
+            "--min-id", min=0, help="Only copies of source messages with this id or a higher one."
+        ),
+    ] = 0,
+    max_id: Annotated[
+        int | None,
+        typer.Option(
+            "--max-id", min=1, help="Only copies of source messages with this id or a lower one."
         ),
     ] = None,
     edits: Annotated[
@@ -220,6 +268,9 @@ def sync_changes(
     Not carried over: changed media, reactions, order. A pair that adds a topic hashtag to its
     copies does not get their edits synced.
 
+    --min-id/--max-id narrow it to the copies of source messages in that id range (a deleted
+    source message has nothing left to filter on, so there are no other filters).
+
     Example: tgmirror sync-changes R12 --backup-to ~/mirror-safety
     """
     rt: Runtime = ctx.obj
@@ -240,9 +291,9 @@ def sync_changes(
         async with authorized(rt) as conn:
             channels = await conn.gateway.list_channels()
             async with opened_store(rt) as store:
-                target = await _pick_run(rt, store, ref)
+                target = await pick_run(rt, store, channels, ref, src, dst)
                 flow = SyncFlow(rt, store, conn.gateway, channels, options)
-                plan = await flow.planned_sync(target, SyncRequest(edits, deletes))
+                plan = await flow.planned_sync(target, SyncRequest(edits, deletes, min_id, max_id))
                 if plan is None or not await flow.confirmed_sync(plan):
                     return
                 if (

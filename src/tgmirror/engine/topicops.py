@@ -229,11 +229,13 @@ async def plan_split(
     transform: Transform,
     limits: Limits,
     *,
+    spec: FilterSpec | None = None,
     silent: bool = True,
     notifier: Reporter | None = None,
     nap: Sleep = asyncio.sleep,
 ) -> MovePlan:
-    """Freeze the units of ``topic`` that the transform's routing rules send to another topic."""
+    """Freeze the units of ``topic`` that the transform's routing rules send to another topic
+    (and that ``spec``, a filter narrowing which messages are looked at, selects)."""
     if not transform.topics.routing:
         raise TopicError("topics.split_needs_rules")
     if transform.caption or transform.rewrite_links or transform.keep_forward_header:
@@ -244,7 +246,10 @@ async def plan_split(
     titles = {t.id: t.title for t in topics}
     units = (await _scan(guard, gateway, forum, [topic.id]))[topic.id]
     plan = _Plan()
+    narrow = None if spec is None or spec.is_empty else Matcher(spec)
     for unit in units:
+        if narrow is not None and not narrow.matches(unit):
+            continue
         routed = transform.topics.route(unit, titles)
         if routed is None or folded(routed.title) == folded(topic.title):
             continue  # stays where it is

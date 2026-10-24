@@ -18,8 +18,9 @@
 that is not a verb is read as the forum to list (``TopicsGroup``).
 """
 
+import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated
 
@@ -35,8 +36,35 @@ from tgmirror.cli.commands.delete import (
     execute,
 )
 from tgmirror.cli.errors import Declined, UsageProblem, run
+from tgmirror.cli.filter_options import (
+    AlbumOption,
+    ContainsOption,
+    ExcludeMediaOption,
+    ExcludeRegexOption,
+    FilterFileOption,
+    ForwardedFromOption,
+    ForwardedOption,
+    FromUserOption,
+    HashtagOption,
+    HasLinkOption,
+    LinkDomainOption,
+    MaxSizeOption,
+    MediaOption,
+    MinSizeOption,
+    RegexOption,
+    SinceOption,
+    UntilOption,
+    collect,
+)
 from tgmirror.cli.refs import SOURCE_HELP, SourceCommand
 from tgmirror.cli.runtime import Runtime, authorized, opened_store
+from tgmirror.cli.selection_options import (
+    ExactOption,
+    SelectionOption,
+    check_args,
+    for_channel,
+    narrowed,
+)
 from tgmirror.cli.transform_options import (
     TopicPickOption,
     TopicRegexOption,
@@ -218,6 +246,7 @@ class MoveFlow(DeleteFlow):
                     topic,
                     self._transform,
                     limits,
+                    spec=o.filters,
                     silent=not o.notify,
                 )
                 nothing = t("move.nothing_split", topic=topic.title)
@@ -369,6 +398,25 @@ def split(
     topic_skip: TopicSkipOption = None,
     topic_regex: TopicRegexOption = None,
     topic_pick: TopicPickOption = None,
+    media: MediaOption = None,
+    hashtag: HashtagOption = None,
+    contains: ContainsOption = None,
+    regex: RegexOption = None,
+    exclude_regex: ExcludeRegexOption = None,
+    exclude_media: ExcludeMediaOption = None,
+    since: SinceOption = None,
+    until: UntilOption = None,
+    min_size: MinSizeOption = None,
+    max_size: MaxSizeOption = None,
+    album: AlbumOption = None,
+    filter_file: FilterFileOption = None,
+    from_user: FromUserOption = None,
+    forwarded: ForwardedOption = None,
+    forwarded_from: ForwardedFromOption = None,
+    has_link: HasLinkOption = False,
+    link_domain: LinkDomainOption = None,
+    selection_file: SelectionOption = None,
+    exact: ExactOption = False,
     notify: NotifyOption = False,
     expect: ExpectOption = None,
     backup_to: BackupToOption = None,
@@ -387,25 +435,66 @@ def split(
     messages back (or --yes --expect N); at a terminal it asks about a backup. Carry on with
     `tgmirror topics move --resume O<n>`.
 
+    The filter flags (or a --selection file, whose `transform:` can carry the rules) narrow which
+    messages of TOPIC are looked at; the rules then decide where those go.
+
     Example: tgmirror topics split "@my_forum" "Misc" --hashtag-to-topic --topic-skip "#ads"
     """
     rt: Runtime = ctx.obj
 
     async def command() -> None:
-        options = _move_options(
-            forum=forum,
-            resume=None,
-            expect=expect,
-            backup_to=backup_to,
-            no_backup=no_backup,
-            admin_ack=admin_ack,
-            force_takeover=force_takeover,
-            yes=yes,
-            notify=notify,
+        filters = collect(
+            media=media,
+            hashtag=hashtag,
+            contains=contains,
+            regex=regex,
+            exclude_regex=exclude_regex,
+            exclude_media=exclude_media,
+            since=since,
+            until=until,
+            min_size=min_size,
+            max_size=max_size,
+            album=album,
+            filter_file=filter_file,
+            from_user=from_user,
+            topic=None,
+            forwarded=forwarded,
+            forwarded_from=forwarded_from,
+            has_link=has_link,
+            link_domain=link_domain,
+        )  # a bad filter is a usage error before anything is asked or read
+        check_args(selection_file, exact, filter_file)
+        options = replace(
+            _move_options(
+                forum=forum,
+                resume=None,
+                expect=expect,
+                backup_to=backup_to,
+                no_backup=no_backup,
+                admin_ack=admin_ack,
+                force_takeover=force_takeover,
+                yes=yes,
+                notify=notify,
+            ),
+            filters=filters,
         )
+        from_selection: Transform | None = None
+        if selection_file is not None:
+            async with authorized(rt) as conn:
+                known = await conn.gateway.list_channels()
+            chosen, named, from_selection = await asyncio.to_thread(
+                for_channel,
+                rt.paths,
+                known,
+                src=forum,
+                selection=selection_file,
+                exact=exact,
+                takes_transform=True,
+            )
+            options = replace(options, filters=narrowed(chosen, filters), src=named)
         transform = await resolve(
             transform_file,
-            None,
+            from_selection,
             topics=topic_flags(
                 hashtag_to_topic=hashtag_to_topic,
                 topic_skip=topic_skip,
@@ -653,6 +742,43 @@ async def _confirm_small(rt: Runtime, yes: bool, question: str) -> None:
         raise Declined
 
 
+async def apply_change(
+    rt: Runtime,
+    store: Store,
+    gateway: TelegramGateway,
+    channels: Sequence[ChannelInfo],
+    forum_ref: str | None,
+    topic_ref: str | None,
+    *,
+    yes: bool,
+    title: str | None = None,
+    closed: bool | None = None,
+) -> str:
+    """Rename, close or reopen one topic after the small confirmation; returns the line that says
+    it was done. Shared by the command and the full-screen menu (which hands over its own ``rt``
+    with the menu's prompter)."""
+    forum = await pick_forum(rt, channels, forum_ref)
+    topic = await pick_topic(rt, gateway, forum, topic_ref)
+    try:
+        # Telegram's list of topics lags behind a change by a few seconds: the topic picked
+        # above is the one that is acted on, not a second reading of the list
+        forum, _ = await find_topic(store, gateway, forum, str(topic.id), rt.config().limits)
+        if title is not None:
+            key, done = "topics.confirm_rename", "topics.done_rename"
+        elif closed:
+            key, done = "topics.confirm_close", "topics.done_close"
+        else:
+            key, done = "topics.confirm_reopen", "topics.done_reopen"
+        question = t(key, name=topic.title, old=topic.title, new=title or "", chat=forum.title)
+        await _confirm_small(rt, yes, question)
+        await change_topic(
+            store, gateway, forum, topic, rt.config().limits, title=title, closed=closed
+        )
+    except TopicError as exc:
+        raise UsageProblem(exc.key, **exc.params) from exc
+    return t(done, name=topic.title, old=topic.title, new=title or "")
+
+
 async def _change(
     rt: Runtime,
     forum_ref: str | None,
@@ -664,37 +790,19 @@ async def _change(
 ) -> None:
     async with authorized(rt) as conn:
         channels = await conn.gateway.list_channels()
-        forum = await pick_forum(rt, channels, forum_ref)
-        topic = await pick_topic(rt, conn.gateway, forum, topic_ref)
         async with opened_store(rt) as store:
-            try:
-                # Telegram's list of topics lags behind a change by a few seconds: the topic
-                # picked above is the one that is acted on, not a second reading of the list
-                forum, _ = await find_topic(
-                    store, conn.gateway, forum, str(topic.id), rt.config().limits
-                )
-                if title is not None:
-                    key, done = "topics.confirm_rename", "topics.done_rename"
-                elif closed:
-                    key, done = "topics.confirm_close", "topics.done_close"
-                else:
-                    key, done = "topics.confirm_reopen", "topics.done_reopen"
-                question = t(
-                    key, name=topic.title, old=topic.title, new=title or "", chat=forum.title
-                )
-                await _confirm_small(rt, yes, question)
-                await change_topic(
-                    store,
-                    conn.gateway,
-                    forum,
-                    topic,
-                    rt.config().limits,
-                    title=title,
-                    closed=closed,
-                )
-            except TopicError as exc:
-                raise UsageProblem(exc.key, **exc.params) from exc
-        typer.echo(t(done, name=topic.title, old=topic.title, new=title or ""))
+            line = await apply_change(
+                rt,
+                store,
+                conn.gateway,
+                channels,
+                forum_ref,
+                topic_ref,
+                yes=yes,
+                title=title,
+                closed=closed,
+            )
+    typer.echo(line)
 
 
 @topics_app.command("rename", cls=SourceCommand)

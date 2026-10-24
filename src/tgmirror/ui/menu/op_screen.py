@@ -1,5 +1,6 @@
-"""The screen a ``delete`` drives while it works (Phase 20.2, docs/06-lo-trinh.md) — mirrors
-``backup_screen.py::BackupScreen``, but for an operation on a chat's own messages.
+"""The screen an operation on a chat's own messages drives while it works (Phase 20.2,
+docs/06-lo-trinh.md; ``delete``, ``edit``, ``repost``, the topic moves and ``sync-changes``) —
+mirrors ``backup_screen.py::BackupScreen``.
 
 One task, two stretches: when the person asked for the safety net, the plan's messages are backed up
 first (``BackupWriter`` with the ids the plan froze, drawn by ``BackupTuiReporter``), and only if
@@ -10,8 +11,9 @@ saved and deletes nothing. The control loop (``stop_on_interrupt``, reporting on
 """
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from rich.console import Group, RenderableType
 from rich.text import Text
@@ -21,6 +23,7 @@ from tgmirror.core.gateway import TelegramGateway
 from tgmirror.engine.backup import BackupWriter
 from tgmirror.engine.ops import OpBackup, OpRunner, begin_op, settle_op_backup
 from tgmirror.engine.status import op_estimate
+from tgmirror.engine.transfer import Transfer
 from tgmirror.store.db import Store, utc_now
 from tgmirror.store.ops import Op, OpStatus
 from tgmirror.ui.lines import (
@@ -77,12 +80,16 @@ class OpTuiReporter:
     def progress(self, op: Op) -> None:
         self._op = op
 
+    def transfer(self, transfer: Transfer) -> None:
+        """A repost or a move downloads and uploads: the same \"big file\" lines a clone prints."""
+        self._lines.transfer(transfer)
+
     def render(self) -> RenderableType:
         op = self._op
         est = op_estimate(op, now=self._now(), live=not self._paused)
         progress = progress_line(op.handled, op.planned, est.fraction, est.speed, est.eta)
         counts = t(
-            "delete.progress",
+            f"{op.kind}.progress",
             id=op.id,
             done=op.done,
             planned=op.planned,
@@ -111,8 +118,16 @@ class OpScreen(TaskScreen[Op]):
         *,
         limits: Limits,
         backup: OpBackup | None = None,
+        ack: bool = False,
+        tmp_dir: Path | None = None,
+        then: Sequence[Op] = (),
+        backup_of: Op | None = None,
     ) -> None:
         super().__init__()
+        self._backup_of = backup_of  # the operation the backup is for, when not the first one
+        self._ack = ack  # decision D3's statement, for an operation that downloads
+        self._tmp_dir = tmp_dir
+        self._then = list(then)  # operations to carry out one after another once this one is done
         self.op_id = op.id  # MenuApp reads this so its "running elsewhere" badge skips it
         self._store = store
         self._gateway = gateway
@@ -130,17 +145,33 @@ class OpScreen(TaskScreen[Op]):
 
     async def _run(self) -> Op:
         op = self._op
-        if self._backup is not None and not await self._back_up(op, self._backup):
+        if self._backup is not None and not await self._back_up(
+            self._backup_of or op, self._backup
+        ):
             final = await self._store.get_op(op.id)
             assert final is not None
             return final  # still planned: nothing was deleted
-        running = await begin_op(self._store, op.id)
-        if self._backup is not None:  # the backup's lines are above; say what comes now
+        final = await self._carry_out(op, announce=self._backup is not None)
+        for following in self._then:  # the next only when this one finished: `sync-changes`
+            if final.status is not OpStatus.DONE:
+                break
+            self._lines.extend(delete_result_lines(final))
+            final = await self._carry_out(following, announce=True)
+        return final
+
+    async def _carry_out(self, op: Op, *, announce: bool) -> Op:
+        running = await begin_op(self._store, op.id, gateway=self._gateway, ack=self._ack)
+        if announce:  # what came before is above; say what comes now
             self._lines.append(delete_start_line(running))
         reporter = OpTuiReporter(running)
         self._reporter = reporter
         runner = OpRunner(
-            self._store, self._gateway, self._limits, reporter=reporter, control=self._control
+            self._store,
+            self._gateway,
+            self._limits,
+            reporter=reporter,
+            control=self._control,
+            tmp_dir=self._tmp_dir,
         )
         return await runner.run(running)
 

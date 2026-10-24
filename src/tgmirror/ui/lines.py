@@ -319,6 +319,10 @@ def sync_plan_lines(run: Run, plan: SyncPlan) -> list[str]:
     sample of the copies that would go, and what is left alone and why."""
     s = plan.summary
     lines = [t("sync.plan_header", src=s.src_title, dst=run.dst_title, run=run.id, copies=s.copies)]
+    if s.min_id or s.max_id is not None:
+        lines.append(
+            t("sync.plan_range", low=s.min_id, high=s.max_id if s.max_id is not None else "…")
+        )
     if s.edits_off is not None:
         lines.append(t(f"sync.edits_off_{s.edits_off}"))
     if plan.edit is not None:

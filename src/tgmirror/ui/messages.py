@@ -826,6 +826,19 @@ VI: dict[str, str] = {
     "explore.list_title": "Tin khớp (hiện {shown} trên {total})",
     "menu.item_backup": "Backup…",
     "menu.item_delete": "Xoá tin trong kênh của mình…",
+    "menu.item_edit": "Sửa chữ của tin trong kênh của mình…",
+    "menu.item_repost": "Đăng lại tin trong kênh của mình…",
+    "menu.item_topics": "Topic của một forum (chia, gộp, xoá, đổi tên…)…",
+    "menu.item_sync": "Đồng bộ thay đổi của nguồn sang bản sao…",
+    "menu.ask_transform": "File transform (các thao tác `caption` hoặc luật `topics`)?",
+    "menu.ask_delete_original": "Xoá bản gốc sau khi bản đăng lại đã có?",
+    "menu.topics_pick": "Làm gì với topic?",
+    "menu.topics_split": "Chia một topic theo luật định tuyến",
+    "menu.topics_merge": "Gộp topic",
+    "menu.topics_delete": "Xoá một topic cùng các tin trong nó",
+    "menu.topics_rename": "Đổi tên một topic",
+    "menu.topics_close": "Đóng một topic",
+    "menu.topics_reopen": "Mở lại một topic",
     "menu.item_restore": "Restore…",
     "menu.item_resume": "Chạy tiếp",
     "menu.item_retry": "Thử lại tin lỗi",
@@ -1865,6 +1878,19 @@ EN: dict[str, str] = {
     "explore.list_title": "Matching messages (showing {shown} of {total})",
     "menu.item_backup": "Backup...",
     "menu.item_delete": "Delete messages from a chat of mine...",
+    "menu.item_edit": "Edit the text of messages in a chat of mine...",
+    "menu.item_repost": "Post messages again in a chat of mine...",
+    "menu.item_topics": "Topics of a forum (split, merge, delete, rename...)...",
+    "menu.item_sync": "Carry a source's changes over to its copies...",
+    "menu.ask_transform": "Transform file (`caption` operations or `topics` rules)?",
+    "menu.ask_delete_original": "Delete the originals once their copies exist?",
+    "menu.topics_pick": "What to do with topics?",
+    "menu.topics_split": "Split a topic by routing rules",
+    "menu.topics_merge": "Merge topics",
+    "menu.topics_delete": "Delete a topic with its messages",
+    "menu.topics_rename": "Rename a topic",
+    "menu.topics_close": "Close a topic",
+    "menu.topics_reopen": "Reopen a topic",
     "menu.item_restore": "Restore...",
     "menu.item_resume": "Continue",
     "menu.item_retry": "Retry failures",
@@ -2498,6 +2524,11 @@ VI.update(
             "Phần sửa O{id} chưa xong ({status}), nên phần xoá chưa bắt đầu. Làm tiếp: {commands}."
         ),
         "history.line_sync": "Đồng bộ:     theo nguồn {src}, lần chạy R{run}",
+        "sync.plan_range": "  Chỉ xét các bản sao của tin nguồn có id từ {low} tới {high}.",
+        "sync.no_pair": (
+            "Chưa có lần chạy nào của cặp «{src}» → «{dst}»: sao chép trước (`tgmirror clone`)."
+        ),
+        "sync.pair_and_run": "Cặp có thể gọi bằng R<n> hoặc bằng --src và --dst, không cả hai.",
     }
 )
 EN.update(
@@ -2557,6 +2588,11 @@ EN.update(
             "with: {commands}."
         ),
         "history.line_sync": "Synced:      from source {src}, run R{run}",
+        "sync.plan_range": (
+            "  Only the copies of source messages with ids {low} to {high} were looked at."
+        ),
+        "sync.no_pair": "No run of the pair '{src}' -> '{dst}' yet: copy first (`tgmirror clone`).",
+        "sync.pair_and_run": "Name the pair with R<n> or with --src and --dst, not both.",
     }
 )
 

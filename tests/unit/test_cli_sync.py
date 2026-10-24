@@ -422,3 +422,43 @@ def test_a_pair_that_adds_a_topic_hashtag_has_no_edits_synced(
             return found.edit is None, found.delete is not None
 
     assert asyncio.run(plan()) == (True, True)
+
+
+def test_the_pair_can_be_named_by_its_chats_instead_of_a_run(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    rt, src, dst = pair(make_runtime, gateway)
+    gateway.delete_message(src.id, 4)
+
+    named = cli.invoke(
+        app, [*SYNC, "--src", "Source", "--dst", "Copy", "--yes", "--expect", "1"], obj=rt
+    )
+    assert named.exit_code == 0, named.output
+    assert texts(gateway, dst) == ["one", "two", "three"]
+
+    other = gateway.add_channel("Elsewhere")
+    unknown = cli.invoke(app, [*SYNC, "--src", "Source", "--dst", other.title], obj=rt)
+    both = cli.invoke(app, [*SYNC, "R1", "--src", "Source", "--dst", "Copy"], obj=rt)
+    half = cli.invoke(app, [*SYNC, "--src", "Source"], obj=rt)
+
+    assert unknown.exit_code == 2 and "Elsewhere" in unknown.output
+    assert both.exit_code == 2 and half.exit_code == 2
+
+
+def test_only_the_copies_in_an_id_range_of_the_source_are_looked_at(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> None:
+    rt, src, dst = pair(make_runtime, gateway)
+    gateway.delete_message(src.id, 1)
+    gateway.delete_message(src.id, 4)
+    edit_source(gateway, src, 3, "three, edited")
+
+    result = cli.invoke(app, [*SYNC, "--min-id", "2", "--max-id", "3"], obj=rt)
+
+    assert result.exit_code == 2
+    assert "ids 2 to 3" in result.output and "three, edited" in result.output
+    assert "O2" not in result.output  # no delete plan: ids 1 and 4 are out of range
+
+    done = cli.invoke(app, [*SYNC, "--min-id", "4", "--yes", "--expect", "1"], obj=rt)
+    assert done.exit_code == 0, done.output
+    assert texts(gateway, dst) == ["one", "two", "three"]  # 4 went, 1 was not in range

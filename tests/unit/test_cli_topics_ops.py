@@ -505,3 +505,53 @@ def test_general_cannot_be_renamed_or_closed(
     result = cli.invoke(app, ["topics", "close", "Forum", "General", "--yes"], obj=rt)
 
     assert result.exit_code == 2 and "General" in result.output
+
+
+def test_a_filter_narrows_which_messages_of_the_topic_are_looked_at(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    forum = Forum(gateway)
+    rt = make_runtime(gateway=gateway)
+
+    result = cli.invoke(
+        app,
+        [
+            "topics",
+            "split",
+            "Forum",
+            "Misc",
+            *route_file(tmp_path),
+            "--contains",
+            "b2",
+            "--yes",
+            "--expect",
+            "1",
+        ],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert forum.texts(forum.topic_id("B")) == ["b2 #b"]
+    assert forum.texts(forum.misc) == ["m1", "b1 #b", "m2"]  # b1 matches the rule, not the filter
+
+
+def test_a_selection_file_carries_both_the_filter_and_the_rules(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    forum = Forum(gateway)
+    rt = make_runtime(gateway=gateway)
+    path = tmp_path / "chosen.yaml"
+    path.write_text(
+        "version: 1\nfilter: {include: [{contains: ['b1']}]}\ntransform:\n  topics:\n"
+        "    route:\n      - {when: {hashtag: ['#b']}, to: 'B'}\n",
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(
+        app,
+        ["topics", "split", "Forum", "Misc", "--selection", str(path), "--yes", "--expect", "1"],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert forum.texts(forum.topic_id("B")) == ["b1 #b"]
