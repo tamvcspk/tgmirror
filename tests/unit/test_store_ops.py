@@ -174,3 +174,24 @@ async def test_options_are_merged_and_read_back_as_the_plans_backup(store: Store
 async def test_options_of_a_missing_operation_are_an_error(store: Store) -> None:
     with pytest.raises(StoreError):
         await store.set_op_options(99, backup_done=True)
+
+
+async def test_an_operation_left_running_by_a_killed_process_can_be_taken_up_again(
+    store: Store, clock: Clock
+) -> None:
+    op = await store.create_op(OpSpec(OpKind.DELETE, CHAT), items(1, 2))
+    await store.start_op(op.id)  # the process dies here: the row stays ``running``
+
+    with pytest.raises(OpBusy):  # its heartbeat is still fresh: it may be alive
+        await store.start_op(op.id)
+    clock.now += HEARTBEAT_TIMEOUT + timedelta(seconds=1)  # ... and now it is clearly dead
+    again = await store.start_op(op.id)
+
+    assert again.status is OpStatus.RUNNING
+
+
+async def test_force_takes_up_a_running_operation_whose_heartbeat_is_fresh(store: Store) -> None:
+    op = await store.create_op(OpSpec(OpKind.DELETE, CHAT), items(1))
+    await store.start_op(op.id)
+
+    assert (await store.start_op(op.id, force=True)).status is OpStatus.RUNNING

@@ -2078,6 +2078,242 @@ EN: dict[str, str] = {
 }
 
 
+# ---- edit and undo (phase 20.3) ---------------------------------------------------------------
+# The messages ``tgmirror edit`` and ``tgmirror undo`` share with ``delete`` are the same sentences
+# with another verb and command, so they are written once and filled in here (``<verb>``,
+# ``<cmd>``).
+
+_OP_VI = {
+    "needs_expect": (
+        "--yes cần đi kèm --expect N, với N là số tin trong kế hoạch ({count}): để một bộ lọc "
+        "khớp nhiều hơn bạn nghĩ không <verb> nhầm."
+    ),
+    "expect_mismatch": (
+        "Kế hoạch có {count} tin, không phải {expected} như --expect. Chưa <verb> gì."
+    ),
+    "needs_yes": (
+        "Chưa <verb> gì. Kế hoạch O{id} ({count} tin) đã được lưu; để <verb>, chạy: "
+        "<cmd> --resume O{id} --yes --expect {count}"
+    ),
+    "cancelled": "Đã bỏ kế hoạch O{id}; chưa <verb> gì.",
+    "finished": "Thao tác O{id} đang ở trạng thái «{status}»; không còn gì để làm.",
+    "start": "Thao tác O{id}: <verb> {count} tin trong «{chat}».",
+    "progress": (
+        "O{id}: {done}/{planned} tin đã <verb>, {skipped} để nguyên (đã đổi), {gone} đã mất "
+        "sẵn, {failed} lỗi."
+    ),
+    "result": "Thao tác O{id}: {status}. {done}/{planned} tin đã <verb>.",
+    "left_alone": (
+        "{count} tin đã thay đổi từ lúc lập kế hoạch nên được để nguyên (không còn đọc như lúc "
+        "lập kế hoạch)."
+    ),
+    "gone": "{count} tin đã không còn khi tới lượt (có người xoá trước).",
+    "failed": "{count} tin Telegram không cho <verb> (lý do ở `tgmirror history O{id}`).",
+    "continue_hint": "Làm tiếp phần còn lại: <cmd> --resume O{id}",
+    "settled": (
+        "Lần trước dừng giữa chừng: {deleted} tin đã <verb> xong, {again} tin chưa đổi sẽ làm tiếp."
+    ),
+    "flood_stopped": (
+        "Telegram yêu cầu chờ {seconds}s. Thao tác được lưu ở trạng thái chờ đến {resume_at}; "
+        "chạy lại với `<cmd> --resume` sau đó."
+    ),
+}
+
+_OP_EN = {
+    "needs_expect": (
+        "--yes must come with --expect N, N being the number of messages in the plan ({count}): "
+        "so a filter that matches more than you thought <verb>s nothing it should not."
+    ),
+    "expect_mismatch": (
+        "The plan holds {count} messages, not {expected} as --expect says. Nothing done."
+    ),
+    "needs_yes": (
+        "Nothing done. Plan O{id} ({count} messages) is saved; to go on, run: "
+        "<cmd> --resume O{id} --yes --expect {count}"
+    ),
+    "cancelled": "Plan O{id} dropped; nothing done.",
+    "finished": "Operation O{id} is «{status}»; there is nothing left to do.",
+    "start": "Operation O{id}: <verb> {count} messages in '{chat}'.",
+    "progress": (
+        "O{id}: {done}/{planned} messages done, {skipped} left alone (changed), {gone} already "
+        "gone, {failed} failed."
+    ),
+    "result": "Operation O{id}: {status}. {done}/{planned} messages done.",
+    "left_alone": (
+        "{count} messages changed since the plan was made and were left alone (they no longer "
+        "read as they did)."
+    ),
+    "gone": "{count} messages were no longer there when their turn came (someone deleted them).",
+    "failed": (
+        "{count} messages Telegram would not let us <verb> (reasons in `tgmirror history O{id}`)."
+    ),
+    "continue_hint": "Carry on with the rest: <cmd> --resume O{id}",
+    "settled": (
+        "The last go stopped midway: {deleted} messages were done, {again} still unchanged will "
+        "be done now."
+    ),
+    "flood_stopped": (
+        "Telegram asks to wait {seconds}s. The operation is saved waiting until {resume_at}; run "
+        "`<cmd> --resume` after that."
+    ),
+}
+
+
+def _op_texts(table: dict[str, str], prefix: str, verb: str, cmd: str) -> dict[str, str]:
+    return {
+        f"{prefix}.{key}": text.replace("<verb>", verb).replace("<cmd>", cmd)
+        for key, text in table.items()
+    }
+
+
+VI.update(_op_texts(_OP_VI, "edit", "sửa", "tgmirror edit"))
+VI.update(_op_texts(_OP_VI, "undo", "trả lại", "tgmirror undo"))
+EN.update(_op_texts(_OP_EN, "edit", "edit", "tgmirror edit"))
+EN.update(_op_texts(_OP_EN, "undo", "put back", "tgmirror undo"))
+
+VI.update(
+    {
+        "edit.no_admin_channels": "Bạn không quản trị kênh/nhóm nào, nên không có gì để sửa.",
+        "edit.pick_source": "Sửa tin trong kênh/nhóm nào?",
+        "edit.needs_filter": (
+            "Bộ lọc trống sẽ xét TẤT CẢ tin của kênh. Nếu đúng ý bạn, thêm --all; nếu không, "
+            "thêm bộ lọc (--media, --hashtag, --since, --selection, ...)."
+        ),
+        "edit.confirm_all": (
+            "Không có bộ lọc: kế hoạch sẽ xét TẤT CẢ tin của «{chat}». Vẫn lập kế hoạch?"
+        ),
+        "edit.needs_transform": (
+            "Cần --transform (hoặc một selection có `transform:`) với ít nhất một thao tác "
+            "`caption`: sửa tin chỉ làm được những gì transform nói."
+        ),
+        "edit.unsupported": (
+            "Transform có {what}: sửa tin tại chỗ chỉ làm được các thao tác `caption` (và "
+            "`text_too`). Đổi topic hay đăng lại là việc của `repost`/`topics split`; link, reply "
+            "và header forward chỉ có nghĩa khi sao chép."
+        ),
+        "edit.nothing": (
+            "Không tin nào trong «{chat}» đổi với transform này: {unchanged} tin được chọn giữ "
+            "nguyên, {lossy} tin có định dạng không viết lại nguyên vẹn được (không bao giờ sửa)."
+        ),
+        "edit.plan_header": (
+            "Kế hoạch sửa O{id} trong «{chat}»: {messages} tin sẽ đổi ({units} đơn vị)."
+        ),
+        "edit.plan_left_out": (
+            "  để nguyên: {unchanged} tin được chọn nhưng transform không đổi gì; {lossy} tin có "
+            "định dạng không viết lại nguyên vẹn được (không bao giờ sửa)."
+        ),
+        "edit.plan_diff": "  id {id}\n    trước: {before}\n    sau:   {after}",
+        "edit.type_count": (
+            "Việc này sửa {count} tin trong «{chat}». Bản gốc được lưu: `tgmirror undo O{id}` "
+            "trả lại. Gõ {count} để sửa"
+        ),
+        "edit.undo_hint": "Trả lại bản gốc: tgmirror undo O{id}",
+        "undo.type_count": (
+            "Việc này đặt lại nội dung gốc của {count} tin trong «{chat}». Gõ {count} để làm"
+        ),
+        "undo.plan_header": (
+            "Kế hoạch trả lại O{id} (hoàn tác sửa O{edit}) trong «{chat}»: {messages} tin."
+        ),
+        "undo.not_an_edit": "O{id} không phải một thao tác sửa: chỉ `edit` mới hoàn tác được.",
+        "undo.never_applied": "Sửa O{id} chưa từng được áp dụng (chỉ mới là kế hoạch hoặc đã bỏ).",
+        "undo.already": "Sửa O{id} đã được hoàn tác bởi O{undo}.",
+        "undo.nothing": "Sửa O{id} chưa sửa được tin nào, không có gì để trả lại.",
+        "undo.no_edit": "Chưa có thao tác sửa nào để hoàn tác.",
+        "op.wrong_kind": (
+            "O{id} là thao tác «{kind}», không phải «{expected}»: dùng `tgmirror {kind} --resume "
+            "O{id}`."
+        ),
+        "history.op_kind_edit": "sửa tin",
+        "history.op_kind_undo": "trả lại bản gốc",
+        "history.line_undo_of": "Hoàn tác:    sửa O{id}",
+        "history.failed_items": (
+            "Tin Telegram không cho sửa ({count}); lý do là lời Telegram trả lời:"
+        ),
+        "history.failed_item": "  id {id}: {reason}",
+        "history.line_counts_edit": (
+            "Kết quả:     {done} đã sửa, {skipped} để nguyên, {gone} đã mất sẵn, {failed} lỗi "
+            "(kế hoạch {planned} tin)"
+        ),
+        "history.line_counts_undo": (
+            "Kết quả:     {done} đã trả lại, {skipped} để nguyên, {gone} đã mất sẵn, {failed} "
+            "lỗi (kế hoạch {planned} tin)"
+        ),
+    }
+)
+EN.update(
+    {
+        "edit.no_admin_channels": (
+            "You do not administer any channel or group, so there is nothing to edit."
+        ),
+        "edit.pick_source": "Edit messages in which channel or group?",
+        "edit.needs_filter": (
+            "An empty filter takes in EVERY message of the chat. If that is what you mean, add "
+            "--all; otherwise add a filter (--media, --hashtag, --since, --selection, ...)."
+        ),
+        "edit.confirm_all": (
+            "No filter: the plan will look at EVERY message of '{chat}'. Plan it anyway?"
+        ),
+        "edit.needs_transform": (
+            "Needs --transform (or a selection with a `transform:`) with at least one `caption` "
+            "operation: editing only does what a transform says."
+        ),
+        "edit.unsupported": (
+            "The transform has {what}: editing in place only does the `caption` operations (and "
+            "`text_too`). Moving to a topic or posting again is for `repost`/`topics split`; "
+            "links, replies and the forward header only mean something when copying."
+        ),
+        "edit.nothing": (
+            "No message in '{chat}' changes with this transform: {unchanged} selected messages "
+            "stay as they are, {lossy} have formatting that cannot be written back exactly (never "
+            "edited)."
+        ),
+        "edit.plan_header": (
+            "Edit plan O{id} in '{chat}': {messages} messages would change ({units} units)."
+        ),
+        "edit.plan_left_out": (
+            "  left as they are: {unchanged} selected messages the transform does not change; "
+            "{lossy} with formatting that cannot be written back exactly (never edited)."
+        ),
+        "edit.plan_diff": "  id {id}\n    before: {before}\n    after:  {after}",
+        "edit.type_count": (
+            "This edits {count} messages in '{chat}'. The originals are kept: `tgmirror undo "
+            "O{id}` puts them back. Type {count} to edit"
+        ),
+        "edit.undo_hint": "Put the originals back: tgmirror undo O{id}",
+        "undo.type_count": (
+            "This puts the original text back on {count} messages in '{chat}'. Type {count} to "
+            "do it"
+        ),
+        "undo.plan_header": (
+            "Undo plan O{id} (reverses edit O{edit}) in '{chat}': {messages} messages."
+        ),
+        "undo.not_an_edit": "O{id} is not an edit: only `edit` can be undone.",
+        "undo.never_applied": "Edit O{id} was never applied (it is only a plan, or was dropped).",
+        "undo.already": "Edit O{id} was already undone by O{undo}.",
+        "undo.nothing": "Edit O{id} changed no message, so there is nothing to put back.",
+        "undo.no_edit": "There is no edit to undo yet.",
+        "op.wrong_kind": (
+            "O{id} is a '{kind}' operation, not '{expected}': use `tgmirror {kind} --resume O{id}`."
+        ),
+        "history.op_kind_edit": "edit messages",
+        "history.op_kind_undo": "put the originals back",
+        "history.line_undo_of": "Undoes:      edit O{id}",
+        "history.failed_items": (
+            "Messages Telegram would not let us edit ({count}); the reasons are its answers:"
+        ),
+        "history.failed_item": "  id {id}: {reason}",
+        "history.line_counts_edit": (
+            "Result:      {done} edited, {skipped} left alone, {gone} already gone, {failed} "
+            "failed (plan of {planned} messages)"
+        ),
+        "history.line_counts_undo": (
+            "Result:      {done} put back, {skipped} left alone, {gone} already gone, "
+            "{failed} failed (plan of {planned} messages)"
+        ),
+    }
+)
+
+
 def t(key: str, env: Mapping[str, str] | None = None, **params: object) -> str:
     """Look up ``key`` in the active language, falling back to English, then format it."""
     lang = (os.environ if env is None else env).get(ENV_LANG, "vi").lower()

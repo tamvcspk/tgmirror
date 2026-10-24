@@ -34,7 +34,7 @@ from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store, utc_now
 from tgmirror.store.ops import Op, OpStatus
 from tgmirror.store.runs import Run, RunStatus
-from tgmirror.ui.lines import budget_lines, flood_kind
+from tgmirror.ui.lines import budget_lines, flood_kind, op_counts_line
 from tgmirror.ui.messages import t
 from tgmirror.ui.progress import duration
 
@@ -331,16 +331,7 @@ def _op_text(report: OpStatusReport) -> str:
     else:
         eta = t("status.eta", eta=duration(est.eta)) if est.eta is not None else ""
         lines.append(t("status.line_speed", speed=f"{est.speed:.1f}", eta=eta))
-    lines.append(
-        t(
-            "history.line_counts_op",
-            done=op.done,
-            skipped=op.skipped,
-            gone=op.gone,
-            failed=op.failed,
-            planned=op.planned,
-        )
-    )
+    lines.append(op_counts_line(op))
     if op.backup_dir is not None:
         unfinished = "" if op.backup_done else t("history.line_backup_unfinished")
         lines.append(t("history.line_backup", dir=op.backup_dir, note=unfinished))
@@ -366,7 +357,7 @@ def _op_text(report: OpStatusReport) -> str:
             )
         lines.append(t("status.line_floods", count=report.floods_24h, last=last))
     if not report.live and op.status in (OpStatus.STOPPED, OpStatus.WAITING_FLOOD, OpStatus.FAILED):
-        lines.append(t("delete.continue_hint", id=op.id))
+        lines.append(t(f"{op.kind}.continue_hint", id=op.id))
     return "\n".join(lines)
 
 

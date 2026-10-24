@@ -447,6 +447,8 @@ topics:
 
 ### 11.4 Sửa tin
 
+*Đã cài ở Phase 20.3 (2026-10-24) cho phần sửa tại chỗ + `undo`; sửa theo `msg_map` (`--mirror`) là 20.5, chưa làm. Xem `06-lo-trinh.md`, "20.3 — đã cài".*
+
 Là `edit` của Phase 20 (mục 6), không phải cơ chế mới. Bổ sung:
 
 - `edit` nhận cùng transform, nhưng chỉ phần `caption:` (+ `links: rewrite`); có `route`/`topics` thì **từ chối** (mã 2) và chỉ sang `repost`/`topics split` — sửa tin không đổi được topic.

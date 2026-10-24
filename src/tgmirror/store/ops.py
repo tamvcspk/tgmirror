@@ -23,6 +23,8 @@ from tgmirror.store.runs import Control
 
 class OpKind(StrEnum):
     DELETE = "delete"
+    EDIT = "edit"  # phase 20.3: change the text of messages; each item keeps what it was
+    UNDO = "undo"  # phase 20.3: put the texts of an edit back (``options_json['undo_of']``)
 
 
 class OpStatus(StrEnum):
@@ -70,6 +72,7 @@ class PlannedItem:
     msg_id: int
     unit_id: int
     grouped_id: int | None = None
+    before_json: str | None = None  # ``edit``/``undo``: ``{"before": ..., "after": ...}`` markup
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +82,14 @@ class OpItem:
     grouped_id: int | None
     status: ItemStatus
     reason: str | None = None
+    before_json: str | None = None
+
+    @property
+    def texts(self) -> tuple[str, str]:
+        """``(before, after)`` of an ``edit``/``undo`` item: what the message read when the plan was
+        made, and what it is to read afterwards."""
+        data = json.loads(self.before_json or "{}")
+        return str(data.get("before", "")), str(data.get("after", ""))
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +139,18 @@ class Op:
         return self.done + self.skipped + self.gone + self.failed
 
     @property
+    def undo_of(self) -> int | None:
+        """The ``edit`` an ``undo`` puts back (``None`` for any other operation)."""
+        found = json.loads(self.options_json).get(UNDO_OF)
+        return found if isinstance(found, int) else None
+
+    @property
+    def transform_json(self) -> str | None:
+        """The transform an ``edit`` was planned with, as the user's own file read."""
+        found = json.loads(self.options_json).get(TRANSFORM)
+        return found if isinstance(found, str) else None
+
+    @property
     def backup_dir(self) -> str | None:
         """The directory the plan is backed up into before it is applied (phase 20.2): set when
         the person asked for the safety net, whether or not that backup finished yet."""
@@ -142,6 +165,8 @@ class Op:
 
 BACKUP_DIR = "backup_dir"  # keys of ``ops.options_json`` (phase 20.2)
 BACKUP_DONE = "backup_done"
+UNDO_OF = "undo_of"  # phase 20.3
+TRANSFORM = "transform"
 
 OP_SELECT = (
     "SELECT id, account, kind, chat_id, chat_title, chat_kind, filters_json, options_json, status, "
@@ -181,6 +206,7 @@ def _item(row: Any) -> OpItem:
         grouped_id=row["grouped_id"],
         status=ItemStatus(row["status"]),
         reason=row["reason"],
+        before_json=row["before_json"],
     )
 
 
@@ -200,9 +226,12 @@ async def insert_items(
 ) -> None:
     for start in range(0, len(items), chunk):
         await db.executemany(
-            "INSERT INTO op_items(op_id, msg_id, unit_id, grouped_id, status) "
-            "VALUES(?, ?, ?, ?, 'planned')",
-            [(op_id, i.msg_id, i.unit_id, i.grouped_id) for i in items[start : start + chunk]],
+            "INSERT INTO op_items(op_id, msg_id, unit_id, grouped_id, status, before_json) "
+            "VALUES(?, ?, ?, ?, 'planned', ?)",
+            [
+                (op_id, i.msg_id, i.unit_id, i.grouped_id, i.before_json)
+                for i in items[start : start + chunk]
+            ],
         )
 
 
@@ -212,7 +241,7 @@ async def next_units(
     """The first ``limit`` units that still have an item in ``status``, oldest first, each with
     *all* its items in that status (an album comes out whole)."""
     cur = await db.execute(
-        "SELECT op_id, msg_id, unit_id, grouped_id, status, reason FROM op_items "
+        "SELECT op_id, msg_id, unit_id, grouped_id, status, reason, before_json FROM op_items "
         "WHERE op_id = ? AND status = ? AND unit_id IN ("
         "  SELECT DISTINCT unit_id FROM op_items WHERE op_id = ? AND status = ? "
         "  ORDER BY unit_id LIMIT ?) "
@@ -224,7 +253,7 @@ async def next_units(
 
 async def items_in(db: aiosqlite.Connection, op_id: int, status: ItemStatus) -> list[OpItem]:
     cur = await db.execute(
-        "SELECT op_id, msg_id, unit_id, grouped_id, status, reason FROM op_items "
+        "SELECT op_id, msg_id, unit_id, grouped_id, status, reason, before_json FROM op_items "
         "WHERE op_id = ? AND status = ? ORDER BY unit_id, msg_id",
         (op_id, status),
     )

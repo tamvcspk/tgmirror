@@ -43,7 +43,9 @@ from tgmirror.core.errors import BudgetReached
 Kind = Literal["read", "write"]
 FORWARD, SEND, HISTORY, FILE = "forward", "send", "history", "file"
 DELETE = "delete"  # phase 20: removing messages from a chat the account administers (decision D10)
-WRITE_ACTIONS = (FORWARD, SEND, DELETE)
+EDIT = "edit"  # phase 20.3: changing the text of messages of such a chat
+WRITE_ACTIONS = (FORWARD, SEND, DELETE, EDIT)
+NOT_POSTED = (DELETE, EDIT)  # write lanes that post nothing: ``daily_cap`` does not count them
 READ_ACTIONS = (HISTORY, FILE)
 HOUR = 3600
 BUCKET = 300  # seconds one sent-bucket covers: how late a window can let go of a message
@@ -248,10 +250,14 @@ class Limiter:
         )
 
     def sent_total(self, hours: int = 24) -> int:
-        """Messages the account *posted* (every write lane but ``delete``) in roughly the last
-        ``hours`` hours: what ``daily_cap`` reminds about."""
+        """Messages the account *posted* (every write lane but ``delete`` and ``edit``) in roughly
+        the last ``hours`` hours: what ``daily_cap`` reminds about."""
         return window_sent(
-            (SentBucket(a, d, b, n) for (a, d, b), n in self._buckets.items() if a != DELETE),
+            (
+                SentBucket(a, d, b, n)
+                for (a, d, b), n in self._buckets.items()
+                if a not in NOT_POSTED
+            ),
             self._clock(),
             hours,
         )

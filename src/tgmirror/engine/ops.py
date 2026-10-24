@@ -25,6 +25,7 @@ lane of the chat.
 
 import asyncio
 import contextlib
+import json
 import random
 from collections import deque
 from collections.abc import Sequence
@@ -46,13 +47,14 @@ from tgmirror.core.errors import (
 )
 from tgmirror.core.gateway import (
     MAX_IDS_PER_CALL,
+    CaptionPolicy,
     ChannelInfo,
     MessageReader,
     SrcMessage,
     TelegramGateway,
     Unit,
 )
-from tgmirror.core.limiter import DELETE, Limiter, Sleep
+from tgmirror.core.limiter import DELETE, EDIT, Limiter, Sleep
 from tgmirror.engine import planner
 from tgmirror.engine.backup import begin_backup
 from tgmirror.engine.backupdir import BackupManifest
@@ -68,6 +70,8 @@ from tgmirror.store.db import Clock, Store, utc_now
 from tgmirror.store.ops import (
     BACKUP_DIR,
     BACKUP_DONE,
+    TRANSFORM,
+    UNDO_OF,
     ItemStatus,
     Op,
     OpItem,
@@ -81,6 +85,9 @@ from tgmirror.store.runs import Control, RunStatus
 UNITS_PER_READ = MAX_IDS_PER_CALL  # units taken from the plan at a time: enough to fill a batch
 SAMPLE_EDGE = 5  # messages shown from each end of the plan
 SAMPLE_TEXT = 60  # characters of a sampled message
+
+EDIT_BATCH = 10  # messages edited between two looks at pause/stop: an edit is one call each
+SAMPLE_DIFF = 90  # characters of a text shown in a diff
 
 SKIP_GONE = "gone"  # the message was no longer in the chat when its turn came
 SKIP_CHANGED = "changed"  # it was there, but the filter no longer matches it
@@ -225,6 +232,194 @@ async def plan_delete(
     return DeletePlan(op, summary)
 
 
+@dataclass(frozen=True, slots=True)
+class EditSample:
+    id: int
+    before: str
+    after: str
+
+
+@dataclass(frozen=True, slots=True)
+class EditSummary:
+    """What an ``edit`` plan holds: the messages whose text would change, with a few diffs, and
+    what it leaves out and why."""
+
+    messages: int
+    units: int
+    by_media: dict[str, int]
+    by_month: dict[str, int]
+    first: tuple[EditSample, ...]
+    last: tuple[EditSample, ...]
+    unchanged: int  # selected, but the operations leave their text as it is
+    lossy: int  # selected, but their formatting would not survive an edit: never touched
+
+
+@dataclass(frozen=True, slots=True)
+class EditPlan:
+    """``op`` is ``None`` when no selected message would change (no row is made)."""
+
+    op: Op | None
+    summary: EditSummary
+
+
+class UndoError(OpError):
+    """An ``undo`` that cannot be planned (exit code 2): said in the person's terms by the CLI."""
+
+    def __init__(self, key: str, **params: object) -> None:
+        super().__init__(key)
+        self.key = key
+        self.params = params
+
+
+def _squeeze(text: str) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= SAMPLE_DIFF else text[: SAMPLE_DIFF - 1] + "…"
+
+
+async def plan_edit(
+    store: Store,
+    gateway: TelegramGateway,
+    chat: ChannelInfo,
+    spec: FilterSpec,
+    policy: CaptionPolicy,
+    transform_json: str,
+    limits: Limits,
+    *,
+    pushdown: bool = True,
+    notifier: Reporter | None = None,
+    nap: Sleep = asyncio.sleep,
+) -> EditPlan:
+    """Read ``chat`` with ``spec``, work out what ``policy`` would make of each selected message's
+    text and freeze those that would change, with the text before and after, as a ``planned``
+    edit (phase 20.3). Nothing on Telegram changes. A message whose formatting would not survive
+    being written back is left out and counted: ``undo`` could not restore it."""
+    current = await gateway.get_channel(chat.id)
+    if not current.is_admin:
+        raise NotAdmin(current)
+    guard = await inspect_guard(store, limits, notifier=notifier or NullReporter(), nap=nap)
+    reader = guard.reader(gateway)
+    read = plan_read(spec, 0, pushdown=pushdown)
+    matcher = None if spec.is_empty else Matcher(spec)
+
+    items: list[PlannedItem] = []
+    by_media: dict[str, int] = {}
+    by_month: dict[str, int] = {}
+    first: list[EditSample] = []
+    last: deque[EditSample] = deque(maxlen=SAMPLE_EDGE)
+    counts = {"units": 0, "unchanged": 0, "lossy": 0}
+    buffer: list[tuple[SrcMessage, int]] = []  # (message, id of the first message of its unit)
+    changed_units: set[int] = set()
+
+    async def flush() -> None:
+        if not buffer:
+            return
+        by_id = {m.id: (m, unit_id) for m, unit_id in buffer}
+        ids = list(by_id)
+        buffer.clear()
+        found = await guard.read(
+            "rewrite_messages", lambda: gateway.rewrite_messages(current.id, ids, policy)
+        )
+        for rewrite in found:
+            message, unit_id = by_id[rewrite.id]
+            if not rewrite.lossless:
+                counts["lossy"] += 1
+            elif rewrite.before == rewrite.after:
+                counts["unchanged"] += 1
+            else:
+                items.append(
+                    PlannedItem(
+                        message.id,
+                        unit_id,
+                        message.grouped_id,
+                        json.dumps({"before": rewrite.before, "after": rewrite.after}),
+                    )
+                )
+                changed_units.add(unit_id)
+                by_media[message.media.value] = by_media.get(message.media.value, 0) + 1
+                month = message.date.strftime("%Y-%m")
+                by_month[month] = by_month.get(month, 0) + 1
+                sample = EditSample(message.id, _squeeze(rewrite.before), _squeeze(rewrite.after))
+                if len(first) < SAMPLE_EDGE:
+                    first.append(sample)
+                else:
+                    last.append(sample)
+
+    async with aclosing(
+        planner.units(
+            reader,
+            current.id,
+            min_id=read.min_id,
+            filters=read.server,
+            matcher=matcher,
+            complete_albums=read.complete_albums,
+        )
+    ) as stream:
+        async for item in stream:
+            if isinstance(item, Skip):
+                continue
+            counts["units"] += 1
+            buffer.extend((m, item.ids[0]) for m in item.messages)
+            if len(buffer) >= MAX_IDS_PER_CALL:
+                await flush()
+        await flush()
+    items.sort(key=lambda i: (i.unit_id, i.msg_id))
+    summary = EditSummary(
+        messages=len(items),
+        units=len(changed_units),
+        by_media=dict(sorted(by_media.items(), key=lambda kv: -kv[1])),
+        by_month=dict(sorted(by_month.items())),
+        first=tuple(first),
+        last=tuple(last),
+        unchanged=counts["unchanged"],
+        lossy=counts["lossy"],
+    )
+    if not items:
+        return EditPlan(None, summary)
+    options = json.dumps({TRANSFORM: transform_json}, sort_keys=True)
+    op = await store.create_op(OpSpec(OpKind.EDIT, current, spec.to_json(), options), items)
+    return EditPlan(op, summary)
+
+
+@dataclass(frozen=True, slots=True)
+class UndoPlan:
+    op: Op
+    first: tuple[EditSample, ...]
+    last: tuple[EditSample, ...]
+
+
+async def plan_undo(store: Store, gateway: TelegramGateway, edit: Op) -> UndoPlan:
+    """Plan putting back the texts an ``edit`` changed: one ``undo`` item per message it edited
+    (``done``), carrying the two texts the other way round. Raises ``UndoError`` for anything but
+    an edit that changed something, or one already undone (or being undone)."""
+    if edit.kind is not OpKind.EDIT:
+        raise UndoError("undo.not_an_edit", id=edit.id)
+    if edit.status in (OpStatus.PLANNED, OpStatus.CANCELLED):
+        raise UndoError("undo.never_applied", id=edit.id)
+    for other in await store.list_ops(200):
+        if other.undo_of == edit.id and other.status is not OpStatus.CANCELLED:
+            raise UndoError("undo.already", id=edit.id, undo=other.id)
+    done = await store.op_items_in(edit.id, ItemStatus.DONE)
+    if not done:
+        raise UndoError("undo.nothing", id=edit.id)
+    chat = await gateway.get_channel(edit.chat_id)
+    if not chat.is_admin:
+        raise NotAdmin(chat)
+    planned = [
+        PlannedItem(
+            i.msg_id,
+            i.unit_id,
+            i.grouped_id,
+            json.dumps({"before": i.texts[1], "after": i.texts[0]}),
+        )
+        for i in done
+    ]
+    samples = [EditSample(i.msg_id, _squeeze(i.texts[1]), _squeeze(i.texts[0])) for i in done]
+    op = await store.create_op(
+        OpSpec(OpKind.UNDO, chat, edit.filters_json, json.dumps({UNDO_OF: edit.id})), planned
+    )
+    return UndoPlan(op, tuple(samples[:SAMPLE_EDGE]), tuple(samples[SAMPLE_EDGE:][-SAMPLE_EDGE:]))
+
+
 async def resolve_op(store: Store, ref: str | None) -> Op:
     """An operation by its number (``12`` or ``O12``), or the latest when ``ref`` is ``None``."""
     if ref is None:
@@ -362,19 +557,26 @@ class OpRunner:
             await learn_context(guard, self._gateway)  # Premium, for the flood log
             spec = FilterSpec.from_json(op.filters_json)
             matcher = None if spec.is_empty else Matcher(spec)
-            op = await self._settle_pending(op, reader)
+            edits = op.kind is not OpKind.DELETE  # an edit or its undo: one call per message
+            if edits:
+                op = await self._settle_edits(op, guard)
+            else:
+                op = await self._settle_pending(op, reader)
             status = OpStatus.DONE
             while status is OpStatus.DONE:
                 units = await self._store.op_units(op.id, ItemStatus.PLANNED, UNITS_PER_READ)
                 if not units:
                     break
-                for batch in pack(units):
+                for batch in pack(units, EDIT_BATCH if edits else MAX_IDS_PER_CALL):
                     if not await self._gate(op):
                         status = OpStatus.STOPPED
                         break
-                    op = await self._delete_batch(op, guard, reader, matcher, batch)
+                    if edits:
+                        op = await self._edit_batch(op, guard, batch)
+                    else:
+                        op = await self._delete_batch(op, guard, reader, matcher, batch)
                     # what the lane has sent is kept with the batch, so a later run (and a budget
-                    # learned from a long flood) counts the messages this one deleted
+                    # learned from a long flood) counts the messages this one deleted or edited
                     await self._store.save_limiter_state(op.account, limiter.state)
             await self._store.finish_op(op.id, status)
         except Interrupted:
@@ -512,6 +714,112 @@ class OpRunner:
         return await self._store.mark_op_items(
             op.id, ids, ItemStatus.DONE, stats={"done": deleted, "gone": len(ids) - deleted}
         )
+
+    # ---- edit and undo (phase 20.3) -----------------------------------------------------------
+
+    async def _live_texts(self, op: Op, guard: FloodGuard, ids: Sequence[int]) -> dict[int, str]:
+        """The text of each of ``ids`` as the chat holds it now (a gone id is missing)."""
+        found: dict[int, str] = {}
+        for start in range(0, len(ids), MAX_IDS_PER_CALL):
+            chunk = list(ids[start : start + MAX_IDS_PER_CALL])
+            rewrites = await guard.read(
+                "rewrite_messages",
+                lambda chunk=chunk: self._gateway.rewrite_messages(
+                    op.chat_id, chunk, CaptionPolicy()
+                ),
+            )
+            found.update((r.id, r.before) for r in rewrites)
+        return found
+
+    async def _settle_edits(self, op: Op, guard: FloodGuard) -> Op:
+        """What a process that died mid-edit left ``pending``: read the texts. A message that now
+        reads the planned text was edited (``done``); one that still reads the old text was not
+        (back to ``planned``); anything else was changed by somebody else meanwhile (left alone)."""
+        pending = await self._store.op_items_in(op.id, ItemStatus.PENDING)
+        if not pending:
+            return op
+        live = await self._live_texts(op, guard, [i.msg_id for i in pending])
+        done: list[int] = []
+        again: list[int] = []
+        changed: list[int] = []
+        gone: list[int] = []
+        for item in pending:
+            before, after = item.texts
+            now = live.get(item.msg_id)
+            if now is None:
+                gone.append(item.msg_id)
+            elif now == after:
+                done.append(item.msg_id)
+            elif now == before:
+                again.append(item.msg_id)
+            else:
+                changed.append(item.msg_id)
+        if done:
+            op = await self._store.mark_op_items(
+                op.id, done, ItemStatus.DONE, stats={"done": len(done)}
+            )
+        if again:
+            op = await self._store.mark_op_items(op.id, again, ItemStatus.PLANNED)
+        if changed:
+            op = await self._store.mark_op_items(
+                op.id,
+                changed,
+                ItemStatus.SKIPPED,
+                reason=SKIP_CHANGED,
+                stats={"skipped": len(changed)},
+            )
+        if gone:
+            op = await self._store.mark_op_items(
+                op.id, gone, ItemStatus.SKIPPED, reason=SKIP_GONE, stats={"gone": len(gone)}
+            )
+        self._reporter.notice("settled", deleted=len(done), again=len(again))
+        return op
+
+    async def _edit_batch(self, op: Op, guard: FloodGuard, batch: Sequence[Sequence[OpItem]]) -> Op:
+        """Read the batch's messages again and edit each one that still reads what the plan saw.
+        One that reads something else was changed since (left alone), one that already reads the
+        planned text needs nothing. Each edit is written ahead as ``pending``."""
+        items = [item for unit in batch for item in unit]
+        live = await self._live_texts(op, guard, [i.msg_id for i in items])
+        for item in items:
+            before, after = item.texts
+            now = live.get(item.msg_id)
+            if now is None:
+                op = await self._store.mark_op_items(
+                    op.id, [item.msg_id], ItemStatus.SKIPPED, reason=SKIP_GONE, stats={"gone": 1}
+                )
+            elif now == after:  # already reads that: an earlier go got this far
+                op = await self._store.mark_op_items(
+                    op.id, [item.msg_id], ItemStatus.DONE, stats={"done": 1}
+                )
+            elif now != before:
+                op = await self._store.mark_op_items(
+                    op.id,
+                    [item.msg_id],
+                    ItemStatus.SKIPPED,
+                    reason=SKIP_CHANGED,
+                    stats={"skipped": 1},
+                )
+            else:
+                op = await self._edit(op, guard, item.msg_id, after)
+        self._reporter.progress(op)
+        return op
+
+    async def _edit(self, op: Op, guard: FloodGuard, msg_id: int, text: str) -> Op:
+        await guard.pace(1, action=EDIT)  # may rest, or raise BudgetReached: nothing marked
+        op = await self._store.mark_op_items(op.id, [msg_id], ItemStatus.PENDING)  # write-ahead
+        try:
+            await guard.write(
+                "edit_message", 1, lambda: self._gateway.edit_message(op.chat_id, msg_id, text)
+            )
+        except PerMessage as exc:  # this one message cannot be edited; the others go on
+            return await self._store.mark_op_items(
+                op.id, [msg_id], ItemStatus.FAILED, reason=str(exc)[:120], stats={"failed": 1}
+            )
+        except (FloodWait, PeerFlood, Interrupted, NoPermission):
+            await self._store.mark_op_items(op.id, [msg_id], ItemStatus.PLANNED)
+            raise
+        return await self._store.mark_op_items(op.id, [msg_id], ItemStatus.DONE, stats={"done": 1})
 
     # ---- control (mirrors engine.backup.BackupWriter) ----------------------------------------
 

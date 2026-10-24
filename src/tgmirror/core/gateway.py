@@ -315,6 +315,21 @@ class CaptionPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class Rewrite:
+    """A message's text now (``before``) and as a ``CaptionPolicy`` would leave it (``after``), for
+    ``tgmirror edit`` (phase 20.3). Both are in the gateway's own markup (Telegram's formatting
+    written as HTML, as a backup keeps it): the engine only compares them, shows them and hands
+    one back to ``edit_message``. ``lossless`` is ``False`` when writing ``before`` back would not
+    reproduce the message's formatting exactly (an entity the markup cannot carry): such a
+    message is never edited, because ``undo`` could not give it back."""
+
+    id: int
+    before: str
+    after: str
+    lossless: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class Prepared:
     """A unit fetched for strategy B: its messages read again and its media downloaded.
 
@@ -643,6 +658,23 @@ class TelegramGateway(Protocol):
     ) -> int:
         """Post a plain text message (the stub that stands for what cannot be copied). ``topic``
         targets a destination topic (phase 8), ``reply_to`` is as in ``send_prepared``."""
+        ...
+
+    async def rewrite_messages(
+        self, chat: int, ids: Sequence[int], policy: CaptionPolicy
+    ) -> list[Rewrite]:
+        """Read messages of ``chat`` by id and say what ``policy`` would make of their text
+        (phase 20.3). Reads only. An id that is gone is left out; a message with no text slot (a
+        poll, a service message) comes back with ``after == before``. An empty policy returns each
+        message's text as it is now, which is how an edit is checked and settled."""
+        ...
+
+    async def edit_message(self, chat: int, msg_id: int, text: str) -> bool:
+        """Replace the text (caption) of one message of ``chat`` with ``text``, in the markup
+        ``rewrite_messages`` returns (phase 20.3, decision D10). ``True``: it was changed;
+        ``False``: Telegram said it already read that, so repeating a call after a cut connection
+        is safe. Raises ``PerMessage`` when this message cannot be edited (not the account's own,
+        too old in a group, gone) and ``NoPermission`` when nothing in the chat can."""
         ...
 
     async def delete_messages(self, chat: int, ids: list[int]) -> int:

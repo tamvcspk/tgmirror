@@ -160,6 +160,10 @@ Map Telethon exceptions to tgmirror errors at the gateway boundary (`core/errors
 
 Anything new in the gateway needs a `FakeGateway` counterpart and an engine-level test. Only `scripts/smoke.py` (manual, dedicated test channels) talks to real Telegram.
 
+## Editing messages (Phase 20.3)
+
+`TelegramGateway.rewrite_messages(chat, ids, policy)` reads messages by id and returns `Rewrite(id, before, after, lossless)`: the text as HTML (`tl_html.unparse(message, entities)`, the format backups keep) and what `CaptionPolicy` makes of it (`_rewrite_message`: `rewrite_caption` for a media caption, `_plain_text` for a text message — only with `text_too` —, nothing for a service message or a poll). `edit_message(chat, id, html)` parses the HTML back (`tl_html.parse`) and calls `client.edit_message(peer, id, text, formatting_entities=...)`; `MessageNotModifiedError` is caught **inside** `mapped_errors()` (it is an `RPCError`, so outside it the generic mapping would swallow it) and returns `False`. `lossless` is the guard that makes `undo` honest: the HTML must read back to the same text and the same hand-made formatting; entities Telegram detects again by itself (hashtag, mention, URL, ...) do not count, and an entity HTML has no tag for (spoiler) makes the message never edited. Unverified until the first real run (spike 3): editing a forwarded message, an album caption, notifications and the "edited" label.
+
 ## Deleting messages (Phase 20)
 
 `TelegramGateway.delete_messages(chat, ids)` wraps `client.delete_messages(peer, ids, revoke=True)` (1..100 ids a call; for a channel it is `channels.DeleteMessages`) and returns the sum of `pts_count`, i.e. how many were really removed: an id that is already gone adds nothing and is no error, which is what makes repeating a call after a cut connection safe. `MESSAGE_DELETE_FORBIDDEN` and `CHAT_ADMIN_REQUIRED` map to `NoPermission`. `FakeGateway.delete_messages` needs `is_admin` like Telegram. Not tried on a real account yet (spike 2).

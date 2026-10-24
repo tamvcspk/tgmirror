@@ -241,20 +241,26 @@ class BackupLineReporter:
 class OpLineReporter:
     """Plain-line progress for ``tgmirror delete`` (implements ``engine.ops.Reporter``)."""
 
+    # the notices whose wording depends on what the operation does (the rest is the same for all)
+    OWN_NOTICES = ("settled", "flood_stopped")
+
     def __init__(
         self,
         emit: Callable[[str], None],
         *,
+        kind: str = "delete",
         interval: float = 5.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._emit = emit
+        self._kind = kind  # ``delete``, ``edit`` or ``undo``: the prefix of its sentences
         self._interval = interval
         self._clock = clock
         self._last: float | None = None
 
     def notice(self, code: str, **params: object) -> None:
-        self._emit(t(f"delete.{code}", **{k: _plain(v) for k, v in params.items()}))
+        prefix = self._kind if code in self.OWN_NOTICES else "delete"
+        self._emit(t(f"{prefix}.{code}", **{k: _plain(v) for k, v in params.items()}))
 
     def progress(self, op: Op) -> None:
         now = self._clock()
@@ -263,11 +269,12 @@ class OpLineReporter:
         self._last = now
         self._emit(
             t(
-                "delete.progress",
+                f"{self._kind}.progress",
                 id=op.id,
                 done=op.done,
                 planned=op.planned,
                 skipped=op.skipped,
                 gone=op.gone,
+                failed=op.failed,
             )
         )

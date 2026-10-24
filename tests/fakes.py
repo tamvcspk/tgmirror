@@ -46,6 +46,7 @@ from tgmirror.core.gateway import (
     RemoveHashtags,
     RemoveMentions,
     Replace,
+    Rewrite,
     ServerFilter,
     SrcMessage,
     StripLinks,
@@ -95,6 +96,8 @@ class FakeGateway:
         self._export_extra: dict[tuple[int, int], _ExportExtra] = {}  # (channel, msg_id) -> extra
         self.slow_mode: dict[int, int] = {}  # channel -> slowmode_seconds (phase 19d1)
         self.premium = False
+        self.uneditable: set[tuple[int, int]] = set()  # (chat, id) Telegram will not let us edit
+        self.lossy: set[tuple[int, int]] = set()  # (chat, id) whose formatting HTML cannot carry
 
     # ---- test setup -------------------------------------------------------------------------
 
@@ -354,6 +357,42 @@ class FakeGateway:
     def delete_message(self, channel: int, msg_id: int) -> None:
         """The message disappears from the channel (a later read no longer finds it)."""
         self.messages[channel] = [m for m in self.messages[channel] if m.id != msg_id]
+
+    async def rewrite_messages(
+        self, chat: int, ids: Sequence[int], policy: CaptionPolicy
+    ) -> list[Rewrite]:
+        """Phase 20.3: each existing message's text now and after ``policy`` (plain text here; the
+        real gateway works on HTML with entities)."""
+        self._enter("rewrite_messages", chat, list(ids))
+        self._channel(chat)
+        wanted = set(ids)
+        return [
+            Rewrite(
+                m.id,
+                m.text,
+                m.text if m.is_service else _rewrite(m, replace(policy, hashtag=None)),
+                (chat, m.id) not in self.lossy,
+            )
+            for m in self.messages[chat]
+            if m.id in wanted
+        ]
+
+    async def edit_message(self, chat: int, msg_id: int, text: str) -> bool:
+        """Phase 20.3: changes the text, keeps everything else; needs an administrator."""
+        self._enter("edit_message", chat, msg_id, text)
+        if not self._channel(chat).is_admin:
+            raise NoPermission(f"cannot edit in channel {chat}")
+        history = self.messages[chat]
+        at = next((i for i, m in enumerate(history) if m.id == msg_id), None)
+        if at is None:
+            raise PerMessage("MESSAGE_ID_INVALID")
+        if (chat, msg_id) in self.uneditable:
+            raise PerMessage("MESSAGE_AUTHOR_REQUIRED")
+        if history[at].text == text:
+            return False
+        tags = tuple(f"#{w.casefold()}" for w in regex.findall(r"#(\w+)", text))
+        history[at] = replace(history[at], text=text, hashtags=tags, edit_date=datetime.now(UTC))
+        return True
 
     async def delete_messages(self, chat: int, ids: list[int]) -> int:
         """Phase 20: removes the messages that exist, counts only those (an id already gone adds

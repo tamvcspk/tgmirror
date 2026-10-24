@@ -303,6 +303,8 @@ class DeleteFlow:
     """What ``tgmirror delete`` does before anything is deleted: pick the chat and the filter,
     plan, and obtain the confirmation. Flags and the wizard answer the same questions (rule 7)."""
 
+    _kind = "delete"  # the prefix of its sentences; ``EditFlow``/``UndoFlow`` change it
+
     def __init__(
         self,
         rt: Runtime,
@@ -332,8 +334,10 @@ class DeleteFlow:
         started already has it."""
         assert self._o.resume is not None
         op = await resolve_op(self._store, self._o.resume)
+        if op.kind.value != self._kind:
+            raise UsageProblem("op.wrong_kind", id=op.id, kind=op.kind.value, expected=self._kind)
         if op.status in (OpStatus.DONE, OpStatus.CANCELLED):
-            raise UsageProblem("delete.finished", id=op.id, status=t(f"status.{op.status}"))
+            raise UsageProblem(f"{self._kind}.finished", id=op.id, status=t(f"status.{op.status}"))
         # the chat must still be reachable before anything is asked
         find_channel(self._channels, str(op.chat_id))
         return op
@@ -364,10 +368,10 @@ class DeleteFlow:
             raise UsageProblem("err.missing_flag", flag="SRC")
         administered = [c for c in self._channels if c.is_admin]
         if not administered:
-            typer.echo(t("delete.no_admin_channels"))
+            typer.echo(t(f"{self._kind}.no_admin_channels"))
             raise typer.Exit(1)
         choices = [Choice(channel_label(c), c) for c in administered]
-        return await self._prompter.select(t("delete.pick_source"), choices)
+        return await self._prompter.select(t(f"{self._kind}.pick_source"), choices)
 
     async def _pick_filter(self, chat: ChannelInfo) -> FilterSpec:
         """The filter from flags or a selection, else (at a terminal) the wizard's question. A
@@ -389,10 +393,12 @@ class DeleteFlow:
             and not o.all_messages
             and not (
                 asked
-                and await self._prompter.confirm(t("delete.confirm_all", chat=chat.title), False)
+                and await self._prompter.confirm(
+                    t(f"{self._kind}.confirm_all", chat=chat.title), False
+                )
             )
         ):
-            raise UsageProblem("delete.needs_filter")
+            raise UsageProblem(f"{self._kind}.needs_filter")
         return spec
 
     # ---- 2. the confirmation ---------------------------------------------------------------
@@ -405,21 +411,21 @@ class DeleteFlow:
             return True  # confirmed when it was first applied
         if o.expect is not None and o.expect != op.planned:
             await self._store.cancel_op(op.id)
-            raise UsageProblem("delete.expect_mismatch", count=op.planned, expected=o.expect)
+            raise UsageProblem(f"{self._kind}.expect_mismatch", count=op.planned, expected=o.expect)
         if o.yes:
             if o.expect is None:
                 await self._store.cancel_op(op.id)
-                raise UsageProblem("delete.needs_expect", count=op.planned)
+                raise UsageProblem(f"{self._kind}.needs_expect", count=op.planned)
             return True
         if not self._interactive:
             if o.backup_to is not None:  # the wish for a backup is part of the saved plan
                 resolved = await asyncio.to_thread(o.backup_to.expanduser().resolve)
                 await self._store.set_op_options(op.id, backup_dir=str(resolved))
-            raise UsageProblem("delete.needs_yes", id=op.id, count=op.planned)
-        question = t("delete.type_count", count=op.planned, chat=op.chat_title)
+            raise UsageProblem(f"{self._kind}.needs_yes", id=op.id, count=op.planned)
+        question = t(f"{self._kind}.type_count", count=op.planned, chat=op.chat_title, id=op.id)
         if (await self._prompter.text(question)).strip() != str(op.planned):
             await self._store.cancel_op(op.id)
-            self._echo(t("delete.cancelled", id=op.id))
+            self._echo(t(f"{self._kind}.cancelled", id=op.id))
             raise Declined
         return True
 
@@ -518,7 +524,11 @@ async def execute(
         rt.keys(control) as listening,
     ):
         runner = OpRunner(
-            store, gateway, limits, reporter=OpLineReporter(typer.echo), control=control
+            store,
+            gateway,
+            limits,
+            reporter=OpLineReporter(typer.echo, kind=op.kind.value),
+            control=control,
         )
         if listening:
             typer.echo(t("run.keys_hint"))

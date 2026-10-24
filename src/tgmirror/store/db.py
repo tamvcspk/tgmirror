@@ -1019,11 +1019,20 @@ class Store:
         can be taken up; the items a dead process left ``pending`` are for the engine to settle."""
         now = self._now()
         async with self._tx() as db:
-            cur = await db.execute("SELECT status, chat_id FROM ops WHERE id = ?", (op_id,))
+            cur = await db.execute(
+                "SELECT status, chat_id, updated_at FROM ops WHERE id = ?", (op_id,)
+            )
             row = await cur.fetchone()
             if row is None:
                 raise StoreError(f"operation {op_id} does not exist")
-            if OpStatus(row["status"]) not in RESUMABLE:
+            status = OpStatus(row["status"])
+            if status in (OpStatus.RUNNING, OpStatus.PAUSED):
+                # a process that was killed leaves its row ``running``: once its heartbeat has
+                # gone stale (or the person says it is dead) the operation is taken up again
+                fresh = now - datetime.fromisoformat(row["updated_at"]) < HEARTBEAT_TIMEOUT
+                if fresh and not force:
+                    raise OpBusy(op_id)
+            elif status not in RESUMABLE:
                 raise StoreError(f"operation {op_id} is {row['status']}, it cannot be taken up")
             await self._close_dead_ops(db, row["chat_id"], op_id, now, force)
             await db.execute(

@@ -5,10 +5,10 @@ the full-screen menu (``ui/menu/run_screen.py``/``backup_screen.py``, appended t
 list of lines) never drift apart from writing the same thing twice.
 """
 
-from tgmirror.engine.ops import PlanSummary, Sample
+from tgmirror.engine.ops import EditSample, EditSummary, PlanSummary, Sample, UndoPlan
 from tgmirror.engine.status import StatusReport, rest_hours
 from tgmirror.store.backups import Backup
-from tgmirror.store.ops import Op, OpStatus
+from tgmirror.store.ops import Op, OpKind, OpStatus
 from tgmirror.store.runs import FilterChange, FloodEvent, Run, RunStatus, StartedRun
 from tgmirror.ui.messages import t
 
@@ -240,14 +240,75 @@ def delete_backup_stopped_line(op: Op, final: Backup) -> str:
     )
 
 
+def edit_plan_lines(op: Op, summary: EditSummary) -> list[str]:
+    """The frozen plan of an ``edit`` (phase 20.3): how many would change, what is left out, and
+    the text before and after for a few at each end."""
+    lines = [
+        t(
+            "edit.plan_header",
+            id=op.id,
+            chat=op.chat_title,
+            messages=summary.messages,
+            units=summary.units,
+        ),
+        t("delete.plan_media", items=_counts(summary.by_media)),
+        t("delete.plan_months", items=_counts(summary.by_month)),
+    ]
+    if summary.unchanged or summary.lossy:
+        lines.append(t("edit.plan_left_out", unchanged=summary.unchanged, lossy=summary.lossy))
+    lines.extend(_diff(item) for item in summary.first)
+    if summary.last:
+        lines.append(t("delete.plan_gap"))
+        lines.extend(_diff(item) for item in summary.last)
+    return lines
+
+
+def _diff(item: EditSample) -> str:
+    return t("edit.plan_diff", id=item.id, before=item.before, after=item.after)
+
+
+def undo_plan_lines(plan: UndoPlan, edit_id: int) -> list[str]:
+    """The frozen plan of an ``undo``: the texts it puts back."""
+    lines = [
+        t(
+            "undo.plan_header",
+            id=plan.op.id,
+            edit=edit_id,
+            chat=plan.op.chat_title,
+            messages=plan.op.planned,
+        )
+    ]
+    lines.extend(_diff(item) for item in plan.first)
+    if plan.last:
+        lines.append(t("delete.plan_gap"))
+        lines.extend(_diff(item) for item in plan.last)
+    return lines
+
+
+def op_counts_line(op: Op) -> str:
+    """The "Result:" line of ``history``/``status`` for an operation, in the words of its kind."""
+    key = "history.line_counts_op" if op.kind is OpKind.DELETE else f"history.line_counts_{op.kind}"
+    return t(
+        key,
+        done=op.done,
+        skipped=op.skipped,
+        gone=op.gone,
+        failed=op.failed,
+        planned=op.planned,
+    )
+
+
 def delete_start_line(op: Op) -> str:
-    return t("delete.start", id=op.id, count=op.planned, chat=op.chat_title)
+    """The first line of a ``delete``, ``edit`` or ``undo`` that is applied (the key is the
+    operation's kind)."""
+    return t(f"{op.kind}.start", id=op.id, count=op.planned, chat=op.chat_title)
 
 
 def delete_result_lines(final: Op) -> list[str]:
+    kind = final.kind
     lines = [
         t(
-            "delete.result",
+            f"{kind}.result",
             id=final.id,
             status=t(f"status.{final.status}"),
             done=final.done,
@@ -255,11 +316,15 @@ def delete_result_lines(final: Op) -> list[str]:
         )
     ]
     if final.skipped:
-        lines.append(t("delete.left_alone", count=final.skipped))
+        lines.append(t(f"{kind}.left_alone", count=final.skipped))
     if final.gone:
-        lines.append(t("delete.gone", count=final.gone))
+        lines.append(t(f"{kind}.gone", count=final.gone))
+    if final.failed and kind is not OpKind.DELETE:
+        lines.append(t(f"{kind}.failed", count=final.failed, id=final.id))
     if final.backup_dir is not None and final.backup_done:
         lines.append(t("delete.backup_note", dir=final.backup_dir))
     if final.status in (OpStatus.STOPPED, OpStatus.WAITING_FLOOD, OpStatus.FAILED):
-        lines.append(t("delete.continue_hint", id=final.id))
+        lines.append(t(f"{kind}.continue_hint", id=final.id))
+    elif kind is OpKind.EDIT and final.done:
+        lines.append(t("edit.undo_hint", id=final.id))
     return lines

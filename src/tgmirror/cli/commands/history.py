@@ -23,9 +23,9 @@ from tgmirror.engine.ops import resolve_op
 from tgmirror.engine.runs import resolve_run
 from tgmirror.store.backups import Backup
 from tgmirror.store.db import Store
-from tgmirror.store.ops import Op
+from tgmirror.store.ops import ItemStatus, Op
 from tgmirror.store.runs import Run
-from tgmirror.ui.lines import flood_where
+from tgmirror.ui.lines import flood_where, op_counts_line
 from tgmirror.ui.messages import t
 
 DETAIL_FAILURES = 20  # failed messages listed in the detail view
@@ -83,6 +83,7 @@ def _record(item: Run | Backup | Op) -> dict[str, object]:
             "left_alone": item.skipped,
             "gone": item.gone,
             "failed": item.failed,
+            "undo_of": item.undo_of,
             "filter": json.loads(item.filters_json),
             "backup": {"directory": item.backup_dir, "finished": item.backup_done}
             if item.backup_dir is not None
@@ -247,6 +248,9 @@ async def _detail(store: Store, item: Run, as_json: bool) -> None:
             )
 
 
+FAILED_SHOWN = 10  # failed messages named in the detail of an operation
+
+
 async def _detail_op(store: Store, item: Op, as_json: bool) -> None:
     floods = await store.op_flood_events(item.id)
     if as_json:
@@ -273,16 +277,14 @@ async def _detail_op(store: Store, item: Op, as_json: bool) -> None:
     say(t("history.line_status", status=_status(item), note=note))
     ended = _when(item.ended_at) or t("history.still_running")
     say(t("history.line_time", started=_when(item.created_at), ended=ended))
-    say(
-        t(
-            "history.line_counts_op",
-            done=item.done,
-            skipped=item.skipped,
-            gone=item.gone,
-            failed=item.failed,
-            planned=item.planned,
-        )
-    )
+    say(op_counts_line(item))
+    if item.undo_of is not None:
+        say(t("history.line_undo_of", id=item.undo_of))
+    if item.failed:
+        failed = await store.op_items_in(item.id, ItemStatus.FAILED)
+        say(t("history.failed_items", count=len(failed)))
+        for entry in failed[:FAILED_SHOWN]:
+            say(t("history.failed_item", id=entry.msg_id, reason=entry.reason or "?"))
     filter_text = t("history.no_filter") if item.filters_json == "{}" else item.filters_json
     say(t("history.line_filter", filter=filter_text))
     if item.backup_dir is not None:

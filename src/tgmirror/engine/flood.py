@@ -46,6 +46,7 @@ from tgmirror.core.gateway import (
 )
 from tgmirror.core.limiter import (
     DELETE,
+    EDIT,
     FILE,
     FORWARD,
     HISTORY,
@@ -74,6 +75,8 @@ LANES: dict[str, str] = {
     "upload_prepared": SEND,
     "create_topic": SEND,
     "delete_messages": DELETE,
+    "edit_message": EDIT,
+    "rewrite_messages": HISTORY,
     "iter_messages": HISTORY,
     "get_messages": HISTORY,
     "count": HISTORY,
@@ -204,6 +207,11 @@ class FloodGuard:
         if (sent := self._limiter.cap_warning()) is not None:  # only a reminder: it stops nothing
             self._notifier.notice("cap_warning", sent=sent, cap=self._limits.daily_cap)
         return result
+
+    async def read(self, method: str, call: Callable[[], Awaitable[T]], *, requests: int = 1) -> T:
+        """One paced read call that is not a ``MessageReader`` method (``rewrite_messages``),
+        repeated after a FloodWait like the guarded reader's own."""
+        return await _read_call(self, method, call, requests=requests)
 
     async def transfer(self, method: str, call: Callable[[], Awaitable[T]]) -> T:
         """Run ``call`` that moves bytes but creates no message (uploading a file before it is
@@ -338,6 +346,33 @@ async def inspect_guard(
     )
 
 
+async def _read_call(
+    guard: FloodGuard,
+    method: str,
+    call: Callable[[], Awaitable[T]],
+    *,
+    requests: int = 1,
+    paced: bool = True,
+) -> T:
+    """One read call: paced on its lane, repeated after a FloodWait (up to
+    ``MAX_FLOODS_PER_CALL``), never after a PeerFlood."""
+    floods = 0
+    while True:
+        if paced:
+            await guard.pace_read(requests, action_of(method))
+        try:
+            result = await call()
+        except FloodWait as exc:
+            floods += 1
+            await guard.flooded(method, exc, give_up=floods >= MAX_FLOODS_PER_CALL)
+        except PeerFlood:
+            await guard.peer_flood(method)
+            raise
+        else:
+            guard.read_done(method)
+            return result
+
+
 class _GuardedReader:
     def __init__(self, guard: FloodGuard, inner: MessageReader) -> None:
         self._guard = guard
@@ -351,23 +386,7 @@ class _GuardedReader:
         requests: int = 1,
         paced: bool = True,
     ) -> T:
-        """One read call: paced on its lane, repeated after a FloodWait (up to
-        ``MAX_FLOODS_PER_CALL``), never after a PeerFlood."""
-        guard, floods = self._guard, 0
-        while True:
-            if paced:
-                await guard.pace_read(requests, action_of(method))
-            try:
-                result = await call()
-            except FloodWait as exc:
-                floods += 1
-                await guard.flooded(method, exc, give_up=floods >= MAX_FLOODS_PER_CALL)
-            except PeerFlood:
-                await guard.peer_flood(method)
-                raise
-            else:
-                guard.read_done(method)
-                return result
+        return await _read_call(self._guard, method, call, requests=requests, paced=paced)
 
     async def iter_messages(
         self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER

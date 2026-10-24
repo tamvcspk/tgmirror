@@ -371,7 +371,26 @@ tgmirror delete "@kenh_cua_toi" --hashtag "#ads" --yes --expect 412 --backup-to 
 
 **Giao diện full-screen**: mục "Xoá tin trong kênh của mình…" chạy đúng các câu hỏi trên (chọn kênh mình quản trị → bộ lọc → xem kế hoạch → gõ lại số tin → có backup không / lưu ở đâu) rồi một màn hình tiến độ hai chặng (backup, rồi xoá) với `p`/`r`/`q`; ở màn hình "Khám phá" phím `d` mở cùng wizard với kênh và bộ lọc đã chọn sẵn (bộ lọc rỗng bị từ chối, như dòng lệnh không có `--all`).
 
-Chưa có (các lát sau của Phase 20, xem `06-lo-trinh.md`): `edit`/`repost`/`undo`.
+Chưa có (các lát sau của Phase 20, xem `06-lo-trinh.md`): `repost`.
+
+## Sửa tin tại chỗ (`tgmirror edit`, `tgmirror undo`, Phase 20.3, D10)
+
+`tgmirror edit [<src>] <cờ lọc> --transform FILE` đổi **văn bản** (caption của tin có media; thêm `text_too: true` thì cả tin chỉ có chữ) của các tin mà filter chọn, trong một kênh/nhóm mà tài khoản **quản trị**. Cái đổi chỉ là các thao tác `caption` của transform (`strip_links`, `remove_hashtags`, `remove_mentions`, `replace`, `append`, ...; `docs/07`, mục 4). Cùng luật 11 như `delete`:
+
+```bash
+tgmirror edit "@kenh_cua_toi" --hashtag "#ads" --transform bo-ads.yaml     # plan + diff → gõ lại số tin → sửa
+tgmirror edit "@kenh_cua_toi" --selection chon.yaml --yes --expect 37      # không tương tác (transform lấy từ selection nếu có)
+tgmirror edit --resume O9 --yes --expect 37                                # áp một plan đã lưu / sửa tiếp
+tgmirror undo O9                                                           # plan trả lại bản gốc → gõ lại số tin → trả
+tgmirror undo --resume O10 --yes --expect 37
+```
+
+- **Plan**: với mỗi tin được chọn, tính văn bản sau khi áp transform và **chỉ đóng băng những tin có văn bản đổi**, kèm bản trước/sau; in số tin, theo loại, theo tháng, và **diff** (`trước:`/`sau:`) của 5 tin đầu và 5 tin cuối. Dòng "để nguyên" nói số tin được chọn mà transform không đổi gì, và số tin có định dạng mà việc ghi lại không giữ nguyên vẹn được (spoiler, ...: **không bao giờ sửa**, vì `undo` không trả lại đúng được). Không tin nào đổi thì không có plan.
+- **Xác nhận** y như `delete`: gõ lại số tin, hoặc `--yes --expect N`; không có thì plan được giữ (`O<n>`, mã 2). Filter rỗng cần `--all`. **Không hỏi backup**: bản gốc nằm trong plan; `undo` là đường lui.
+- **Áp dụng**: đọc lại văn bản hiện tại của từng lô 10 tin, chỉ sửa tin còn đọc đúng như lúc plan; tin đã bị người khác sửa thì để nguyên, tin đã đọc đúng bản mới thì coi là xong. Mỗi lần sửa là một lời gọi (làn `edit` của limiter); một tin Telegram không cho sửa chỉ làm tin đó `failed` kèm lý do (`history O<n>` liệt kê tối đa 10 tin cùng lời Telegram trả lời), các tin khác đi tiếp. Đã thấy thật: tin **forward giữ header** (`MESSAGE_ID_INVALID`); tin sao chép bằng forward bỏ tác giả thì sửa được như tin thường. `p`/`r`/`q`, Ctrl+C, `tgmirror pause|stop`, `--resume` như `delete`.
+- **`undo [O<n>]`** (mặc định: lần sửa gần nhất có tin đã sửa) lập một plan mới đặt lại văn bản gốc của các tin mà lần sửa đó đã sửa, qua cùng bước xác nhận; tin bị sửa tiếp bởi người khác sau đó thì để nguyên. Mỗi lần sửa chỉ undo được một lần.
+- Transform có `topics`, `reply: keep`, `forward_header: keep` hoặc `links: rewrite` bị từ chối (mã 2): những thứ đó chỉ có nghĩa khi sao chép, hoặc là việc của `repost`/`topics split` (sửa tin không đổi được topic). Thiếu `--transform` hay không có thao tác `caption` cũng mã 2.
+- Chưa có: mục menu full-screen "Sửa tin"; sửa các bản sao ở đích của một cặp theo `msg_map` (20.5).
 
 ## Khám phá nguồn (`tgmirror inspect`, Phase 18a)
 

@@ -89,6 +89,7 @@ from tgmirror.core.gateway import (
     RemoveHashtags,
     RemoveMentions,
     Replace,
+    Rewrite,
     ServerFilter,
     SrcMessage,
     StripLinks,
@@ -215,6 +216,12 @@ def map_exception(exc: BaseException) -> GatewayError | None:
         case (
             errors.MediaCaptionTooLongError() | errors.MessageTooLongError()
         ):  # ``append`` can do it
+            return PerMessage(_rpc_name(exc))
+        case (
+            errors.MessageAuthorRequiredError()
+            | errors.MessageEditTimeExpiredError()
+            | errors.MessageEmptyError()
+        ):  # ``edit_message`` (phase 20.3): this one message cannot be edited
             return PerMessage(_rpc_name(exc))
         case errors.ChannelsTooMuchError() | errors.UserChannelsTooMuchError():
             return TooManyChannels(_rpc_name(exc))
@@ -888,6 +895,83 @@ def rewrite_caption(
     if policy.hashtag:  # phase 8: appended last, whatever the mode did; Telegram parses it itself
         text = f"{text}\n{policy.hashtag}" if text else policy.hashtag
     return text, kept
+
+
+# Entities Telegram works out again from the text itself whenever it is sent or edited, so writing
+# the text back gives them back whether or not our HTML carries them.
+_AUTO_ENTITIES = (
+    types.MessageEntityHashtag,
+    types.MessageEntityCashtag,
+    types.MessageEntityMention,
+    types.MessageEntityBotCommand,
+    types.MessageEntityUrl,
+    types.MessageEntityEmail,
+    types.MessageEntityPhone,
+    types.MessageEntityBankCard,
+)
+# Entities Telethon's HTML can write and read back.
+_HTML_ENTITIES = (
+    types.MessageEntityBold,
+    types.MessageEntityItalic,
+    types.MessageEntityCode,
+    types.MessageEntityPre,
+    types.MessageEntityUnderline,
+    types.MessageEntityStrike,
+    types.MessageEntityBlockquote,
+    types.MessageEntityTextUrl,
+    types.MessageEntityMentionName,
+    types.MessageEntityCustomEmoji,
+)
+
+
+def _formatting(text: str, entities: Sequence[object]) -> list[object]:
+    """What the person formatted by hand: the entities HTML carries, minus a link whose address
+    is its own text (what a bare URL reads back as)."""
+    kept: list[object] = []
+    for e in entities:
+        if not isinstance(e, _HTML_ENTITIES):
+            continue
+        if isinstance(e, types.MessageEntityTextUrl) and e.url == _slice16(
+            text, e.offset, e.length
+        ):
+            continue
+        kept.append(e.to_dict())
+    return kept
+
+
+def _survives_html(
+    text: str, entities: Sequence[object], back_text: str, back: Sequence[object]
+) -> bool:
+    """Writing ``text`` back from its HTML gives the same message: the same text, nothing in it
+    that HTML cannot carry (a spoiler, say), the same hand-made formatting. Entities Telegram
+    detects itself (hashtags, mentions, plain links) do not count."""
+    if back_text != text:
+        return False
+    if any(not isinstance(e, _AUTO_ENTITIES + _HTML_ENTITIES) for e in entities):
+        return False
+    return _formatting(text, entities) == _formatting(back_text, back)
+
+
+def _rewrite_message(message: custom.Message, policy: CaptionPolicy) -> Rewrite:
+    """What ``policy`` would make of one live message's text, as HTML (phase 20.3). A message
+    with nowhere to put a text, or whose formatting does not survive a round trip through HTML,
+    comes back unchanged (the second also as not ``lossless``, so it is never edited)."""
+    text, entities = message.message or "", list(message.entities or [])
+    before = tl_html.unparse(text, entities)
+    back_text, back_entities = tl_html.parse(before)
+    lossless = _survives_html(text, entities, back_text, back_entities)
+    kind = media_kind(message)
+    if message.action is not None or isinstance(message.media, _SELF_CONTAINED):
+        return Rewrite(message.id, before, before, lossless)
+    names = _source_names(message)
+    try:
+        if kind in (MediaKind.TEXT, MediaKind.WEBPAGE):
+            new_text, kept = _plain_text(text, entities, policy, names)
+        else:
+            new_text, kept = rewrite_caption(text, entities, policy, names)
+    except PerMessage:  # the operations would empty a text message: it is left as it is
+        return Rewrite(message.id, before, before, lossless)
+    return Rewrite(message.id, before, tl_html.unparse(new_text, kept), lossless)
 
 
 def _plain_text(
@@ -2297,6 +2381,29 @@ class TelethonGateway:
                 peer, text, parse_mode=None, link_preview=False, reply_to=_reply_of(topic, reply_to)
             )
         return int(sent.id)
+
+    async def rewrite_messages(
+        self, chat: int, ids: Sequence[int], policy: CaptionPolicy
+    ) -> list[Rewrite]:
+        peer = await self._peer(chat)
+        with mapped_errors():
+            found = await self._client.get_messages(peer, ids=list(ids))
+        out: list[Rewrite] = []
+        for message in found:
+            if not isinstance(message, custom.Message) or isinstance(message, types.MessageEmpty):
+                continue  # gone
+            out.append(_rewrite_message(message, policy))
+        return sorted(out, key=lambda r: r.id)
+
+    async def edit_message(self, chat: int, msg_id: int, text: str) -> bool:
+        peer = await self._peer(chat)
+        plain, entities = tl_html.parse(text)
+        with mapped_errors():
+            try:
+                await self._client.edit_message(peer, msg_id, plain, formatting_entities=entities)
+            except errors.MessageNotModifiedError:  # inside: ``mapped_errors`` would turn it
+                return False  # into a generic GatewayError
+        return True
 
     async def delete_messages(self, chat: int, ids: list[int]) -> int:
         peer = await self._peer(chat)
