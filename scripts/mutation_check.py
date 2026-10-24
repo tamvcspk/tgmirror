@@ -566,6 +566,26 @@ MUTATIONS = [
         "            if found is not None:\n                gone.append(row)",
     ),
     Mutation(
+        "move: a topic that still holds a message is deleted anyway",
+        "src/tgmirror/engine/ops.py",
+        "            if left:\n                op = await self._store.mark_op_items(\n"
+        '                    op.id, [], ItemStatus.DONE, stats={"topics_kept": 1}',
+        "            if False:\n                op = await self._store.mark_op_items(\n"
+        '                    op.id, [], ItemStatus.DONE, stats={"topics_kept": 1}',
+    ),
+    Mutation(
+        "move: a reply between moved messages answers the original again",
+        "src/tgmirror/engine/ops.py",
+        "            reply = await self._reply_to(op, unit)\n",
+        "            reply = None\n",
+    ),
+    Mutation(
+        "merge: the later topics follow the forum's order, not the order typed",
+        "src/tgmirror/engine/topicops.py",
+        "        unit_id = order * TOPIC_ORDER + unit.ids[0]",
+        "        unit_id = unit.ids[0]",
+    ),
+    Mutation(
         "sync: a copy that already matches its source is edited again",
         "src/tgmirror/engine/sync.py",
         "            elif want.after == have.before:\n                counts.in_sync += 1",

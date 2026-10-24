@@ -423,6 +423,8 @@ topics:
 **Tại chỗ, trên một forum đang có** — giới hạn của Telegram quyết định (mục 6.1): theo hiểu biết hiện tại **không có API chuyển tin sang topic khác** (spike 4, chưa xác minh). Nên:
 
 1. **Dựng lại**: clone forum → forum mới với `route`/`topic_map`, kiểm tra, đổi username. Không mất gì, chạy được từ 11.2. Vẫn là đường nên gợi ý cho một forum rất lớn.
+*Đã cài ở Phase 20b (2026-10-24): `tgmirror topics split/merge/delete/rename/close/reopen` — xem `06-lo-trinh.md`, "Phase 20b — ghi chú", và `02-cli-ux.md`, "Topic tại chỗ".*
+
 2. **Gộp và chia tại chỗ** (Phase 20b, chốt 2026-10-18, Q5) — dựng trên `repost` + `delete` của Phase 20, cùng plan → xác nhận → apply (D10). Ngữ nghĩa người dùng chốt:
 
    **Chia** — `tgmirror topics split <forum> "A" --transform t.yaml` (hoặc `--selection`): những tin của A mà `route` cho ra một tên khác A được **đăng lại vào topic mới** (tạo theo tên, hoặc topic có sẵn cùng tên) **theo đúng thứ tự gốc** của chúng, rồi **xoá khỏi A**. Tin còn lại của A giữ nguyên chỗ và thứ tự. Một lần chia có thể cho ra nhiều topic mới; mỗi topic mới chứa các tin của nó theo thứ tự id tăng dần ở A.

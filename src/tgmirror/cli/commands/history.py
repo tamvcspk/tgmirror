@@ -280,6 +280,8 @@ async def _detail_op(store: Store, item: Op, as_json: bool) -> None:
     say(op_counts_line(item))
     if item.undo_of is not None:
         say(t("history.line_undo_of", id=item.undo_of))
+    if item.topics_dropped or item.topics_kept:
+        say(t("history.line_topics", dropped=item.topics_dropped, kept=item.topics_kept))
     if item.sync_src is not None:
         say(t("history.line_sync", src=item.sync_src, run=item.sync_run or "?"))
     if item.failed:

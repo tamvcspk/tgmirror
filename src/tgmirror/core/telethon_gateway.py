@@ -37,6 +37,8 @@ from telethon.tl.functions.channels import (
 )
 from telethon.tl.functions.messages import (
     CreateForumTopicRequest,
+    DeleteTopicHistoryRequest,
+    EditForumTopicRequest,
     ForwardMessagesRequest,
     GetForumTopicsRequest,
     GetSearchCountersRequest,
@@ -126,6 +128,9 @@ _quiet_hachoir()
 log = logging.getLogger(__name__)  # ``tgmirror.core.telethon_gateway``: shown by the CLI
 
 READ_WAIT = 1.0  # seconds between history pages: reads are rate-limited too (docs/05)
+SERVICE_ALLOWANCE = 10  # service messages a topic's listing may hold besides what is asked for
+# no such topic (any more): Telethon has a class for the second only, so it is named by it
+_TOPIC_GONE = frozenset({"TOPIC_ID_INVALID", "TopicDeletedError"})
 
 DOWN_PART = 1024 * 1024  # a download request: at most 1 MiB, never across a 1 MiB boundary
 UP_PART = 512 * 1024  # an upload part: at most 512 KiB
@@ -1429,6 +1434,52 @@ class TelethonGateway:
             if isinstance(update, types.UpdateMessageID):
                 return update.id
         raise GatewayError("Telegram returned no id for the new topic")
+
+    async def edit_topic(
+        self, chat: int, topic_id: int, *, title: str | None = None, closed: bool | None = None
+    ) -> None:
+        peer = await self._peer(chat)
+        with mapped_errors():
+            try:
+                await self._client(
+                    EditForumTopicRequest(peer=peer, topic_id=topic_id, title=title, closed=closed)
+                )
+            except errors.RPCError as exc:
+                name = _rpc_name(exc)
+                if name == "TOPIC_NOT_MODIFIED":  # it already is what was asked
+                    return
+                if name in _TOPIC_GONE:
+                    raise PerMessage(name) from exc
+                raise
+
+    async def delete_topic(self, chat: int, topic_id: int) -> None:
+        peer = await self._peer(chat)
+        with mapped_errors():
+            try:
+                while True:  # one request removes a slice of the history; ``offset`` says more
+                    affected = await self._client(
+                        DeleteTopicHistoryRequest(peer=peer, top_msg_id=topic_id)
+                    )
+                    if not getattr(affected, "offset", 0):
+                        return
+            except errors.RPCError as exc:
+                name = _rpc_name(exc)
+                if name in _TOPIC_GONE:
+                    raise PerMessage(name) from exc
+                raise
+
+    async def topic_message_ids(self, chat: int, topic_id: int, limit: int) -> list[int]:
+        peer = await self._peer(chat)
+        found: list[int] = []
+        with mapped_errors():
+            async for message in self._client.iter_messages(
+                peer, reply_to=topic_id, limit=limit + SERVICE_ALLOWANCE, wait_time=READ_WAIT
+            ):
+                if isinstance(message, custom.Message) and message.action is None:
+                    found.append(message.id)
+                    if len(found) >= limit:
+                        break
+        return found
 
     async def slowmode_seconds(self, chat: int) -> int:
         peer = await self._peer(chat)

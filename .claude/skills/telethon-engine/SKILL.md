@@ -166,6 +166,8 @@ Anything new in the gateway needs a `FakeGateway` counterpart and an engine-leve
 
 ## Reposting (Phase 20.4)
 
+Forum topics (Phase 20b): `edit_topic` is `messages.EditForumTopicRequest` (`TOPIC_NOT_MODIFIED` is no error), `delete_topic` is `messages.DeleteTopicHistoryRequest` repeated while `offset` is non-zero, `topic_message_ids` is `iter_messages(peer, reply_to=topic)` without service messages; `TOPIC_ID_INVALID` and `TopicDeletedError` become `PerMessage`. Telegram has no call that moves a message to another topic, so `topics split|merge` post again (strategy B) and delete. **`getForumTopics` lags a few seconds behind a change**: right after `editForumTopic` the list can still show the old title or `closed: false`, so do not read the list twice and act on the second reading.
+
 `tgmirror repost` reuses strategy B on the chat itself: `reader.prepare(chat, unit, tmp)` downloads, `send_prepared(chat, prepared, CaptionPolicy(), on_transfer, topic=, silent=)` uploads as a new message. Telegram gives an upload a new file id (Phase 20.4's whole point; it can still reuse a file whose content is identical, which `OpRunner._same_file_ids` reports through `SrcMessage.file_key`). `silent` is carried by the `_SILENT` `ContextVar` that `send_prepared` sets and `_send_one`/`_post_multi_media` read, so it need not be threaded through every helper. Probed live (2026-10-24): `forward_messages(drop_author=True)` inside one chat turns a forwarded message into an own one and `silent=True` works — but it keeps the document id, so it is *not* what `repost` uses.
 
 ## Editing messages (Phase 20.3)

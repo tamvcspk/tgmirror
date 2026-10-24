@@ -47,6 +47,7 @@ from tgmirror.core.errors import (
     Transient,
 )
 from tgmirror.core.gateway import (
+    GENERAL_TOPIC_ID,
     MAX_IDS_PER_CALL,
     CaptionPolicy,
     ChannelInfo,
@@ -520,7 +521,7 @@ async def begin_op(
     works on the same chat. A repost needs ``gateway`` (it re-reads the chat) and, for a chat that
     restricts saving content, ``ack``: decision D3, checked here so no caller can skip it."""
     op = await store.get_op(op_id)
-    if op is not None and op.kind is OpKind.REPOST:
+    if op is not None and op.kind.posts_again:
         assert gateway is not None, "a repost re-reads the chat: begin_op needs the gateway"
         current = await gateway.get_channel(op.chat_id)
         if current.noforwards and not ack:
@@ -636,6 +637,7 @@ class OpRunner:
         self._clock = clock
         self._timing = timing or OpTiming()
         self._wait = wait
+        self._topic_ids: dict[str, int] | None = None  # the forum's topics by folded title
 
     async def run(self, op: Op) -> Op:
         limiter = Limiter(
@@ -662,7 +664,7 @@ class OpRunner:
             spec = FilterSpec.from_json(op.filters_json)
             matcher = None if spec.is_empty else Matcher(spec)
             edits = op.kind in (OpKind.EDIT, OpKind.UNDO)  # one call per message
-            reposts = op.kind is OpKind.REPOST
+            reposts = op.kind.posts_again
             if edits:
                 op = await self._settle_edits(op, guard)
             elif reposts:
@@ -688,6 +690,8 @@ class OpRunner:
                     # what the lane has sent is kept with the batch, so a later run (and a budget
                     # learned from a long flood) counts the messages this one deleted or edited
                     await self._store.save_limiter_state(op.account, limiter.state)
+            if status is OpStatus.DONE and op.drop_topics:
+                op = await self._drop_topics(op, guard)
             await self._store.finish_op(op.id, status)
         except Interrupted:
             await self._store.finish_op(op.id, OpStatus.STOPPED)
@@ -1096,6 +1100,12 @@ class OpRunner:
             )
         topic = _noted(items[0]).get("topic")
         topic = None if topic in (None, 1) else int(topic)
+        title, known = items[0].dest
+        if (
+            op.kind is OpKind.MOVE
+        ):  # the topic it goes to: found by its title, made if there is none
+            assert title is not None, "a move item names the topic it goes to"
+            topic = await self._topic_titled(op, guard, title, known)
         assert self._tmp_dir is not None, "a repost downloads: OpRunner needs a tmp_dir"
         try:
             prepared = await reader.prepare(op.chat_id, unit, self._tmp_dir, self._on_transfer)
@@ -1111,7 +1121,8 @@ class OpRunner:
                 "last_message_id", lambda: self._gateway.last_message_id(op.chat_id)
             )
             await guard.pace(len(ids), action=SEND)  # may rest, or raise BudgetReached
-            note = json.dumps({"topic": topic, "tail": tail})
+            note = json.dumps({"topic": topic, "tail": tail, "dest": title, "dest_id": known})
+            reply = await self._reply_to(op, unit)
             op = await self._store.mark_op_items(
                 op.id,
                 ids,
@@ -1128,6 +1139,7 @@ class OpRunner:
                         CaptionPolicy(),
                         self._on_transfer,
                         topic=topic,
+                        reply_to=reply,
                         silent=op.silent,
                     ),
                 )
@@ -1162,6 +1174,76 @@ class OpRunner:
             op = await self._store.mark_op_items(op.id, [], status, stats={"same_file": same})
             self._reporter.notice("same_file", count=same)
         return op, ids if status is ItemStatus.REPOSTED else []
+
+    async def _reply_to(self, op: Op, unit: Unit) -> int | None:
+        """The copy of the message ``unit`` answers, when that one was posted again by this very
+        operation (a moved message keeps answering the moved one); otherwise none: a reply to a
+        message that stays elsewhere cannot be kept."""
+        target = unit.messages[0].reply_to_id
+        if target is None:
+            return None
+        return (await self._store.op_new_ids(op.id, [target])).get(target)
+
+    async def _topic_titled(
+        self, op: Op, guard: FloodGuard, title: str, known: int | None
+    ) -> int | None:
+        """The id of the forum topic called ``title`` for a ``move`` (``None``: General, which is
+        posted to with no topic). A topic that is there is used, else one is made; read once."""
+        if known is not None:
+            return None if known == GENERAL_TOPIC_ID else known
+        if self._topic_ids is None:
+            found = await guard.read("list_topics", lambda: self._gateway.list_topics(op.chat_id))
+            self._topic_ids = {}
+            for topic in found:  # of two with one title the first is the one used
+                self._topic_ids.setdefault(topic.title.strip().casefold(), topic.id)
+        key = title.strip().casefold()
+        if key not in self._topic_ids:
+            await guard.pace(1, action=SEND)  # may rest, or raise BudgetReached
+            self._topic_ids[key] = await guard.write(
+                "create_topic", 1, lambda: self._gateway.create_topic(op.chat_id, title)
+            )
+        found_id = self._topic_ids[key]
+        return None if found_id == GENERAL_TOPIC_ID else found_id
+
+    async def _drop_topics(self, op: Op, guard: FloodGuard) -> Op:
+        """The topics a merge (or ``topics delete``) was to empty are deleted — but only a topic
+        that is empty: one that still holds a message the plan did not take (it was posted
+        meanwhile, or could not be moved) is kept, and said so. General is never deleted."""
+        existing = {
+            t.id
+            for t in await guard.read("list_topics", lambda: self._gateway.list_topics(op.chat_id))
+        }
+        for topic_id in op.drop_topics:
+            if topic_id == GENERAL_TOPIC_ID or topic_id not in existing:
+                continue
+            left = await guard.read(
+                "topic_message_ids",
+                lambda chat=op.chat_id, topic_id=topic_id: self._gateway.topic_message_ids(
+                    chat, topic_id, 1
+                ),
+            )
+            if left:
+                op = await self._store.mark_op_items(
+                    op.id, [], ItemStatus.DONE, stats={"topics_kept": 1}
+                )
+                self._reporter.notice("topic_kept", id=topic_id)
+                continue
+            await guard.pace(1, action=DELETE)  # may rest, or raise BudgetReached
+            try:
+                await guard.write(
+                    "delete_topic",
+                    1,
+                    lambda chat=op.chat_id, topic_id=topic_id: self._gateway.delete_topic(
+                        chat, topic_id
+                    ),
+                )
+            except PerMessage:  # gone already
+                continue
+            op = await self._store.mark_op_items(
+                op.id, [], ItemStatus.DONE, stats={"topics_dropped": 1}
+            )
+            self._reporter.notice("topic_dropped", id=topic_id)
+        return op
 
     async def _same_file_ids(
         self, op: Op, guard: FloodGuard, reader: MessageReader, unit: Unit, sent: list[int]

@@ -336,7 +336,10 @@ class DeleteFlow:
         assert self._o.resume is not None
         op = await resolve_op(self._store, self._o.resume)
         if op.kind.value != self._kind:
-            raise UsageProblem("op.wrong_kind", id=op.id, kind=op.kind.value, expected=self._kind)
+            cmd = "topics move" if op.kind is OpKind.MOVE else op.kind.value
+            raise UsageProblem(
+                "op.wrong_kind", id=op.id, kind=op.kind.value, expected=self._kind, cmd=cmd
+            )
         if op.status in (OpStatus.DONE, OpStatus.CANCELLED):
             raise UsageProblem(f"{self._kind}.finished", id=op.id, status=t(f"status.{op.status}"))
         # the chat must still be reachable before anything is asked
@@ -424,7 +427,7 @@ class DeleteFlow:
                 await self._store.set_op_options(op.id, backup_dir=str(resolved))
             raise UsageProblem(f"{self._kind}.needs_yes", id=op.id, count=op.planned)
         after = ""
-        if op.kind is OpKind.REPOST:  # what becomes of the originals is part of the question
+        if op.kind.posts_again:  # what becomes of the originals is part of the question
             after = t("repost.after_delete" if op.delete_original else "repost.after_keep")
         question = t(
             f"{self._kind}.type_count", count=op.planned, chat=op.chat_title, id=op.id, after=after

@@ -26,6 +26,12 @@ class OpKind(StrEnum):
     EDIT = "edit"  # phase 20.3: change the text of messages; each item keeps what it was
     UNDO = "undo"  # phase 20.3: put the texts of an edit back (``options_json['undo_of']``)
     REPOST = "repost"  # phase 20.4: post again at the end of the chat, then (optionally) delete
+    MOVE = "move"  # phase 20b: post again in another topic of the forum, then delete (split/merge)
+
+    @property
+    def posts_again(self) -> bool:
+        """Posts the messages again (downloads, uploads): decision D3 applies, as to a backup."""
+        return self in (OpKind.REPOST, OpKind.MOVE)
 
 
 class OpStatus(StrEnum):
@@ -94,6 +100,17 @@ class OpItem:
         """``sync-changes`` delete items: the source message this copy stood for."""
         found = json.loads(self.before_json or "{}").get("src")
         return found if isinstance(found, int) else None
+
+    @property
+    def dest(self) -> tuple[str | None, int | None]:
+        """``move`` items: the title of the topic the message goes to and, when the plan knew it
+        (a merge goes into a topic that exists), its id."""
+        data = json.loads(self.before_json or "{}")
+        title, topic = data.get("dest"), data.get("dest_id")
+        return (
+            title if isinstance(title, str) else None,
+            topic if isinstance(topic, int) else None,
+        )
 
     @property
     def texts(self) -> tuple[str, str]:
@@ -182,6 +199,21 @@ class Op:
         return found if isinstance(found, str) else None
 
     @property
+    def drop_topics(self) -> tuple[int, ...]:
+        """Topics to delete once the operation has emptied them (a merge, ``topics delete``)."""
+        found = json.loads(self.options_json).get(DROP_TOPICS)
+        return tuple(i for i in found if isinstance(i, int)) if isinstance(found, list) else ()
+
+    @property
+    def topics_dropped(self) -> int:
+        return self.stats.get("topics_dropped", 0)
+
+    @property
+    def topics_kept(self) -> int:
+        """Topics that were to be deleted but still held messages the operation did not move."""
+        return self.stats.get("topics_kept", 0)
+
+    @property
     def sync_src(self) -> int | None:
         """``sync-changes`` (phase 17): the source chat whose deleted messages this ``delete``
         removes the copies of; read again right before each copy goes."""
@@ -213,6 +245,7 @@ UNDO_OF = "undo_of"  # phase 20.3
 DELETE_ORIGINAL = "delete_original"  # phase 20.4
 SILENT = "silent"
 TRANSFORM = "transform"
+DROP_TOPICS = "drop_topics"  # phase 20b: topic ids deleted when the operation has emptied them
 SYNC_SRC = "sync_src"  # phase 17: the source chat of a `sync-changes` plan (an `int`)
 
 OP_SELECT = (

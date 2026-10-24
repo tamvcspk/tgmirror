@@ -8,6 +8,7 @@ list of lines) never drift apart from writing the same thing twice.
 from tgmirror.engine.ops import EditSample, EditSummary, PlanSummary, Sample, UndoPlan
 from tgmirror.engine.status import StatusReport, rest_hours
 from tgmirror.engine.sync import SyncPlan
+from tgmirror.engine.topicops import MoveSummary
 from tgmirror.store.backups import Backup
 from tgmirror.store.ops import Op, OpKind, OpStatus
 from tgmirror.store.runs import FilterChange, FloodEvent, Run, RunStatus, StartedRun
@@ -233,6 +234,41 @@ def delete_plan_lines(op: Op, summary: PlanSummary) -> list[str]:
     return lines
 
 
+def move_plan_lines(op: Op, summary: MoveSummary) -> list[str]:
+    """The frozen plan of a ``topics split``/``merge`` (phase 20b): where the messages go, what it
+    costs them, and which topics are deleted once empty."""
+    lines = [
+        t(
+            "move.plan_header",
+            how=t(f"move.how_{summary.how}"),
+            id=op.id,
+            chat=op.chat_title,
+            messages=summary.messages,
+            units=summary.units,
+            albums=summary.albums,
+            topics=len(summary.by_dest),
+        )
+    ]
+    for title, count in summary.by_dest.items():
+        note = (
+            t("move.note_new")
+            if title in summary.new_topics
+            else t("move.note_existing")
+            if title in summary.into_existing
+            else ""
+        )
+        lines.append(t("move.plan_dest", title=title, count=count, note=note))
+    how = t("repost.plan_silent" if op.silent else "repost.plan_notify")
+    lines.append(t("move.plan_how", notify=how))
+    if summary.drop:
+        lines.append(t("move.plan_drop", titles=", ".join(f"«{title}»" for title in summary.drop)))
+    lines.extend(_sample_line(item) for item in summary.first)
+    if summary.last:
+        lines.append(t("delete.plan_gap"))
+        lines.extend(_sample_line(item) for item in summary.last)
+    return lines
+
+
 def delete_backup_done_line(directory: str) -> str:
     """Said when the safety-net backup of a plan finished, just before the delete starts."""
     return t("delete.backup_done", dir=directory)
@@ -370,6 +406,10 @@ def delete_result_lines(final: Op) -> list[str]:
         lines.append(t("repost.same_file_result", count=final.same_file))
     if final.failed and kind is not OpKind.DELETE:
         lines.append(t(f"{kind}.failed", count=final.failed, id=final.id))
+    if final.topics_dropped:
+        lines.append(t("delete.topics_dropped", count=final.topics_dropped))
+    if final.topics_kept:
+        lines.append(t("delete.topics_kept", count=final.topics_kept))
     if final.backup_dir is not None and final.backup_done:
         lines.append(t("delete.backup_note", dir=final.backup_dir))
     if final.status in (OpStatus.STOPPED, OpStatus.WAITING_FLOOD, OpStatus.FAILED):

@@ -14,6 +14,8 @@ from telethon import TelegramClient, errors, types
 from telethon.tl.functions.channels import CreateChannelRequest, ToggleForumRequest
 from telethon.tl.functions.messages import (
     CreateForumTopicRequest,
+    DeleteTopicHistoryRequest,
+    EditForumTopicRequest,
     GetForumTopicsRequest,
     GetSearchCountersRequest,
 )
@@ -34,6 +36,7 @@ from tgmirror.core.errors import (
     NotLoggedIn,
     PasswordRequired,
     PeerFlood,
+    PerMessage,
     SessionBusy,
     TooManyChannels,
     Transient,
@@ -278,7 +281,10 @@ class StubClient:
         self.requests.append(request)
         if self.raises:
             raise self.raises
-        return self.results.popleft() if self.results else self.result
+        answer = self.results.popleft() if self.results else self.result
+        if isinstance(answer, BaseException):  # a request that fails, the lookup before it not
+            raise answer
+        return answer
 
     async def get_entity(self, ref: int) -> Any:
         if self.raises:
@@ -507,6 +513,48 @@ async def test_create_topic_reads_the_new_id_from_updates() -> None:
     (request,) = client.requests
     assert isinstance(request, CreateForumTopicRequest)
     assert request.title == "Announcements"
+
+
+async def test_edit_topic_renames_and_closes_and_a_noop_is_no_error() -> None:
+    client = StubClient()
+    gateway = TelethonGateway(client)  # type: ignore[arg-type]
+
+    await gateway.edit_topic(-1001, 5, title="New", closed=True)
+    client.results.append(errors.RPCError(None, "TOPIC_NOT_MODIFIED", 400))
+    await gateway.edit_topic(-1001, 5, closed=True)  # it already is closed
+
+    renamed = client.requests[0]
+    assert isinstance(renamed, EditForumTopicRequest)
+    assert (renamed.topic_id, renamed.title, renamed.closed) == (5, "New", True)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [errors.RPCError(None, "TOPIC_ID_INVALID", 400), errors.TopicDeletedError(None)],
+)
+async def test_a_topic_that_is_not_there_is_a_per_message_problem(error: Exception) -> None:
+    client = StubClient()
+    client.results.extend([error, error])
+    gateway = TelethonGateway(client)  # type: ignore[arg-type]
+
+    with pytest.raises(PerMessage):
+        await gateway.edit_topic(-1001, 5, title="x")
+    with pytest.raises(PerMessage):
+        await gateway.delete_topic(-1001, 5)
+
+
+async def test_delete_topic_repeats_until_telegram_says_the_history_is_gone() -> None:
+    client = StubClient()
+    client.results.extend(
+        [SimpleNamespace(offset=500), SimpleNamespace(offset=200), SimpleNamespace(offset=0)]
+    )
+
+    await TelethonGateway(client).delete_topic(-1001, 5)  # type: ignore[arg-type]
+
+    assert len(client.requests) == 3
+    assert all(
+        isinstance(r, DeleteTopicHistoryRequest) and r.top_msg_id == 5 for r in client.requests
+    )
 
 
 async def test_get_channel_unknown_entity_is_no_permission() -> None:

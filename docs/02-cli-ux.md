@@ -430,6 +430,27 @@ tgmirror sync-changes --no-deletes        # chỉ phần sửa (hoặc --no-edit
 - **Thứ tự**: backup (nếu có) → sửa → xoá; phần xoá chỉ bắt đầu khi phần sửa xong (không thì mã 1 và in cách làm tiếp). Mỗi bản sao được đọc lại ngay trước khi đụng tới; bản sao bị người khác sửa sau plan thì để nguyên.
 - **Không đồng bộ được**: media đã đổi, reaction, thứ tự; cặp thêm hashtag topic vào bản sao (`topic_as_hashtag`) không được sửa; bản sao forward giữ header Telegram không cho sửa (báo `failed` từng tin). `history O<n>` có dòng «Đồng bộ: theo nguồn …». Chưa có: mục menu full-screen, lọc các bản sao theo `--since`/`--hashtag`.
 
+## Topic tại chỗ (`tgmirror topics`, Phase 20b, D10)
+
+`tgmirror topics FORUM` liệt kê topic như trước; các động từ dưới đây đổi forum mà tài khoản **quản trị** (không phải admin → mã 4; không phải forum → mã 2). Topic gọi bằng tên (không phân biệt hoa thường) hoặc id; trùng tên thì dùng id.
+
+```bash
+tgmirror topics split "@forum" "Linh tinh" --hashtag-to-topic --topic-skip "#ads"   # chia: tin của topic mà luật cho tên khác thì sang topic đó
+tgmirror topics split "@forum" "Linh tinh" --transform route.yaml --yes --expect 120
+tgmirror topics merge "@forum" "Thông báo" "Tin tức" "Tin cũ"                        # gộp: tin của Tin tức rồi Tin cũ nối vào cuối Thông báo
+tgmirror topics move --resume O14 --yes --expect 120                                 # áp một plan đã lưu / làm tiếp
+tgmirror topics delete "@forum" "Tin cũ" --backup-to ./truoc                         # xoá topic cùng mọi tin trong nó
+tgmirror topics rename "@forum" "Tin cũ" "Lưu trữ" --yes                             # không đụng tin nào
+tgmirror topics close "@forum" "Lưu trữ" --yes                                       # hoặc: reopen
+```
+
+- **`split`/`merge`** là một thao tác `move` (`O<n>`): Telegram không có lệnh chuyển tin sang topic khác, nên mỗi đơn vị được **tải xuống rồi tải lên lại** vào topic đích (id mới, file id mới, im lặng — `--notify` để có thông báo), và chỉ sau đó bản gốc mới bị xoá (không cắt album; tin mới mất lượt xem, reaction, bình luận, ngày gốc; reply giữa các tin cùng được chuyển được nối lại). Plan in từng topic đích ("topic mới, tạo khi áp dụng" hay "đã có tin: tin chuyển nối ở cuối"), cái giá, topic sẽ bị xoá, rồi mẫu tin; xác nhận như `repost --delete-original`: gõ lại số tin hoặc `--yes --expect N`, hỏi backup (Có/Không ở terminal; `--backup-to`/`--no-backup`), D3 (`--yes-i-administer-this-channel`) vì là tải xuống. Chưa xác nhận thì không có gì thay đổi, kể cả việc tạo topic đích. Wizard: không gõ forum/topic thì chọn từ danh sách (gộp: chọn topic nhận rồi tick các topic gộp vào).
+- **`split`** nhận luật định tuyến (`--transform` có `topics:` hoặc `--hashtag-to-topic` cùng `--topic-skip/--topic-regex/--topic-pick`); tin của topic mà luật cho ra **tên khác** tên topic thì sang topic tên đó (có sẵn thì dùng, không thì tạo), theo thứ tự id tăng dần; tin còn lại giữ nguyên chỗ. Transform có `caption`/`links`/`forward_header` bị từ chối (mã 2): đổi chữ là việc của `edit`.
+- **`merge TOPIC_NHẬN TOPIC...`**: mọi tin của các topic sau, topic này rồi topic kia theo thứ tự gõ, được đăng ở cuối topic nhận; xong thì xoá các topic sau **nếu chúng đã rỗng** (còn tin nào — đăng vào giữa chừng, poll/game không chuyển được — thì giữ lại và báo). Gộp *vào* General được; General không bao giờ bị xoá nên không gộp General vào topic khác.
+- **`delete`** xoá các tin của topic (một thao tác `delete` thường: plan, gõ lại số tin, backup, `tgmirror delete --resume`) rồi xoá topic; topic rỗng thì chỉ hỏi Có/Không. General không xoá được.
+- **`rename`/`close`/`reopen`** không đụng tin nên chỉ cần một câu Có/Không (`--yes` khi không có terminal, không thì mã 2). Danh sách topic của Telegram chậm vài giây sau một thay đổi, nên `tgmirror topics` ngay sau đó có thể còn thấy tên/trạng thái cũ.
+- Chưa có: `--selection`/cờ lọc cho `split`, mục menu full-screen.
+
 ## Khám phá nguồn (`tgmirror inspect`, Phase 18a)
 
 `tgmirror inspect [<src>]` trả lời "kênh có gì" và "filter này chọn gì" trước khi sao chép/backup/restore. **Chỉ đọc**: không ghi gì lên Telegram, không tải media, nên **không cần D3** kể cả với nguồn `noforwards` và kể cả khi xuất caption/text (`--list`, `--csv`) — D3 chỉ áp khi thật sự chạm vào nội dung (tải xuống, đăng lại; chốt 2026-10-12). Thiếu `<src>` mà có terminal thì wizard chọn nguồn.

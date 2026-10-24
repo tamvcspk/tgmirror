@@ -2225,7 +2225,7 @@ VI.update(
         "undo.nothing": "Sửa O{id} chưa sửa được tin nào, không có gì để trả lại.",
         "undo.no_edit": "Chưa có thao tác sửa nào để hoàn tác.",
         "op.wrong_kind": (
-            "O{id} là thao tác «{kind}», không phải «{expected}»: dùng `tgmirror {kind} --resume "
+            "O{id} là thao tác «{kind}», không phải «{expected}»: dùng `tgmirror {cmd} --resume "
             "O{id}`."
         ),
         "history.op_kind_edit": "sửa tin",
@@ -2304,7 +2304,7 @@ EN.update(
         "undo.nothing": "Edit O{id} changed no message, so there is nothing to put back.",
         "undo.no_edit": "There is no edit to undo yet.",
         "op.wrong_kind": (
-            "O{id} is a '{kind}' operation, not '{expected}': use `tgmirror {kind} --resume O{id}`."
+            "O{id} is a '{kind}' operation, not '{expected}': use `tgmirror {cmd} --resume O{id}`."
         ),
         "history.op_kind_edit": "edit messages",
         "history.op_kind_undo": "put the originals back",
@@ -2557,6 +2557,225 @@ EN.update(
             "with: {commands}."
         ),
         "history.line_sync": "Synced:      from source {src}, run R{run}",
+    }
+)
+
+
+VI.update(_op_texts(_OP_VI, "move", "chuyển", "tgmirror topics move"))
+EN.update(_op_texts(_OP_EN, "move", "move", "tgmirror topics move"))
+VI.update(
+    {
+        "move.same_file": (
+            "{count} tin mới vẫn mang file id cũ: Telegram dùng lại file có nội dung trùng."
+        ),
+        "move.settled_repost": (
+            "Lần trước dừng giữa chừng: {copied} tin đã có bản chuyển, {again} tin sẽ chuyển lại, "
+            "{unsure} tin không chắc nên để nguyên."
+        ),
+        "move.nothing_split": (
+            "Không tin nào của topic «{topic}» được luật định tuyến đưa sang topic khác: không có "
+            "gì để chia."
+        ),
+        "move.nothing_merge": (
+            "Các topic muốn gộp không có tin nào để chuyển (một topic rỗng muốn bỏ thì dùng "
+            "`tgmirror topics delete`)."
+        ),
+        "move.plan_header": (
+            "Kế hoạch {how} O{id} trong «{chat}»: {messages} tin ({units} đơn vị, {albums} "
+            "album) sang {topics} topic."
+        ),
+        "move.how_split": "chia",
+        "move.how_merge": "gộp",
+        "move.plan_dest": "  → «{title}»: {count} tin{note}",
+        "move.note_new": " (topic mới, tạo khi áp dụng)",
+        "move.note_existing": " (đã có tin: tin chuyển sang nối ở cuối, sau tin hiện có)",
+        "move.plan_how": (
+            "  Mỗi đơn vị được TẢI XUỐNG rồi TẢI LÊN LẠI vào topic đích thành tin mới (id mới, "
+            "file id mới; {notify}), xong thì bản gốc bị XOÁ (không hoàn tác được). Tin mới mất "
+            "lượt xem, reaction, bình luận và ngày gốc; link và reply tới id cũ không còn đúng "
+            "(reply giữa các tin cùng được chuyển thì nối lại). Poll, game, hoá đơn không chuyển "
+            "được: để nguyên và không bao giờ bị xoá."
+        ),
+        "move.plan_drop": (
+            "  Chuyển xong thì xoá topic: {titles} — chỉ khi nó đã rỗng; còn tin nào khác thì giữ "
+            "lại và báo."
+        ),
+        "move.type_count": (
+            "Việc này tải xuống và đăng lại {count} tin trong «{chat}» sang topic khác, xong thì "
+            "{after}. Gõ {count} để làm"
+        ),
+        "move.pick_source": "Chuyển tin giữa các topic của forum nào?",
+        "move.no_admin_channels": "Bạn không quản trị forum nào, nên không có gì để chuyển.",
+        "move.finished": "Thao tác O{id} đang ở trạng thái «{status}»; không còn gì để làm.",
+        "delete.topic_dropped": "Đã xoá topic (id {id}).",
+        "delete.topic_kept": (
+            "Giữ lại topic id {id}: còn tin trong đó mà kế hoạch không có (tin mới đăng, hoặc tin "
+            "không chuyển được)."
+        ),
+        "delete.topics_dropped": "{count} topic đã xoá.",
+        "delete.topics_kept": "{count} topic được giữ lại vì còn tin.",
+        "history.op_kind_move": "chuyển tin giữa các topic",
+        "history.line_counts_move": (
+            "Kết quả:     {done} đã chuyển, {skipped} để nguyên, {gone} đã mất sẵn, {failed} lỗi "
+            "(kế hoạch {planned} tin)"
+        ),
+        "history.line_topics": "Topic:       {dropped} đã xoá, {kept} giữ lại vì còn tin",
+        "topics.no_forums": "Bạn không quản trị forum nào.",
+        "topics.pick_forum": "Forum nào?",
+        "topics.pick_topic": "Topic nào?",
+        "topics.pick_new_title": "Tên mới của topic?",
+        "topics.pick_merge_target": "Gộp vào topic nào (tin của các topic khác nối vào cuối nó)?",
+        "topics.pick_merge_others": ("Topic nào gộp vào đó (các topic này bị xoá khi đã rỗng)?"),
+        "topics.needs_topic": (
+            "Thiếu topic: gõ tên (hoặc id) của topic, xem `tgmirror topics <forum>`."
+        ),
+        "topics.no_such_topic": (
+            "Không có topic «{name}» trong forum (gõ tên hoặc id; xem `tgmirror topics <forum>`)."
+        ),
+        "topics.ambiguous_topic": "Có nhiều topic tên «{name}» (id {ids}): dùng id.",
+        "topics.split_needs_rules": (
+            "Chia topic cần luật định tuyến: --transform FILE có `topics:` (route) hoặc "
+            "--hashtag-to-topic."
+        ),
+        "topics.split_only_routing": (
+            "Chia chỉ chuyển tin sang topic khác theo luật định tuyến; transform này còn có thao "
+            "tác `caption`, `links` hoặc `forward_header` — sửa chữ là việc của `tgmirror edit`."
+        ),
+        "topics.merge_same_topic": "Một topic được gõ hai lần.",
+        "topics.merge_needs_two": (
+            "Gộp cần ít nhất hai topic: topic nhận trước, rồi các topic gộp vào nó."
+        ),
+        "topics.merge_general": (
+            "General không xoá được nên không gộp General vào topic khác (gộp topic khác VÀO "
+            "General thì được: đặt General đầu tiên)."
+        ),
+        "topics.delete_general": "General không xoá được.",
+        "topics.edit_general": "General không đổi tên hay đóng được bằng lệnh này.",
+        "topics.not_empty": "Topic «{name}» còn tin nên không xoá.",
+        "topics.needs_yes": "Chưa đổi gì: không có terminal để hỏi. Thêm --yes để xác nhận.",
+        "topics.declined": "Không đổi gì.",
+        "topics.confirm_rename": "Đổi tên topic «{old}» thành «{new}» trong «{chat}»?",
+        "topics.confirm_close": "Đóng topic «{name}» trong «{chat}»?",
+        "topics.confirm_reopen": "Mở lại topic «{name}» trong «{chat}»?",
+        "topics.confirm_drop_empty": "Topic «{name}» trong «{chat}» không có tin nào. Xoá topic?",
+        "topics.done_rename": "Đã đổi tên topic «{old}» thành «{new}».",
+        "topics.done_close": "Đã đóng topic «{name}».",
+        "topics.done_reopen": "Đã mở lại topic «{name}».",
+        "topics.done_drop": "Đã xoá topic «{name}».",
+        "topics.delete_note": (
+            "Topic «{name}» sẽ bị xoá cùng {count} tin trong nó (không hoàn tác được)."
+        ),
+    }
+)
+EN.update(
+    {
+        "move.same_file": (
+            "{count} new messages still carry the old file id: Telegram reuses a file whose "
+            "content is the same."
+        ),
+        "move.settled_repost": (
+            "The last go stopped midway: {copied} messages already have their copy, {again} will "
+            "be moved again, {unsure} were unclear and are left alone."
+        ),
+        "move.nothing_split": (
+            "No message of the topic '{topic}' is sent to another topic by the routing rules: "
+            "nothing to split."
+        ),
+        "move.nothing_merge": (
+            "The topics to merge hold no message to move (an empty topic you want gone is for "
+            "`tgmirror topics delete`)."
+        ),
+        "move.plan_header": (
+            "{how} plan O{id} in '{chat}': {messages} messages ({units} units, {albums} albums) "
+            "into {topics} topics."
+        ),
+        "move.how_split": "Split",
+        "move.how_merge": "Merge",
+        "move.plan_dest": "  -> '{title}': {count} messages{note}",
+        "move.note_new": " (a new topic, made when applied)",
+        "move.note_existing": " (it has messages: the moved ones go after those already there)",
+        "move.plan_how": (
+            "  Each unit is DOWNLOADED and UPLOADED AGAIN into the target topic as a new message "
+            "(new id, new file id; {notify}), then the original is DELETED (this cannot be "
+            "undone). The new messages lose views, reactions, comments and the original date; "
+            "links and replies to the old ids no longer point at them (a reply between messages "
+            "moved together is kept). Polls, games and invoices cannot be moved: they are left "
+            "alone and never deleted."
+        ),
+        "move.plan_drop": (
+            "  Once moved, the topic {titles} is DELETED — only if it is empty by then; if any "
+            "other message is left in it, it is kept and said so."
+        ),
+        "move.type_count": (
+            "This downloads and posts again {count} messages in '{chat}' into another topic, "
+            "then {after}. Type {count} to do it"
+        ),
+        "move.pick_source": "Move messages between the topics of which forum?",
+        "move.no_admin_channels": "You do not administer any forum, so there is nothing to move.",
+        "move.finished": "Operation O{id} is '{status}'; there is nothing left to do.",
+        "delete.topic_dropped": "Deleted the topic (id {id}).",
+        "delete.topic_kept": (
+            "Kept topic id {id}: it still holds messages the plan did not have (posted meanwhile, "
+            "or ones that cannot be moved)."
+        ),
+        "delete.topics_dropped": "{count} topics deleted.",
+        "delete.topics_kept": "{count} topics kept because messages are left in them.",
+        "history.op_kind_move": "move messages between topics",
+        "history.line_counts_move": (
+            "Result:      {done} moved, {skipped} left alone, {gone} already gone, {failed} "
+            "failed (plan of {planned} messages)"
+        ),
+        "history.line_topics": (
+            "Topics:      {dropped} deleted, {kept} kept because messages are left"
+        ),
+        "topics.no_forums": "You do not administer any forum.",
+        "topics.pick_forum": "Which forum?",
+        "topics.pick_topic": "Which topic?",
+        "topics.pick_new_title": "New title of the topic?",
+        "topics.pick_merge_target": "Merge into which topic (the others are appended to its end)?",
+        "topics.pick_merge_others": "Which topics go into it (they are deleted once empty)?",
+        "topics.needs_topic": (
+            "A topic is missing: give its name (or id), see `tgmirror topics <forum>`."
+        ),
+        "topics.no_such_topic": (
+            "No topic '{name}' in the forum (give its name or id; see `tgmirror topics <forum>`)."
+        ),
+        "topics.ambiguous_topic": "Several topics are called '{name}' (ids {ids}): use the id.",
+        "topics.split_needs_rules": (
+            "Splitting a topic needs routing rules: a --transform FILE with `topics:` (route) or "
+            "--hashtag-to-topic."
+        ),
+        "topics.split_only_routing": (
+            "A split only moves messages to other topics by the routing rules; this transform "
+            "also has `caption`, `links` or `forward_header` operations — changing text is "
+            "`tgmirror edit`'s job."
+        ),
+        "topics.merge_same_topic": "A topic is given twice.",
+        "topics.merge_needs_two": (
+            "A merge needs at least two topics: the one that receives first, then those merged "
+            "into it."
+        ),
+        "topics.merge_general": (
+            "General cannot be deleted, so it cannot be merged into another topic (merging other "
+            "topics INTO General is fine: give General first)."
+        ),
+        "topics.delete_general": "General cannot be deleted.",
+        "topics.edit_general": "General cannot be renamed or closed with this command.",
+        "topics.not_empty": "The topic '{name}' still has messages, so it is not deleted.",
+        "topics.needs_yes": "Nothing changed: there is no terminal to ask. Add --yes to confirm.",
+        "topics.declined": "Nothing changed.",
+        "topics.confirm_rename": "Rename the topic '{old}' to '{new}' in '{chat}'?",
+        "topics.confirm_close": "Close the topic '{name}' in '{chat}'?",
+        "topics.confirm_reopen": "Reopen the topic '{name}' in '{chat}'?",
+        "topics.confirm_drop_empty": "The topic '{name}' in '{chat}' has no messages. Delete it?",
+        "topics.done_rename": "Renamed the topic '{old}' to '{new}'.",
+        "topics.done_close": "Closed the topic '{name}'.",
+        "topics.done_reopen": "Reopened the topic '{name}'.",
+        "topics.done_drop": "Deleted the topic '{name}'.",
+        "topics.delete_note": (
+            "The topic '{name}' will be deleted together with the {count} messages in it (this "
+            "cannot be undone)."
+        ),
     }
 )
 

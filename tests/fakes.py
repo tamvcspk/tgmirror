@@ -274,6 +274,40 @@ class FakeGateway:
         general = TopicInfo(id=1, title="General")
         return [general, *self.topics.get(src, [])]
 
+    async def edit_topic(
+        self, chat: int, topic_id: int, *, title: str | None = None, closed: bool | None = None
+    ) -> None:
+        self._enter("edit_topic", chat, topic_id, title, closed)
+        if not self._channel(chat).is_admin:
+            raise NoPermission(f"cannot edit topics in channel {chat}")
+        found = self.topics.get(chat, [])
+        at = next((i for i, t in enumerate(found) if t.id == topic_id), None)
+        if at is None:
+            raise PerMessage("TOPIC_ID_INVALID")
+        old = found[at]
+        found[at] = replace(
+            old,
+            title=old.title if title is None else title,
+            closed=old.closed if closed is None else closed,
+        )
+
+    async def delete_topic(self, chat: int, topic_id: int) -> None:
+        self._enter("delete_topic", chat, topic_id)
+        if not self._channel(chat).is_admin:
+            raise NoPermission(f"cannot delete topics in channel {chat}")
+        found = self.topics.get(chat, [])
+        if not any(t.id == topic_id for t in found):
+            raise PerMessage("TOPIC_ID_INVALID")
+        self.topics[chat] = [t for t in found if t.id != topic_id]
+        self.messages[chat] = [m for m in self.messages[chat] if m.topic_id != topic_id]
+
+    async def topic_message_ids(self, chat: int, topic_id: int, limit: int) -> list[int]:
+        self._enter("topic_message_ids", chat, topic_id, limit)
+        self._channel(chat)
+        return [m.id for m in self.messages[chat] if m.topic_id == topic_id and not m.is_service][
+            :limit
+        ]
+
     async def media_counters(self, src: int, topic_id: int | None = None) -> MediaCounters:
         """What Telegram's counters say: per kind, over messages that are not service ones; the
         server answers for a topic by ``top_msg_id`` (1 = General) and has no range."""

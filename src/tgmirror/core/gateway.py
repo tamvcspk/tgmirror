@@ -539,6 +539,26 @@ class TelegramGateway(Protocol):
         """Create a topic in a forum destination and return its id (forum destinations only)."""
         ...
 
+    async def edit_topic(
+        self, chat: int, topic_id: int, *, title: str | None = None, closed: bool | None = None
+    ) -> None:
+        """Rename a forum topic and/or close (``True``) or reopen (``False``) it (phase 20b,
+        decision D10). Asking for what it already is is no error. ``PerMessage`` when there is no
+        such topic."""
+        ...
+
+    async def delete_topic(self, chat: int, topic_id: int) -> None:
+        """Delete a forum topic together with every message in it (``channels.deleteTopicHistory``,
+        repeated until Telegram says the history is gone). Not General. ``PerMessage`` when there is
+        no such topic (any more)."""
+        ...
+
+    async def topic_message_ids(self, chat: int, topic_id: int, limit: int) -> list[int]:
+        """The ids of up to ``limit`` messages in a forum topic that are not service messages (the
+        one that says the topic was created does not count): what is left in it to decide whether
+        it may be deleted."""
+        ...
+
     def iter_messages(
         self, src: int, *, min_id: int = 0, filters: ServerFilter = NO_FILTER
     ) -> AsyncIterator[SrcMessage]:

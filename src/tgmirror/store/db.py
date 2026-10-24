@@ -1151,6 +1151,20 @@ class Store:
         async with self._lock:
             return await opsmod.items_in(self._conn, op_id, status)
 
+    async def op_new_ids(self, op_id: int, msg_ids: Sequence[int]) -> dict[int, int]:
+        """The copy each of ``msg_ids`` was posted as so far (phase 20b: a moved message that
+        answers another moved one answers its copy)."""
+        if not msg_ids:
+            return {}
+        marks = ",".join("?" * len(msg_ids))
+        async with self._lock:
+            cur = await self._conn.execute(
+                "SELECT msg_id, new_msg_id FROM op_items "  # noqa: S608
+                f"WHERE op_id = ? AND new_msg_id IS NOT NULL AND msg_id IN ({marks})",
+                (op_id, *msg_ids),
+            )
+            return {int(r[0]): int(r[1]) for r in await cur.fetchall()}
+
     async def op_counts(self, op_id: int) -> dict[ItemStatus, int]:
         async with self._lock:
             return await opsmod.counts(self._conn, op_id)
