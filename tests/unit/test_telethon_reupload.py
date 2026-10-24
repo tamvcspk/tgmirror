@@ -686,3 +686,17 @@ async def test_a_flood_wait_while_sending_by_id_is_still_a_flood_wait() -> None:
 
     with pytest.raises(FloodWait):
         await gw.send_by_reference(2, prepared, KEEP)
+
+
+async def test_a_silent_send_does_not_notify_and_the_default_is_unchanged(tmp_path: Path) -> None:
+    """Phase 20.4 (``repost``): ``silent`` reaches the send of a single file and of plain text, and
+    is forgotten once the call is over."""
+    pic = message(1, text="look", media=photo())
+    note = message(2, text="just words")
+    gw, stub = gateway(pic, note)
+
+    await gw.send_prepared(2, await gw.prepare(1, unit_of(pic), tmp_path), KEEP, silent=True)
+    await gw.send_prepared(2, await gw.prepare(1, unit_of(note), tmp_path), KEEP, silent=True)
+    await gw.send_prepared(2, await gw.prepare(1, unit_of(pic), tmp_path), KEEP)
+
+    assert [kw["silent"] for _, _, kw in stub.sent] == [True, True, None]

@@ -2313,6 +2313,126 @@ EN.update(
     }
 )
 
+VI.update(_op_texts(_OP_VI, "repost", "đăng lại", "tgmirror repost"))
+EN.update(_op_texts(_OP_EN, "repost", "repost", "tgmirror repost"))
+VI.update(
+    {
+        "repost.no_admin_channels": (
+            "Bạn không quản trị kênh/nhóm nào, nên không có gì để đăng lại."
+        ),
+        "repost.pick_source": "Đăng lại tin trong kênh/nhóm nào?",
+        "repost.needs_filter": (
+            "Bộ lọc trống sẽ đăng lại TẤT CẢ tin của kênh. Nếu đúng ý bạn, thêm --all; nếu không, "
+            "thêm bộ lọc (--media, --hashtag, --since, --selection, ...)."
+        ),
+        "repost.confirm_all": (
+            "Không có bộ lọc: kế hoạch sẽ gồm TẤT CẢ tin của «{chat}». Vẫn lập kế hoạch?"
+        ),
+        "repost.nothing": "Bộ lọc không chọn tin nào trong «{chat}»: không có gì để đăng lại.",
+        "repost.plan_header": (
+            "Kế hoạch đăng lại O{id} trong «{chat}»: {messages} tin ({units} đơn vị, "
+            "{albums} album)."
+        ),
+        "repost.plan_how": (
+            "  Mỗi đơn vị được TẢI XUỐNG rồi TẢI LÊN LẠI ở cuối kênh thành tin mới có file id mới "
+            "({notify}). Tin mới mất lượt xem, reaction, bình luận và ngày gốc; link hoặc reply "
+            "trỏ tới id cũ không còn đúng."
+        ),
+        "repost.plan_silent": "im lặng, không thông báo cho người theo dõi",
+        "repost.plan_notify": "CÓ thông báo cho người theo dõi",
+        "repost.plan_delete": "  Sau khi bản mới có, bản gốc bị XOÁ (không hoàn tác được).",
+        "repost.plan_keep": "  Bản gốc được giữ nguyên.",
+        "repost.plan_left": (
+            "  Poll, game, hoá đơn không đăng lại được: để nguyên (và không bao giờ bị xoá)."
+        ),
+        "repost.type_count": (
+            "Việc này tải xuống và đăng lại {count} tin trong «{chat}», xong thì {after}. "
+            "Gõ {count} để làm"
+        ),
+        "repost.after_delete": "xoá bản gốc (không hoàn tác được)",
+        "repost.after_keep": "giữ bản gốc",
+        "repost.same_file": (
+            "{count} tin mới vẫn mang file id cũ: Telegram dùng lại file có nội dung trùng."
+        ),
+        "repost.same_file_result": (
+            "{count} tin mới vẫn mang file id cũ (Telegram dùng lại file có nội dung trùng)."
+        ),
+        "repost.settled_repost": (
+            "Lần trước dừng giữa chừng: {copied} tin đã có bản đăng lại, {again} tin sẽ đăng lại, "
+            "{unsure} tin không chắc nên để nguyên."
+        ),
+        "repost.unsupported": (
+            "{count} tin (poll, game, hoá đơn, ...) không đăng lại được nên được để nguyên."
+        ),
+        "history.op_kind_repost": "đăng lại tin",
+        "history.line_counts_repost": (
+            "Kết quả:     {done} đã đăng lại, {skipped} để nguyên, {gone} đã mất sẵn, {failed} lỗi "
+            "(kế hoạch {planned} tin)"
+        ),
+    }
+)
+EN.update(
+    {
+        "repost.no_admin_channels": (
+            "You do not administer any channel or group, so there is nothing to repost."
+        ),
+        "repost.pick_source": "Repost messages in which channel or group?",
+        "repost.needs_filter": (
+            "An empty filter would repost EVERY message of the chat. If that is what you mean, "
+            "add --all; otherwise add a filter (--media, --hashtag, --since, --selection, ...)."
+        ),
+        "repost.confirm_all": (
+            "No filter: the plan will hold EVERY message of '{chat}'. Plan it anyway?"
+        ),
+        "repost.nothing": "The filter selects no message in '{chat}': nothing to repost.",
+        "repost.plan_header": (
+            "Repost plan O{id} in '{chat}': {messages} messages ({units} units, {albums} albums)."
+        ),
+        "repost.plan_how": (
+            "  Each unit is DOWNLOADED and UPLOADED AGAIN at the end of the chat as a new message "
+            "with a new file id ({notify}). The new messages lose views, reactions, comments and "
+            "the original date; links and replies to the old ids no longer point at them."
+        ),
+        "repost.plan_silent": "silent, the chat's followers are not notified",
+        "repost.plan_notify": "the chat's followers ARE notified",
+        "repost.plan_delete": (
+            "  Once the new one exists, the original is DELETED (this cannot be undone)."
+        ),
+        "repost.plan_keep": "  The originals are kept.",
+        "repost.plan_left": (
+            "  Polls, games and invoices cannot be posted again: they are left alone (and never "
+            "deleted)."
+        ),
+        "repost.type_count": (
+            "This downloads and posts again {count} messages in '{chat}', then {after}. "
+            "Type {count} to do it"
+        ),
+        "repost.after_delete": "deletes the originals (this cannot be undone)",
+        "repost.after_keep": "keeps the originals",
+        "repost.same_file": (
+            "{count} new messages still carry the old file id: Telegram reuses a file whose "
+            "content is the same."
+        ),
+        "repost.same_file_result": (
+            "{count} new messages still carry the old file id (Telegram reuses a file whose "
+            "content is the same)."
+        ),
+        "repost.settled_repost": (
+            "The last go stopped midway: {copied} messages already have their copy, {again} will "
+            "be posted again, {unsure} were unclear and are left alone."
+        ),
+        "repost.unsupported": (
+            "{count} messages (polls, games, invoices, ...) cannot be posted again and were left "
+            "alone."
+        ),
+        "history.op_kind_repost": "repost messages",
+        "history.line_counts_repost": (
+            "Result:      {done} reposted, {skipped} left alone, {gone} already gone, {failed} "
+            "failed (plan of {planned} messages)"
+        ),
+    }
+)
+
 
 def t(key: str, env: Mapping[str, str] | None = None, **params: object) -> str:
     """Look up ``key`` in the active language, falling back to English, then format it."""

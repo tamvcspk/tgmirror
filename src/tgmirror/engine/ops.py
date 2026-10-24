@@ -39,6 +39,7 @@ from tgmirror.core.config import Limits
 from tgmirror.core.errors import (
     BudgetReached,
     FloodWait,
+    ForwardsRestricted,
     NoPermission,
     PeerFlood,
     PerMessage,
@@ -52,16 +53,19 @@ from tgmirror.core.gateway import (
     MessageReader,
     SrcMessage,
     TelegramGateway,
+    TransferPhase,
     Unit,
 )
-from tgmirror.core.limiter import DELETE, EDIT, Limiter, Sleep
-from tgmirror.engine import planner
+from tgmirror.core.limiter import DELETE, EDIT, SEND, Limiter, Sleep
+from tgmirror.engine import planner, reupload
 from tgmirror.engine.backup import begin_backup
 from tgmirror.engine.backupdir import BackupManifest
 from tgmirror.engine.flood import FloodGuard, FloodOwner, Interrupted, inspect_guard, learn_context
 from tgmirror.engine.planner import Skip
+from tgmirror.engine.reconcile import Outcome, judge
 from tgmirror.engine.runner import RunControl
 from tgmirror.engine.runs import DAILY_CAP, RunError
+from tgmirror.engine.transfer import Transfer, TransferTracker
 from tgmirror.filters.matcher import Matcher
 from tgmirror.filters.model import FilterSpec
 from tgmirror.filters.pushdown import plan_read
@@ -70,6 +74,8 @@ from tgmirror.store.db import Clock, Store, utc_now
 from tgmirror.store.ops import (
     BACKUP_DIR,
     BACKUP_DONE,
+    DELETE_ORIGINAL,
+    SILENT,
     TRANSFORM,
     UNDO_OF,
     ItemStatus,
@@ -86,11 +92,19 @@ UNITS_PER_READ = MAX_IDS_PER_CALL  # units taken from the plan at a time: enough
 SAMPLE_EDGE = 5  # messages shown from each end of the plan
 SAMPLE_TEXT = 60  # characters of a sampled message
 
+REPOST_BATCH = 10  # messages posted again between two looks at pause/stop
 EDIT_BATCH = 10  # messages edited between two looks at pause/stop: an edit is one call each
 SAMPLE_DIFF = 90  # characters of a text shown in a diff
 
+SKIP_UNSUPPORTED = "unsupported"  # a poll, a game, ...: nothing to post again, left alone
+SKIP_AMBIGUOUS = "ambiguous"  # a crash left it unclear whether the copy exists: not touched
 SKIP_GONE = "gone"  # the message was no longer in the chat when its turn came
 SKIP_CHANGED = "changed"  # it was there, but the filter no longer matches it
+
+
+# a unit that cannot be sent again (a poll: it would come back without its votes; a game, an
+# invoice) is left out, and so its original is never deleted
+_REPOST_OPTIONS = reupload.Options(ignore_unsupported=True)
 
 
 class OpError(RunError):
@@ -152,6 +166,9 @@ class NullReporter:
     def progress(self, op: Op) -> None:
         pass
 
+    def transfer(self, transfer: Transfer) -> None:
+        pass
+
 
 # ---- planning ------------------------------------------------------------------------------------
 
@@ -173,8 +190,12 @@ async def plan_delete(
     pushdown: bool = True,
     notifier: Reporter | None = None,
     nap: Sleep = asyncio.sleep,
+    kind: OpKind = OpKind.DELETE,
+    options_json: str = "{}",
 ) -> DeletePlan:
-    """Read ``chat`` with ``spec`` and freeze what it selects as a ``planned`` delete.
+    """Read ``chat`` with ``spec`` and freeze what it selects as a ``planned`` delete (or, with
+    ``kind``, the same list for another operation on whole units: ``repost``, which also notes
+    each message's forum topic).
 
     Re-reads the chat first (one setup request, hard rule 1's exception) because it is the rights
     that count now that decide, not those of the list it was chosen from. The scan itself is paced
@@ -209,7 +230,8 @@ async def plan_delete(
             units += 1
             albums += item.is_album
             for m in item.messages:
-                items.append(PlannedItem(m.id, item.ids[0], m.grouped_id))
+                noted = None if kind is OpKind.DELETE else json.dumps({"topic": m.topic_id})
+                items.append(PlannedItem(m.id, item.ids[0], m.grouped_id, noted))
                 by_media[m.media.value] = by_media.get(m.media.value, 0) + 1
                 month = m.date.strftime("%Y-%m")
                 by_month[month] = by_month.get(month, 0) + 1
@@ -228,7 +250,7 @@ async def plan_delete(
     )
     if not items:
         return DeletePlan(None, summary)
-    op = await store.create_op(OpSpec(OpKind.DELETE, current, spec.to_json()), items)
+    op = await store.create_op(OpSpec(kind, current, spec.to_json(), options_json), items)
     return DeletePlan(op, summary)
 
 
@@ -432,9 +454,63 @@ async def resolve_op(store: Store, ref: str | None) -> Op:
     raise OpNotFound(ref)
 
 
-async def begin_op(store: Store, op_id: int, *, force: bool = False) -> Op:
+class RepostNeedsAcknowledgement(OpError):
+    """A repost always downloads and uploads (decision D3), and this chat restricts saving
+    content: it needs the person's statement."""
+
+    def __init__(self, title: str) -> None:
+        super().__init__(f"{title!r} restricts saving content and the repost was not confirmed")
+        self.title = title
+
+
+async def plan_repost(
+    store: Store,
+    gateway: TelegramGateway,
+    chat: ChannelInfo,
+    spec: FilterSpec,
+    limits: Limits,
+    *,
+    delete_original: bool = False,
+    silent: bool = True,
+    pushdown: bool = True,
+    notifier: Reporter | None = None,
+    nap: Sleep = asyncio.sleep,
+) -> DeletePlan:
+    """Freeze what ``spec`` selects as a ``planned`` repost (phase 20.4): each unit is downloaded
+    and uploaded again at the end of the chat, as a new message with a new file id, and — with
+    ``delete_original`` — the original is deleted once its copy exists."""
+    options = json.dumps({DELETE_ORIGINAL: delete_original, SILENT: silent}, sort_keys=True)
+    return await plan_delete(
+        store,
+        gateway,
+        chat,
+        spec,
+        limits,
+        pushdown=pushdown,
+        notifier=notifier,
+        nap=nap,
+        kind=OpKind.REPOST,
+        options_json=options,
+    )
+
+
+async def begin_op(
+    store: Store,
+    op_id: int,
+    *,
+    force: bool = False,
+    gateway: TelegramGateway | None = None,
+    ack: bool = False,
+) -> Op:
     """Take a confirmed (or interrupted) operation up: ``running``. ``OpBusy`` when another process
-    works on the same chat."""
+    works on the same chat. A repost needs ``gateway`` (it re-reads the chat) and, for a chat that
+    restricts saving content, ``ack``: decision D3, checked here so no caller can skip it."""
+    op = await store.get_op(op_id)
+    if op is not None and op.kind is OpKind.REPOST:
+        assert gateway is not None, "a repost re-reads the chat: begin_op needs the gateway"
+        current = await gateway.get_channel(op.chat_id)
+        if current.noforwards and not ack:
+            raise RepostNeedsAcknowledgement(current.title)
     return await store.start_op(op_id, force=force)
 
 
@@ -505,6 +581,16 @@ def pack(
     return batches
 
 
+def _ignore_transfer(transfer: Transfer) -> None:
+    pass
+
+
+def _noted(item: OpItem) -> dict[str, int]:
+    """What a ``repost`` noted on an item: its forum topic and the chat's tail before the send."""
+    data = json.loads(item.before_json or "{}")
+    return {k: v for k, v in data.items() if isinstance(v, int)}
+
+
 class OpRunner:
     """Carries out a plan already taken up by ``begin_op``, batch by batch."""
 
@@ -521,11 +607,15 @@ class OpRunner:
         clock: Clock = utc_now,
         timing: OpTiming | None = None,
         wait: bool = False,
+        tmp_dir: Path | None = None,
     ) -> None:
         self._store = store
         self._gateway = gateway
         self._limits = limits
+        self._tmp_dir = tmp_dir  # where a repost downloads to
         self._reporter: Reporter = reporter or NullReporter()
+        # a reporter that has no use for transfers (the delete/edit ones) need not hear them
+        self._tracker = TransferTracker(getattr(self._reporter, "transfer", _ignore_transfer))
         self._control = control or RunControl()
         self._sleep = sleep
         self._rng = rng
@@ -557,9 +647,12 @@ class OpRunner:
             await learn_context(guard, self._gateway)  # Premium, for the flood log
             spec = FilterSpec.from_json(op.filters_json)
             matcher = None if spec.is_empty else Matcher(spec)
-            edits = op.kind is not OpKind.DELETE  # an edit or its undo: one call per message
+            edits = op.kind in (OpKind.EDIT, OpKind.UNDO)  # one call per message
+            reposts = op.kind is OpKind.REPOST
             if edits:
                 op = await self._settle_edits(op, guard)
+            elif reposts:
+                op = await self._repost_settle(op, guard, reader)
             else:
                 op = await self._settle_pending(op, reader)
             status = OpStatus.DONE
@@ -567,12 +660,15 @@ class OpRunner:
                 units = await self._store.op_units(op.id, ItemStatus.PLANNED, UNITS_PER_READ)
                 if not units:
                     break
-                for batch in pack(units, EDIT_BATCH if edits else MAX_IDS_PER_CALL):
+                size = EDIT_BATCH if edits else REPOST_BATCH if reposts else MAX_IDS_PER_CALL
+                for batch in pack(units, size):
                     if not await self._gate(op):
                         status = OpStatus.STOPPED
                         break
                     if edits:
                         op = await self._edit_batch(op, guard, batch)
+                    elif reposts:
+                        op = await self._repost_batch(op, guard, reader, matcher, batch)
                     else:
                         op = await self._delete_batch(op, guard, reader, matcher, batch)
                     # what the lane has sent is kept with the batch, so a later run (and a budget
@@ -820,6 +916,239 @@ class OpRunner:
             await self._store.mark_op_items(op.id, [msg_id], ItemStatus.PLANNED)
             raise
         return await self._store.mark_op_items(op.id, [msg_id], ItemStatus.DONE, stats={"done": 1})
+
+    # ---- repost (phase 20.4) ------------------------------------------------------------------
+
+    async def _repost_settle(self, op: Op, guard: FloodGuard, reader: MessageReader) -> Op:
+        """What a process that died mid-repost left: first finish the originals of copies that
+        exist (``reposted``), then judge the one unit that was ``pending`` by reading the chat's
+        tail since the id noted before it was sent (the way a run's reconcile does)."""
+        op = await self._repost_finish(op, guard, reader)
+        pending = await self._store.op_items_in(op.id, ItemStatus.PENDING)
+        if not pending:
+            return op
+        by_tail: dict[int, list[OpItem]] = {}
+        for item in pending:
+            by_tail.setdefault(_noted(item).get("tail", 0), []).append(item)
+        settled = {"copied": 0, "again": 0, "unsure": 0}
+        for tail, items in sorted(by_tail.items()):
+            ids = [i.msg_id for i in items]
+            live = {m.id: m for m in await reader.get_messages(op.chat_id, ids)}
+            if gone := [i for i in ids if i not in live]:
+                op = await self._store.mark_op_items(
+                    op.id, gone, ItemStatus.SKIPPED, reason=SKIP_GONE, stats={"gone": len(gone)}
+                )
+            originals = [live[i] for i in ids if i in live]
+            if not originals:
+                continue
+            news = [
+                m async for m in reader.iter_messages(op.chat_id, min_id=tail) if not m.is_service
+            ]
+            outcome, new_ids = judge(originals, news)
+            kept = [m.id for m in originals]
+            if outcome is Outcome.CONFIRMED:
+                done = ItemStatus.REPOSTED if op.delete_original else ItemStatus.DONE
+                stats = {} if op.delete_original else {"done": len(kept)}
+                op = await self._store.mark_op_items(
+                    op.id, kept, done, stats=stats, new_ids=dict(zip(kept, new_ids, strict=True))
+                )
+                settled["copied"] += len(kept)
+            elif outcome is Outcome.RESEND:
+                op = await self._store.mark_op_items(op.id, kept, ItemStatus.PLANNED)
+                settled["again"] += len(kept)
+            else:  # something is there that does not match: do not post again, do not delete
+                op = await self._store.mark_op_items(
+                    op.id,
+                    kept,
+                    ItemStatus.SKIPPED,
+                    reason=SKIP_AMBIGUOUS,
+                    stats={"skipped": len(kept)},
+                )
+                settled["unsure"] += len(kept)
+        self._reporter.notice("settled_repost", **settled)
+        return await self._repost_finish(op, guard, reader)
+
+    async def _repost_finish(self, op: Op, guard: FloodGuard, reader: MessageReader) -> Op:
+        """Copies exist for the ``reposted`` items: delete their originals (an original that is
+        gone already is done), or, for a repost that keeps them, just close them."""
+        reposted = await self._store.op_items_in(op.id, ItemStatus.REPOSTED)
+        if not reposted:
+            return op
+        ids = [i.msg_id for i in reposted]
+        if not op.delete_original:
+            return await self._store.mark_op_items(
+                op.id, ids, ItemStatus.DONE, stats={"done": len(ids)}
+            )
+        present = {m.id for m in await reader.get_messages(op.chat_id, ids)}
+        if absent := [i for i in ids if i not in present]:
+            op = await self._store.mark_op_items(
+                op.id, absent, ItemStatus.DONE, stats={"done": len(absent)}
+            )
+        if present:
+            op = await self._repost_delete(op, guard, sorted(present))
+        return op
+
+    async def _repost_delete(self, op: Op, guard: FloodGuard, ids: list[int]) -> Op:
+        for start in range(0, len(ids), MAX_IDS_PER_CALL):
+            chunk = ids[start : start + MAX_IDS_PER_CALL]
+            await guard.pace(len(chunk), action=DELETE)
+            await guard.write(
+                "delete_messages",
+                len(chunk),
+                lambda chunk=chunk, chat=op.chat_id: self._gateway.delete_messages(chat, chunk),
+            )
+            op = await self._store.mark_op_items(
+                op.id, chunk, ItemStatus.DONE, stats={"done": len(chunk)}
+            )
+        return op
+
+    async def _repost_batch(
+        self,
+        op: Op,
+        guard: FloodGuard,
+        reader: MessageReader,
+        matcher: Matcher | None,
+        batch: Sequence[Sequence[OpItem]],
+    ) -> Op:
+        """Post again each unit of the batch, one after the other (a unit is downloaded, written
+        ahead as ``pending`` with the chat's tail, uploaded, and recorded with its new ids), then
+        delete the originals of the whole batch in one call if the repost is to delete them."""
+        ids = [item.msg_id for unit in batch for item in unit]
+        live = {m.id: m for m in await reader.get_messages(op.chat_id, ids)}
+        reposted: list[int] = []
+        for unit in batch:
+            members = [live[i.msg_id] for i in unit if i.msg_id in live]
+            if gone := [i.msg_id for i in unit if i.msg_id not in live]:
+                op = await self._store.mark_op_items(
+                    op.id, gone, ItemStatus.SKIPPED, reason=SKIP_GONE, stats={"gone": len(gone)}
+                )
+            if not members:
+                continue
+            if not self._still_selected(members, matcher):
+                op = await self._store.mark_op_items(
+                    op.id,
+                    [m.id for m in members],
+                    ItemStatus.SKIPPED,
+                    reason=SKIP_CHANGED,
+                    stats={"skipped": len(members)},
+                )
+                continue
+            op, done = await self._repost_unit(op, guard, reader, Unit(tuple(members)), unit)
+            reposted.extend(done)
+        if reposted and op.delete_original:
+            op = await self._repost_delete(op, guard, reposted)
+        self._reporter.progress(op)
+        return op
+
+    async def _repost_unit(
+        self,
+        op: Op,
+        guard: FloodGuard,
+        reader: MessageReader,
+        unit: Unit,
+        items: Sequence[OpItem],
+    ) -> tuple[Op, list[int]]:
+        ids = list(unit.ids)
+        action = reupload.plan_unit(unit, _REPOST_OPTIONS)
+        if action.kind is not reupload.ActionKind.SEND:
+            return (
+                await self._store.mark_op_items(
+                    op.id,
+                    ids,
+                    ItemStatus.SKIPPED,
+                    reason=action.reason or SKIP_UNSUPPORTED,
+                    stats={"unsupported": len(ids)},
+                ),
+                [],
+            )
+        topic = _noted(items[0]).get("topic")
+        topic = None if topic in (None, 1) else int(topic)
+        assert self._tmp_dir is not None, "a repost downloads: OpRunner needs a tmp_dir"
+        try:
+            prepared = await reader.prepare(op.chat_id, unit, self._tmp_dir, self._on_transfer)
+        except PerMessage:  # gone since it was read: nothing to post again
+            return (
+                await self._store.mark_op_items(
+                    op.id, ids, ItemStatus.SKIPPED, reason=SKIP_GONE, stats={"gone": len(ids)}
+                ),
+                [],
+            )
+        try:
+            tail = await guard.read(
+                "last_message_id", lambda: self._gateway.last_message_id(op.chat_id)
+            )
+            await guard.pace(len(ids), action=SEND)  # may rest, or raise BudgetReached
+            note = json.dumps({"topic": topic, "tail": tail})
+            op = await self._store.mark_op_items(
+                op.id,
+                ids,
+                ItemStatus.PENDING,
+                before_json=note,  # write-ahead
+            )
+            try:
+                sent = await guard.write(
+                    "send_prepared",
+                    len(ids),
+                    lambda: self._gateway.send_prepared(
+                        op.chat_id,
+                        prepared,
+                        CaptionPolicy(),
+                        self._on_transfer,
+                        topic=topic,
+                        silent=op.silent,
+                    ),
+                )
+            except PerMessage as exc:  # Telegram refused this unit: the others go on
+                return (
+                    await self._store.mark_op_items(
+                        op.id,
+                        ids,
+                        ItemStatus.FAILED,
+                        reason=str(exc)[:120],
+                        stats={"failed": len(ids)},
+                    ),
+                    [],
+                )
+            except (FloodWait, PeerFlood, Interrupted, NoPermission, ForwardsRestricted):
+                await self._store.mark_op_items(op.id, ids, ItemStatus.PLANNED)
+                raise
+        finally:
+            for path in prepared.files:
+                path.unlink(missing_ok=True)
+        # recorded at once: nothing between the send and this line may be interrupted, or the copy
+        # would exist while the item still says ``pending``
+        status = ItemStatus.REPOSTED if op.delete_original else ItemStatus.DONE
+        op = await self._store.mark_op_items(
+            op.id,
+            ids,
+            status,
+            stats={"done": len(ids)} if status is ItemStatus.DONE else {},
+            new_ids=dict(zip(ids, sent, strict=True)),
+        )
+        if same := await self._same_file_ids(op, guard, reader, unit, sent):
+            op = await self._store.mark_op_items(op.id, [], status, stats={"same_file": same})
+            self._reporter.notice("same_file", count=same)
+        return op, ids if status is ItemStatus.REPOSTED else []
+
+    async def _same_file_ids(
+        self, op: Op, guard: FloodGuard, reader: MessageReader, unit: Unit, sent: list[int]
+    ) -> int:
+        """How many of the new messages carry the very same file id as their original: a repost
+        exists to give the files new ids, so Telegram reusing one (the content is the same) is
+        said, not hidden."""
+        wanted = {m.id: m.file_key for m in unit.messages if m.file_key is not None}
+        if not wanted:
+            return 0
+        fresh = {m.id: m.file_key for m in await reader.get_messages(op.chat_id, sent)}
+        return sum(
+            1
+            for old, new in zip(unit.ids, sent, strict=True)
+            if old in wanted and fresh.get(new) == wanted[old]
+        )
+
+    def _on_transfer(self, phase: TransferPhase, msg_id: int, done: int, total: int) -> None:
+        if self._tracker is not None:
+            self._tracker.update(phase, msg_id, done, total)
 
     # ---- control (mirrors engine.backup.BackupWriter) ----------------------------------------
 

@@ -252,7 +252,7 @@ tgmirror undo O12                                        # chỉ cho edit (mục
 
 - Đích là chính nguồn → không có `--dst`. Cần quyền tương ứng (xoá/sửa/đăng), kiểm trước khi plan (mã 4).
 - Album không bao giờ bị tách (luật 4): xoá/đăng lại cả album; sửa caption của album là sửa tin mang caption.
-- `delete` gom tối đa 100 id mỗi lời gọi; `edit` một lời gọi mỗi tin; `repost` như chiến lược A/REFERENCE/B (đăng **im lặng** mặc định, vì đăng lại hàng loạt trên kênh sống là spam thông báo cho người theo dõi).
+- `delete` gom tối đa 100 id mỗi lời gọi; `edit` một lời gọi mỗi tin; `repost` — *đã cài ở 20.4 chỉ bằng chiến lược B (tải xuống rồi tải lên lại), theo yêu cầu "file id phải khác" của người dùng* — (đăng **im lặng** mặc định, vì đăng lại hàng loạt trên kênh sống là spam thông báo cho người theo dõi).
 
 ### 6.3 An toàn: plan → apply
 

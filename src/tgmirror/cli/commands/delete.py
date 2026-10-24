@@ -72,7 +72,7 @@ from tgmirror.engine.ops import (
 from tgmirror.engine.runner import RunControl
 from tgmirror.filters.model import FilterSpec
 from tgmirror.store.db import Store
-from tgmirror.store.ops import Op, OpStatus
+from tgmirror.store.ops import Op, OpKind, OpStatus
 from tgmirror.ui.lines import (
     backup_start_line,
     delete_backup_done_line,
@@ -318,6 +318,7 @@ class DeleteFlow:
         echo: Callable[..., None] = typer.echo,
     ) -> None:
         self._echo = echo
+        self._ack: bool | None = None
         self._rt = rt
         self._store = store
         self._gateway = gateway
@@ -422,7 +423,12 @@ class DeleteFlow:
                 resolved = await asyncio.to_thread(o.backup_to.expanduser().resolve)
                 await self._store.set_op_options(op.id, backup_dir=str(resolved))
             raise UsageProblem(f"{self._kind}.needs_yes", id=op.id, count=op.planned)
-        question = t(f"{self._kind}.type_count", count=op.planned, chat=op.chat_title, id=op.id)
+        after = ""
+        if op.kind is OpKind.REPOST:  # what becomes of the originals is part of the question
+            after = t("repost.after_delete" if op.delete_original else "repost.after_keep")
+        question = t(
+            f"{self._kind}.type_count", count=op.planned, chat=op.chat_title, id=op.id, after=after
+        )
         if (await self._prompter.text(question)).strip() != str(op.planned):
             await self._store.cancel_op(op.id)
             self._echo(t(f"{self._kind}.cancelled", id=op.id))
@@ -453,13 +459,19 @@ class DeleteFlow:
             # remembered at once: a plan whose backup was asked for is never applied without one,
             # even if this attempt stops at D3 below and `--resume` comes without the flag
             await self._store.set_op_options(op.id, backup_dir=str(resolved))
-        return BackupPlan(resolved, await self._acknowledged(op))
+        return BackupPlan(resolved, await self.acknowledged(op))
 
     async def _ask_backup_dir(self, op: Op) -> Path:
         suggested = self._rt.paths.data_dir / "safety" / f"O{op.id}"
         if await self._prompter.confirm(t("delete.confirm_backup_dir", dir=suggested)):
             return suggested
         return await wizard.ask_backup_dir(self._prompter)
+
+    async def acknowledged(self, op: Op) -> bool:
+        """Decision D3 for what the operation downloads (a backup, a repost), asked once."""
+        if self._ack is None:
+            self._ack = await self._acknowledged(op)
+        return self._ack
 
     async def _acknowledged(self, op: Op) -> bool:
         """Decision D3 for the backup, as ``BackupFlow._confirm_d3``: a chat that restricts saving
@@ -513,11 +525,13 @@ async def execute(
     op: Op,
     *,
     force_takeover: bool = False,
+    ack: bool = False,
 ) -> None:
-    """Carry out a confirmed operation in the foreground; print progress and the result."""
+    """Carry out a confirmed operation in the foreground; print progress and the result. ``ack``
+    is decision D3's statement, which a repost (it downloads) cannot start without."""
     control = RunControl()
     limits = rt.config().limits
-    running = await begin_op(store, op.id, force=force_takeover)
+    running = await begin_op(store, op.id, force=force_takeover, gateway=gateway, ack=ack)
     typer.echo(delete_start_line(running))
     with (
         stop_on_interrupt(control, lambda: typer.echo(t("run.stopping"), err=True)) as interrupt,
@@ -529,6 +543,7 @@ async def execute(
             limits,
             reporter=OpLineReporter(typer.echo, kind=op.kind.value),
             control=control,
+            tmp_dir=rt.paths.tmp_dir,
         )
         if listening:
             typer.echo(t("run.keys_hint"))

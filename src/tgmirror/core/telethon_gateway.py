@@ -8,6 +8,7 @@ adds reading and copying messages. The limiter is wired in at phase 4 (docs/06-l
 
 import asyncio
 import contextlib
+import contextvars
 import copy
 import itertools
 import logging
@@ -657,6 +658,10 @@ def _forward_result_ids(req: ForwardMessagesRequest, result: object) -> list[int
 
 
 # ---- strategy B: captions and files ---------------------------------------------------------
+
+# set around ``send_prepared`` (phase 20.4, ``repost``): the sends below read it, so the flag
+# need not travel through every helper between them
+_SILENT: contextvars.ContextVar[bool] = contextvars.ContextVar("tgmirror_silent", default=False)
 
 _SELF_CONTAINED = (
     types.MessageMediaPoll,
@@ -1997,6 +2002,7 @@ class TelethonGateway:
         *,
         topic: int | None = None,
         reply_to: int | None = None,
+        silent: bool = False,
     ) -> list[int]:
         if isinstance(prepared.handle, FromBackup):
             return await self._send_from_backup(
@@ -2005,6 +2011,21 @@ class TelethonGateway:
         fetched = prepared.handle
         assert isinstance(fetched, _Fetched)
         peer = await self._peer(dst)
+        token = _SILENT.set(silent)
+        try:
+            return await self._post_fetched(peer, fetched, caption, on_transfer, topic, reply_to)
+        finally:
+            _SILENT.reset(token)
+
+    async def _post_fetched(
+        self,
+        peer: object,
+        fetched: "_Fetched",
+        caption: CaptionPolicy,
+        on_transfer: OnTransfer | None,
+        topic: int | None,
+        reply_to: int | None,
+    ) -> list[int]:
         with mapped_errors():
             if len(fetched.items) > 1:
                 return await self._send_album(
@@ -2203,6 +2224,7 @@ class TelethonGateway:
                 parse_mode=None,  # the entities are the formatting: nothing to parse as markdown
                 thumb=None if item.thumb is None else str(item.thumb),
                 reply_to=reply,
+                silent=_SILENT.get() or None,
                 **extra,
             )
         elif media is None or isinstance(media, types.MessageMediaWebPage):
@@ -2217,6 +2239,7 @@ class TelethonGateway:
                 parse_mode=None,
                 link_preview=media is not None,
                 reply_to=reply,
+                silent=_SILENT.get() or None,
             )
         elif isinstance(media, _SELF_CONTAINED):
             sent = await self._client.send_message(
@@ -2226,6 +2249,7 @@ class TelethonGateway:
                 formatting_entities=entities or None,
                 parse_mode=None,
                 reply_to=reply,
+                silent=_SILENT.get() or None,
             )
         else:
             raise PerMessage(f"unsupported_media:{type(media).__name__}")
@@ -2344,7 +2368,11 @@ class TelethonGateway:
             reply = types.InputReplyToMessage(reply_to_msg_id=reply_to, top_msg_id=topic)
         elif topic is not None:
             reply = types.InputReplyToMessage(reply_to_msg_id=topic, top_msg_id=topic)
-        result = await self._client(SendMultiMediaRequest(peer, multi_media=media, reply_to=reply))
+        result = await self._client(
+            SendMultiMediaRequest(
+                peer, multi_media=media, reply_to=reply, silent=_SILENT.get() or None
+            )
+        )
         has_updates = types.Updates | types.UpdatesCombined
         updates = result.updates if isinstance(result, has_updates) else []
         id_map = {u.random_id: u.id for u in updates if isinstance(u, types.UpdateMessageID)}

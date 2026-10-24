@@ -189,10 +189,11 @@ def _counts(counts: dict[str, int]) -> str:
 
 
 def delete_plan_lines(op: Op, summary: PlanSummary) -> list[str]:
-    """The frozen plan of a ``delete`` (phase 20), for the person to judge before confirming."""
+    """The frozen plan of a ``delete`` or a ``repost`` (phases 20, 20.4), for the person to judge
+    before confirming; a repost says plainly what it costs the messages."""
     lines = [
         t(
-            "delete.plan_header",
+            f"{op.kind}.plan_header",
             id=op.id,
             chat=op.chat_title,
             messages=summary.messages,
@@ -222,6 +223,11 @@ def delete_plan_lines(op: Op, summary: PlanSummary) -> list[str]:
     if summary.last:
         lines.append(t("delete.plan_gap"))
         lines.extend(sample(item) for item in summary.last)
+    if op.kind is OpKind.REPOST:
+        how = t("repost.plan_silent" if op.silent else "repost.plan_notify")
+        lines.append(t("repost.plan_how", notify=how))
+        lines.append(t("repost.plan_delete" if op.delete_original else "repost.plan_keep"))
+        lines.append(t("repost.plan_left"))
     return lines
 
 
@@ -319,6 +325,10 @@ def delete_result_lines(final: Op) -> list[str]:
         lines.append(t(f"{kind}.left_alone", count=final.skipped))
     if final.gone:
         lines.append(t(f"{kind}.gone", count=final.gone))
+    if final.unsupported:
+        lines.append(t("repost.unsupported", count=final.unsupported))
+    if final.same_file:
+        lines.append(t("repost.same_file_result", count=final.same_file))
     if final.failed and kind is not OpKind.DELETE:
         lines.append(t(f"{kind}.failed", count=final.failed, id=final.id))
     if final.backup_dir is not None and final.backup_done:

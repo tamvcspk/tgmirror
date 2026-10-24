@@ -96,6 +96,8 @@ class FakeGateway:
         self._export_extra: dict[tuple[int, int], _ExportExtra] = {}  # (channel, msg_id) -> extra
         self.slow_mode: dict[int, int] = {}  # channel -> slowmode_seconds (phase 19d1)
         self.premium = False
+        self.silent_sends: list[bool] = []  # ``silent`` of every send_prepared call
+        self.keep_file_ids = False  # a re-upload keeps the file's id (it should not: phase 20.4)
         self.uneditable: set[tuple[int, int]] = set()  # (chat, id) Telegram will not let us edit
         self.lossy: set[tuple[int, int]] = set()  # (chat, id) whose formatting HTML cannot carry
 
@@ -595,8 +597,10 @@ class FakeGateway:
         *,
         topic: int | None = None,
         reply_to: int | None = None,
+        silent: bool = False,
     ) -> list[int]:
         self._enter("send_prepared", dst, prepared.unit.ids, caption, topic)
+        self.silent_sends.append(silent)
         target = self._channel(dst)
         if not target.can_post:
             raise NoPermission(f"cannot post to channel {dst}")
@@ -612,9 +616,21 @@ class FakeGateway:
         texts = _rewrite_unit(prepared.unit, caption)
         for msg, text in zip(prepared.unit.messages, texts, strict=True):
             new_id = self._alloc_id(dst)
+            # a message uploaded again is a new message with a new file, whatever it was before
+            fresh: dict[str, object] = {}
+            if msg.is_forward:  # ... with no "Forwarded from" header
+                fresh = {"is_forward": False, "fwd_from_id": None, "fwd_from_name": None}
+            if msg.file_key is not None and not self.keep_file_ids:
+                fresh = {**fresh, "file_key": f"d{new_id}"}
             self.messages[dst].append(
                 replace(
-                    msg, id=new_id, grouped_id=gid, text=text, topic_id=topic, reply_to_id=reply_to
+                    msg,
+                    id=new_id,
+                    grouped_id=gid,
+                    text=text,
+                    topic_id=topic,
+                    reply_to_id=reply_to,
+                    **fresh,
                 )
             )
             new_ids.append(new_id)

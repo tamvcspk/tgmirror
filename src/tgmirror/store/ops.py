@@ -25,6 +25,7 @@ class OpKind(StrEnum):
     DELETE = "delete"
     EDIT = "edit"  # phase 20.3: change the text of messages; each item keeps what it was
     UNDO = "undo"  # phase 20.3: put the texts of an edit back (``options_json['undo_of']``)
+    REPOST = "repost"  # phase 20.4: post again at the end of the chat, then (optionally) delete
 
 
 class OpStatus(StrEnum):
@@ -48,6 +49,9 @@ RESUMABLE = (OpStatus.PLANNED, OpStatus.STOPPED, OpStatus.WAITING_FLOOD, OpStatu
 class ItemStatus(StrEnum):
     PLANNED = "planned"
     PENDING = "pending"  # written ahead of the Telegram call: its outcome is unknown until read
+    REPOSTED = (
+        "reposted"  # phase 20.4: the new copy exists (``new_msg_id``), the original not yet gone
+    )
     DONE = "done"
     FAILED = "failed"
     SKIPPED = "skipped"  # left alone on purpose; ``reason`` says why (gone, changed)
@@ -83,6 +87,7 @@ class OpItem:
     status: ItemStatus
     reason: str | None = None
     before_json: str | None = None
+    new_msg_id: int | None = None  # ``repost``: the id of the copy at the end of the chat
 
     @property
     def texts(self) -> tuple[str, str]:
@@ -131,12 +136,32 @@ class Op:
         return self.stats.get("gone", 0)
 
     @property
+    def unsupported(self) -> int:
+        """``repost``: messages (a poll, a game, ...) that cannot be posted again and were left."""
+        return self.stats.get("unsupported", 0)
+
+    @property
+    def same_file(self) -> int:
+        """``repost``: new messages that still carry their original's file id."""
+        return self.stats.get("same_file", 0)
+
+    @property
     def failed(self) -> int:
         return self.stats.get("failed", 0)
 
     @property
     def handled(self) -> int:
-        return self.done + self.skipped + self.gone + self.failed
+        return self.done + self.skipped + self.gone + self.failed + self.unsupported
+
+    @property
+    def delete_original(self) -> bool:
+        """A ``repost`` that also deletes what it posted again."""
+        return json.loads(self.options_json).get(DELETE_ORIGINAL) is True
+
+    @property
+    def silent(self) -> bool:
+        """A ``repost`` that does not notify the chat's followers (the default)."""
+        return json.loads(self.options_json).get(SILENT, True) is not False
 
     @property
     def undo_of(self) -> int | None:
@@ -166,6 +191,8 @@ class Op:
 BACKUP_DIR = "backup_dir"  # keys of ``ops.options_json`` (phase 20.2)
 BACKUP_DONE = "backup_done"
 UNDO_OF = "undo_of"  # phase 20.3
+DELETE_ORIGINAL = "delete_original"  # phase 20.4
+SILENT = "silent"
 TRANSFORM = "transform"
 
 OP_SELECT = (
@@ -207,6 +234,7 @@ def _item(row: Any) -> OpItem:
         status=ItemStatus(row["status"]),
         reason=row["reason"],
         before_json=row["before_json"],
+        new_msg_id=row["new_msg_id"],
     )
 
 
@@ -241,8 +269,8 @@ async def next_units(
     """The first ``limit`` units that still have an item in ``status``, oldest first, each with
     *all* its items in that status (an album comes out whole)."""
     cur = await db.execute(
-        "SELECT op_id, msg_id, unit_id, grouped_id, status, reason, before_json FROM op_items "
-        "WHERE op_id = ? AND status = ? AND unit_id IN ("
+        "SELECT op_id, msg_id, unit_id, grouped_id, status, reason, before_json, new_msg_id "
+        "FROM op_items WHERE op_id = ? AND status = ? AND unit_id IN ("
         "  SELECT DISTINCT unit_id FROM op_items WHERE op_id = ? AND status = ? "
         "  ORDER BY unit_id LIMIT ?) "
         "ORDER BY unit_id, msg_id",
@@ -253,8 +281,8 @@ async def next_units(
 
 async def items_in(db: aiosqlite.Connection, op_id: int, status: ItemStatus) -> list[OpItem]:
     cur = await db.execute(
-        "SELECT op_id, msg_id, unit_id, grouped_id, status, reason, before_json FROM op_items "
-        "WHERE op_id = ? AND status = ? ORDER BY unit_id, msg_id",
+        "SELECT op_id, msg_id, unit_id, grouped_id, status, reason, before_json, new_msg_id "
+        "FROM op_items WHERE op_id = ? AND status = ? ORDER BY unit_id, msg_id",
         (op_id, status),
     )
     return [_item(r) for r in await cur.fetchall()]

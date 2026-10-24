@@ -55,7 +55,7 @@ from tgmirror.engine.endpoints import (
     SameChannel,
     SourceRestricted,
 )
-from tgmirror.engine.ops import NotAdmin, OpNotFound
+from tgmirror.engine.ops import NotAdmin, OpNotFound, RepostNeedsAcknowledgement
 from tgmirror.engine.reupload import UnsupportedMedia
 from tgmirror.engine.runs import (
     BackupDirMissing,
@@ -124,6 +124,8 @@ def describe(exc: TgMirrorError) -> str:
             return t("err.dest_not_writable", title=exc.dst.title)
         case ForwardsRestricted():
             return t("err.forwards_restricted")
+        case RepostNeedsAcknowledgement():
+            return t("err.needs_admin_ack", title=exc.title)
         case NotAdmin():
             return t("err.not_admin", title=exc.chat.title)
         case NoPermission():

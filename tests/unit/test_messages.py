@@ -50,7 +50,10 @@ def test_every_key_used_in_the_source_exists() -> None:
         prefix = {"backup.py": "backup", "ops.py": "delete"}.get(path.name, "run")
         if path.parent.name != "engine":
             prefix = "run"
-        used |= {f"{prefix}.{c}" for c in re.findall(r"""\.notice\(\s*["']([a-z_]+)["']""", text)}
+        for code in re.findall(r"""\.notice\(\s*["']([a-z_]+)["']""", text):
+            # phase 20.4: the notices only a repost raises are worded as ``repost.<code>``
+            own = path.name == "ops.py" and code in ("same_file", "settled_repost")
+            used.add(f"repost.{code}" if own else f"{prefix}.{code}")
         used |= {
             f"warn.{w}" for w in re.findall(r"""warnings\.append\(\s*["']([a-z_]+)["']""", text)
         }

@@ -644,13 +644,15 @@ class TelegramGateway(Protocol):
         *,
         topic: int | None = None,
         reply_to: int | None = None,
+        silent: bool = False,
     ) -> list[int]:
         """Strategy B, the write half: send the unit as new messages (one album for an album, text
         for text, the poll/location/contact itself for those) and return their ids in the
         destination, aligned with ``prepared.unit``. ``caption`` rewrites the captions of media;
         ``on_transfer`` hears how far the upload is. A unit already ``uploaded`` is only
         posted. ``topic`` targets a destination topic (phase 8); ``reply_to`` (phase 19c) is the id,
-        in ``dst``, of the message the new one answers (an album answers as a whole)."""
+        in ``dst``, of the message the new one answers (an album answers as a whole).
+        ``silent`` (phase 20.4, ``repost``) posts without notifying the chat's followers."""
         ...
 
     async def send_text(

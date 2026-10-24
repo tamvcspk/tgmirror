@@ -1153,9 +1153,13 @@ class Store:
         *,
         reason: str | None = None,
         stats: Mapping[str, int] | None = None,
+        new_ids: Mapping[int, int] | None = None,
+        before_json: str | None = None,
     ) -> Op:
         """Move items to ``status`` and add ``stats`` to the operation's counters, in one
-        transaction: the write-ahead (``pending``) and the commit (``done``) of a batch."""
+        transaction: the write-ahead (``pending``) and the commit (``done``) of a batch.
+        ``new_ids`` (phase 20.4) records the copy each message was posted as; ``before_json``
+        replaces what the items carry (a ``repost`` notes the chat's tail before it posts)."""
         ts = self._ts()
         async with self._tx() as db:
             cur = await db.execute("SELECT stats_json FROM ops WHERE id = ?", (op_id,))
@@ -1169,6 +1173,16 @@ class Store:
                 "UPDATE op_items SET status = ?, reason = ? WHERE op_id = ? AND msg_id = ?",
                 [(status, reason, op_id, msg_id) for msg_id in msg_ids],
             )
+            if new_ids:
+                await db.executemany(
+                    "UPDATE op_items SET new_msg_id = ? WHERE op_id = ? AND msg_id = ?",
+                    [(new, op_id, old) for old, new in new_ids.items()],
+                )
+            if before_json is not None:
+                await db.executemany(
+                    "UPDATE op_items SET before_json = ? WHERE op_id = ? AND msg_id = ?",
+                    [(before_json, op_id, msg_id) for msg_id in msg_ids],
+                )
             await db.execute(
                 "UPDATE ops SET stats_json = ?, updated_at = ? WHERE id = ?",
                 (json.dumps(merged, sort_keys=True), ts, op_id),

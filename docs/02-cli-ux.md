@@ -371,7 +371,26 @@ tgmirror delete "@kenh_cua_toi" --hashtag "#ads" --yes --expect 412 --backup-to 
 
 **Giao diện full-screen**: mục "Xoá tin trong kênh của mình…" chạy đúng các câu hỏi trên (chọn kênh mình quản trị → bộ lọc → xem kế hoạch → gõ lại số tin → có backup không / lưu ở đâu) rồi một màn hình tiến độ hai chặng (backup, rồi xoá) với `p`/`r`/`q`; ở màn hình "Khám phá" phím `d` mở cùng wizard với kênh và bộ lọc đã chọn sẵn (bộ lọc rỗng bị từ chối, như dòng lệnh không có `--all`).
 
-Chưa có (các lát sau của Phase 20, xem `06-lo-trinh.md`): `repost`.
+Chưa có (lát sau của Phase 20, xem `06-lo-trinh.md`): sửa theo `msg_map` (20.5).
+
+## Đăng lại tin (`tgmirror repost`, Phase 20.4, D10)
+
+`tgmirror repost [<src>] <cờ lọc>` đăng lại các tin mà filter chọn **ở cuối** kênh/nhóm mà tài khoản quản trị, mỗi tin là một **tin mới hoàn toàn**: id mới, **file id mới** (tải xuống rồi tải lên lại, không forward, không gửi theo tham chiếu), không có header "Forwarded from" (một tin forward trở thành tin của kênh). Cùng luật 11 như `delete`:
+
+```bash
+tgmirror repost "@kenh_cua_toi" --forwarded --hashtag "#news"                        # plan → gõ lại số tin → đăng lại, GIỮ bản gốc
+tgmirror repost "@kenh_cua_toi" --forwarded --delete-original --backup-to ./truoc     # đăng bản mới, rồi xoá từng bản gốc
+tgmirror repost "@kenh_cua_toi" --selection chon.yaml --yes --expect 37 --notify      # không tương tác, có thông báo
+tgmirror repost --resume O11 --yes --expect 37                                        # áp một plan đã lưu / làm tiếp
+```
+
+- **Plan** giống `delete` (số tin, đơn vị/album, loại, tháng, mẫu 5 + 5) rồi nói thẳng cái giá: tin mới **mất lượt xem, reaction, bình luận và ngày gốc**; link và reply trỏ tới id cũ không còn đúng; poll/game/hoá đơn không đăng lại được (để nguyên, và **không bao giờ bị xoá**). Xác nhận bằng cách gõ lại số tin (câu hỏi nói rõ bản gốc được giữ hay bị xoá) hoặc `--yes --expect N`; không có thì plan được giữ (`O<n>`, mã 2). Filter rỗng cần `--all`.
+- **Im lặng mặc định** (không thông báo cho người theo dõi — đăng lại hàng loạt trên kênh sống là một trận thông báo); `--notify` để có thông báo.
+- **`--delete-original`**: sau khi bản mới đã có, bản gốc bị **xoá** (không hoàn tác được); không bao giờ xoá tin chưa có bản mới. Có cờ này thì hỏi **backup** như `delete` (Có/Không ở terminal; `--backup-to DIR`/`--no-backup` không có terminal). Không có cờ thì bản gốc còn nguyên và không có câu hỏi backup.
+- **D3**: đăng lại là một lần tải xuống, nên kênh bật «Restrict saving content» cần `--yes-i-administer-this-channel` (hoặc, có terminal, câu Có/Không — tài khoản đã là admin vì plan đòi quyền đó); kiểm mỗi lần bắt đầu hay tiếp tục.
+- **File id**: Telegram có thể dùng lại một file có nội dung trùng; khi đó lệnh báo "N tin mới vẫn mang file id cũ" (dòng cảnh báo khi chạy và trong kết quả), không giấu.
+- Trong forum, tin mới ở lại **đúng topic** của tin gốc. Mỗi lần chỉ xử một đơn vị (tải → tải lên → ghi lại), nên dừng (`p`/`r`/`q`, Ctrl+C, `pause|stop`) rất gọn; kill giữa chừng rồi `--resume` đọc đuôi kênh để biết bản mới đã có chưa (không đăng trùng; chỗ nào không chắc thì để nguyên, ghi `ambiguous`).
+- Chưa có: tải song song (mỗi đơn vị tuần tự), nối lại reply giữa các tin cùng đăng lại, mục menu full-screen.
 
 ## Sửa tin tại chỗ (`tgmirror edit`, `tgmirror undo`, Phase 20.3, D10)
 

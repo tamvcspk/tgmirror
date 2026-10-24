@@ -239,10 +239,11 @@ class BackupLineReporter:
 
 
 class OpLineReporter:
-    """Plain-line progress for ``tgmirror delete`` (implements ``engine.ops.Reporter``)."""
+    """Plain-line progress for ``tgmirror delete``/``edit``/``undo``/``repost`` (implements
+    ``engine.ops.Reporter``; a repost also tells how far each file has gone)."""
 
     # the notices whose wording depends on what the operation does (the rest is the same for all)
-    OWN_NOTICES = ("settled", "flood_stopped")
+    OWN_NOTICES = ("settled", "flood_stopped", "settled_repost", "same_file")
 
     def __init__(
         self,
@@ -257,6 +258,11 @@ class OpLineReporter:
         self._interval = interval
         self._clock = clock
         self._last: float | None = None
+        self._transfer_lines = TransferLines(emit, interval=interval, clock=clock)
+
+    def transfer(self, transfer: Transfer) -> None:
+        """A repost downloads and uploads: the same "big file" lines a clone prints."""
+        self._transfer_lines.update(transfer)
 
     def notice(self, code: str, **params: object) -> None:
         prefix = self._kind if code in self.OWN_NOTICES else "delete"

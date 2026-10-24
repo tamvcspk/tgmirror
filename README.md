@@ -96,6 +96,7 @@ tgmirror backup "@my_channel" ./backups/my_channel  # save a source to a directo
 tgmirror restore ./backups/my_channel --dst-new --yes  # rebuild a channel from a backup directory (or `tgmirror restore` for the wizard); always re-uploads, since there is no server-side copy from disk
 tgmirror delete "@my_channel" --hashtag "#ads" --since 2024-01-01  # delete from a chat you administer: it plans first, shows what it would delete, and only deletes after you type the number of messages back (`--yes --expect N` without a terminal; `--resume O<n>` carries on; `--backup-to DIR` saves exactly those messages first and deletes only if the backup finished). Tried against a real account on 2026-10-23 (kill -9 mid-batch not yet)
 tgmirror edit "@my_channel" --hashtag "#ads" --transform strip.yaml  # change captions/text in place (the `caption` operations of a transform): plan with a before/after diff, type the count back; `tgmirror undo O<n>` puts the originals back
+tgmirror repost "@my_channel" --forwarded --delete-original  # post messages again at the end of the chat as new ones (new ids, new file ids, no "Forwarded from"), silently, then delete the originals; plans first, asks for a backup
 ```
 
 While a clone runs in a terminal: `p` pause (it holds until resumed), `r` resume, `q` stop; Ctrl+C also stops (exit 130). Everything runs in your terminal: no background process and no schedule.

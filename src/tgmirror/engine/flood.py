@@ -80,6 +80,7 @@ LANES: dict[str, str] = {
     "iter_messages": HISTORY,
     "get_messages": HISTORY,
     "count": HISTORY,
+    "last_message_id": HISTORY,
     "list_topics": HISTORY,
     "media_counters": HISTORY,
     "fetch": HISTORY,
