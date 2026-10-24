@@ -390,6 +390,7 @@ tgmirror undo --resume O10 --yes --expect 37
 - **Áp dụng**: đọc lại văn bản hiện tại của từng lô 10 tin, chỉ sửa tin còn đọc đúng như lúc plan; tin đã bị người khác sửa thì để nguyên, tin đã đọc đúng bản mới thì coi là xong. Mỗi lần sửa là một lời gọi (làn `edit` của limiter); một tin Telegram không cho sửa chỉ làm tin đó `failed` kèm lý do (`history O<n>` liệt kê tối đa 10 tin cùng lời Telegram trả lời), các tin khác đi tiếp. Đã thấy thật: tin **forward giữ header** (`MESSAGE_ID_INVALID`); tin sao chép bằng forward bỏ tác giả thì sửa được như tin thường. `p`/`r`/`q`, Ctrl+C, `tgmirror pause|stop`, `--resume` như `delete`.
 - **`undo [O<n>]`** (mặc định: lần sửa gần nhất có tin đã sửa) lập một plan mới đặt lại văn bản gốc của các tin mà lần sửa đó đã sửa, qua cùng bước xác nhận; tin bị sửa tiếp bởi người khác sau đó thì để nguyên. Mỗi lần sửa chỉ undo được một lần.
 - Transform có `topics`, `reply: keep`, `forward_header: keep` hoặc `links: rewrite` bị từ chối (mã 2): những thứ đó chỉ có nghĩa khi sao chép, hoặc là việc của `repost`/`topics split` (sửa tin không đổi được topic). Thiếu `--transform` hay không có thao tác `caption` cũng mã 2.
+- Telegram đánh nhãn "đã sửa" lên tin đã sửa (thấy trên app) nhưng không gửi thông báo cho người theo dõi.
 - Chưa có: mục menu full-screen "Sửa tin"; sửa các bản sao ở đích của một cặp theo `msg_map` (20.5).
 
 ## Khám phá nguồn (`tgmirror inspect`, Phase 18a)
