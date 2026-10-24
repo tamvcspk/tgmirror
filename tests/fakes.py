@@ -757,7 +757,18 @@ def _relink(text: str, msg: SrcMessage, policy: CaptionPolicy) -> str:
     ``https://<prefix>/<copy>``. The real gateway does it with entities (``test_transform.py``)."""
     if policy.links is None:
         return text
-    mapping = dict(policy.links.mapping)
+    mapping = policy.links.lookup()
+    if policy.links.names:  # ``edit --mirror``: links into the pair's source, found in the text
+        chats = "|".join(regex.escape(n) for n in policy.links.names)
+        return regex.sub(
+            rf"(?:https?://)?t\.me/(?:c/)?(?:{chats})/(\d+)\b",
+            lambda m: (
+                f"https://{policy.links.prefix}/{mapping[int(m.group(1))]}"
+                if int(m.group(1)) in mapping
+                else m.group(0)
+            ),
+            text,
+        )
     for source_id in msg.own_links:
         if source_id in mapping:
             text = regex.sub(

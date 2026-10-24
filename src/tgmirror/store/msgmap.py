@@ -209,6 +209,17 @@ async def dst_ids_of(
     return {int(r[0]): int(r[1]) for r in await cur.fetchall()}
 
 
+async def copies(db: aiosqlite.Connection, mirror_id: int) -> dict[int, int]:
+    """Every message the pair has copied: source id -> destination id (placeholders included, they
+    are messages of the destination too)."""
+    cur = await db.execute(
+        "SELECT src_msg_id, dst_msg_id FROM msg_map WHERE mirror_id = ? "
+        "AND status IN ('done', 'skipped') AND dst_msg_id IS NOT NULL",
+        (mirror_id,),
+    )
+    return {int(r[0]): int(r[1]) for r in await cur.fetchall()}
+
+
 async def last_done_dst_id(db: aiosqlite.Connection, mirror_id: int) -> int:
     cur = await db.execute(
         "SELECT COALESCE(MAX(dst_msg_id), 0) FROM msg_map WHERE mirror_id = ? AND status = 'done'",

@@ -447,7 +447,7 @@ topics:
 
 ### 11.4 Sửa tin
 
-*Đã cài ở Phase 20.3 (2026-10-24) cho phần sửa tại chỗ + `undo`; sửa theo `msg_map` (`--mirror`) là 20.5, chưa làm. Xem `06-lo-trinh.md`, "20.3 — đã cài".*
+*Đã cài ở Phase 20.3 (2026-10-24) cho phần sửa tại chỗ + `undo`, và ở Phase 20.5 (2026-10-25) cho `--mirror` (chọn cặp bằng một số lần chạy `R<n>`, không bằng `M<n>`). Xem `06-lo-trinh.md`, "20.3 — đã cài" và "20.5 — đã cài".*
 
 Là `edit` của Phase 20 (mục 6), không phải cơ chế mới. Bổ sung:
 

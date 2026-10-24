@@ -357,3 +357,21 @@ async def test_an_edit_that_changed_nothing_has_nothing_to_undo(rig: Rig) -> Non
     with pytest.raises(UndoError) as nothing:
         await plan_undo(store, rig.gw, edited)
     assert nothing.value.key == "undo.nothing"
+
+
+async def test_a_plan_with_a_scope_only_holds_the_copies_it_names(rig: Rig) -> None:
+    """``edit --mirror`` (phase 20.5): messages of the chat that are not copies of the pair are
+    not selected, whatever the filter says."""
+    from tgmirror.engine.ops import MirrorScope
+
+    rig.fill(ads=4)
+    store = await rig.store()
+    scope = MirrorScope(frozenset({2, 3}), {"mirror": 7, "run": 12})
+
+    plan = await plan_edit(
+        store, rig.gw, rig.chat, ADS, STRIP, "{}", LIMITS, nap=rig.sleep, scope=scope
+    )
+
+    assert plan.op is not None and plan.op.planned == 2
+    assert [i.msg_id for i in await store.op_items_in(plan.op.id, ItemStatus.PLANNED)] == [2, 3]
+    assert '"mirror": 7' in plan.op.options_json

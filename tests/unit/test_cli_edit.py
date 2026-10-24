@@ -276,3 +276,95 @@ def test_history_names_the_messages_telegram_would_not_let_us_edit(
     detail = cli.invoke(app, ["history", "O1"], obj=rt)
 
     assert "id 2: MESSAGE_AUTHOR_REQUIRED" in detail.output
+
+
+# ---- --mirror (phase 20.5): the copies of a pair -------------------------------------------
+
+LINKS = "version: 1\nlinks: rewrite\n"
+
+
+def cloned_pair(
+    make_runtime: MakeRuntime, gateway: FakeGateway
+) -> tuple[Runtime, ChannelInfo, ChannelInfo]:
+    """A source with links among its messages, cloned verbatim into a new chat: the copies still
+    point at the source (what a clone leaves when it does not rewrite links)."""
+    src = gateway.add_channel("Source", username="srcchan")
+    gateway.add_message(src.id, "first #keep", hashtags=("#keep",))
+    gateway.add_message(src.id, "see t.me/srcchan/1 and t.me/srcchan/4")
+    gateway.add_message(src.id, "elsewhere t.me/other/1 and gone t.me/srcchan/9")
+    gateway.add_message(src.id, "last")
+    rt = make_runtime(gateway=gateway)
+    cloned = cli.invoke(app, ["clone", "--src", "Source", "--dst-new", "Copy", "--yes"], obj=rt)
+    assert cloned.exit_code == 0, cloned.output
+    dst = next(c for c in gateway.channels.values() if c.title == "Copy")
+    return rt, src, dst
+
+
+def test_mirror_points_the_links_of_the_copies_at_the_copies(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    rt, _, dst = cloned_pair(make_runtime, gateway)
+    bare = str(dst.id).removeprefix("-100").removeprefix("-")
+    gateway.add_message(dst.id, "not from the pair: t.me/srcchan/1")  # somebody else's post
+    before = texts(gateway, dst)
+
+    result = cli.invoke(
+        app,
+        ["edit", "--mirror", "R1", *transform(tmp_path, LINKS), "--yes", "--expect", "1"],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    after = texts(gateway, dst)
+    assert after[1] == f"see https://t.me/c/{bare}/1 and https://t.me/c/{bare}/4"
+    # a link into another chat is not ours, nor one to a message the pair never copied
+    assert after[2] == "elsewhere t.me/other/1 and gone t.me/srcchan/9"
+    assert after[4] == before[4]  # the message the pair did not post is left alone
+    assert "Source" in result.output and "R1" in result.output  # the plan says whose copies
+
+    undone = cli.invoke(app, ["undo", "--yes", "--expect", "1"], obj=rt)
+    assert undone.exit_code == 0, undone.output
+    assert texts(gateway, dst) == before
+
+
+def test_mirror_edits_only_the_copies_with_a_caption_operation_too(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    rt, _, dst = cloned_pair(make_runtime, gateway)
+    gateway.add_message(dst.id, "mine #keep", hashtags=("#keep",))  # not a copy of the pair
+    strip = "version: 1\ncaption:\n  - remove_hashtags: ['#keep']\n  - text_too: true\n"
+
+    result = cli.invoke(
+        app,
+        ["edit", "--mirror", "1", *transform(tmp_path, strip), "--yes", "--expect", "1"],
+        obj=rt,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert texts(gateway, dst)[0] == "first"
+    assert texts(gateway, dst)[-1] == "mine #keep"
+
+
+def test_links_rewrite_needs_a_pair(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    rt, _, dst = cloned_pair(make_runtime, gateway)
+
+    result = cli.invoke(
+        app,
+        ["edit", "Copy", "--all", *transform(tmp_path, LINKS), "--yes", "--expect", "1"],
+        obj=rt,
+    )
+
+    assert result.exit_code == 2 and "--mirror" in result.output
+
+
+def test_mirror_does_not_go_with_a_source_or_an_unknown_run(
+    make_runtime: MakeRuntime, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    rt, _, _ = cloned_pair(make_runtime, gateway)
+
+    both = cli.invoke(app, ["edit", "Copy", "--mirror", "R1", *transform(tmp_path, LINKS)], obj=rt)
+    unknown = cli.invoke(app, ["edit", "--mirror", "R99", *transform(tmp_path, LINKS)], obj=rt)
+
+    assert both.exit_code == 2 and unknown.exit_code == 2

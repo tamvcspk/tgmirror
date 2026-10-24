@@ -160,6 +160,10 @@ Map Telethon exceptions to tgmirror errors at the gateway boundary (`core/errors
 
 Anything new in the gateway needs a `FakeGateway` counterpart and an engine-level test. Only `scripts/smoke.py` (manual, dedicated test channels) talks to real Telegram.
 
+## Rewriting links in place (Phase 20.5)
+
+`LinkRewrite` (`core/gateway.py`) has `mapping` (a tuple of pairs or a `Mapping`; `lookup()` gives the dict), `prefix` and, since `edit --mirror`, `names`: when set, the links to rewrite are recognised as links into *those* chats (the pair's source) instead of the chat of the message being read (`_op_rewrite_links` uses `links.names or names`) — a copy lives in the destination while its links still name the source. The fake does the same on plain text (`_relink`).
+
 ## Reposting (Phase 20.4)
 
 `tgmirror repost` reuses strategy B on the chat itself: `reader.prepare(chat, unit, tmp)` downloads, `send_prepared(chat, prepared, CaptionPolicy(), on_transfer, topic=, silent=)` uploads as a new message. Telegram gives an upload a new file id (Phase 20.4's whole point; it can still reuse a file whose content is identical, which `OpRunner._same_file_ids` reports through `SrcMessage.file_key`). `silent` is carried by the `_SILENT` `ContextVar` that `send_prepared` sets and `_send_one`/`_post_multi_media` read, so it need not be threaded through every helper. Probed live (2026-10-24): `forward_messages(drop_author=True)` inside one chat turns a forwarded message into an own one and `silent=True` works — but it keeps the document id, so it is *not* what `repost` uses.

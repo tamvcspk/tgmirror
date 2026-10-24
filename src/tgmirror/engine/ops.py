@@ -277,6 +277,15 @@ class EditSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class MirrorScope:
+    """``edit --mirror`` (phase 20.5): only the messages a pair copied are edited. ``copies`` are
+    the ids of those copies in the destination chat; ``options`` is noted on the operation."""
+
+    copies: frozenset[int]
+    options: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class EditPlan:
     """``op`` is ``None`` when no selected message would change (no row is made)."""
 
@@ -310,6 +319,7 @@ async def plan_edit(
     pushdown: bool = True,
     notifier: Reporter | None = None,
     nap: Sleep = asyncio.sleep,
+    scope: MirrorScope | None = None,
 ) -> EditPlan:
     """Read ``chat`` with ``spec``, work out what ``policy`` would make of each selected message's
     text and freeze those that would change, with the text before and after, as a ``planned``
@@ -379,8 +389,11 @@ async def plan_edit(
         async for item in stream:
             if isinstance(item, Skip):
                 continue
+            members = [m for m in item.messages if scope is None or m.id in scope.copies]
+            if not members:
+                continue  # not a copy of this pair: not ours to edit
             counts["units"] += 1
-            buffer.extend((m, item.ids[0]) for m in item.messages)
+            buffer.extend((m, item.ids[0]) for m in members)
             if len(buffer) >= MAX_IDS_PER_CALL:
                 await flush()
         await flush()
@@ -397,7 +410,8 @@ async def plan_edit(
     )
     if not items:
         return EditPlan(None, summary)
-    options = json.dumps({TRANSFORM: transform_json}, sort_keys=True)
+    noted: dict[str, object] = {TRANSFORM: transform_json, **(scope.options if scope else {})}
+    options = json.dumps(noted, sort_keys=True)
     op = await store.create_op(OpSpec(OpKind.EDIT, current, spec.to_json(), options), items)
     return EditPlan(op, summary)
 

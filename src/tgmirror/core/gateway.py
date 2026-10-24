@@ -5,7 +5,7 @@ Telegram network call is implemented behind this protocol and goes through the l
 The types live here rather than in ``engine/`` because the protocol itself refers to them.
 """
 
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -276,8 +276,15 @@ class LinkRewrite:
     link to ``mapping[id]`` in the destination, whose links start ``prefix``. Built by the runner
     from ``msg_map``; a link whose message is not in ``mapping`` is left as it is."""
 
-    mapping: tuple[tuple[int, int], ...]  # (source message id, destination message id)
+    mapping: tuple[tuple[int, int], ...] | Mapping[int, int]  # source id -> destination id
     prefix: str  # ``t.me/<username>`` or ``t.me/c/<number>``
+    # phase 20.5 (``edit --mirror``): the names the links to rewrite are into (the pair's source),
+    # when the message being edited sits in another chat than the one they point at
+    names: tuple[str, ...] = ()
+
+    def lookup(self) -> Mapping[int, int]:
+        """The mapping as something to look an id up in (a pair can hold tens of thousands)."""
+        return self.mapping if isinstance(self.mapping, Mapping) else dict(self.mapping)
 
 
 @dataclass(frozen=True, slots=True)

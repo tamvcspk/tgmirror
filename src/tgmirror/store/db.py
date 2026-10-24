@@ -336,6 +336,11 @@ class Store:
         async with self._lock:
             return await self._mirror_of_pair(self._conn, src_id, dst_id)
 
+    async def mirror_copies(self, mirror_id: int) -> dict[int, int]:
+        """What the pair copied: source message id -> destination message id (phase 20.5)."""
+        async with self._lock:
+            return await msgmap.copies(self._conn, mirror_id)
+
     async def count_copied(self, src_id: int, dst_id: int) -> int:
         """Messages the pair has copied so far (0 for a pair never cloned)."""
         async with self._lock:

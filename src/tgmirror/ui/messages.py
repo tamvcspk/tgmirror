@@ -2188,8 +2188,9 @@ VI.update(
         ),
         "edit.unsupported": (
             "Transform có {what}: sửa tin tại chỗ chỉ làm được các thao tác `caption` (và "
-            "`text_too`). Đổi topic hay đăng lại là việc của `repost`/`topics split`; link, reply "
-            "và header forward chỉ có nghĩa khi sao chép."
+            "`text_too`). Đổi topic hay đăng lại là việc của `repost`/`topics split`; reply "
+            "và header forward chỉ có nghĩa khi sao chép; `links: rewrite` chỉ đi với "
+            "--mirror R<n>."
         ),
         "edit.nothing": (
             "Không tin nào trong «{chat}» đổi với transform này: {unchanged} tin được chọn giữ "
@@ -2208,6 +2209,10 @@ VI.update(
             "trả lại. Gõ {count} để sửa"
         ),
         "edit.undo_hint": "Trả lại bản gốc: tgmirror undo O{id}",
+        "edit.plan_mirror": (
+            "Chỉ sửa các bản sao mà cặp «{src}» → «{dst}» (lần chạy R{run}) đã đăng: "
+            "{copies} bản sao."
+        ),
         "undo.type_count": (
             "Việc này đặt lại nội dung gốc của {count} tin trong «{chat}». Gõ {count} để làm"
         ),
@@ -2260,7 +2265,9 @@ EN.update(
         "edit.unsupported": (
             "The transform has {what}: editing in place only does the `caption` operations (and "
             "`text_too`). Moving to a topic or posting again is for `repost`/`topics split`; "
-            "links, replies and the forward header only mean something when copying."
+            "replies and the forward header only mean something when copying; `links: rewrite` "
+            "only "
+            "goes with --mirror R<n>."
         ),
         "edit.nothing": (
             "No message in '{chat}' changes with this transform: {unchanged} selected messages "
@@ -2280,6 +2287,10 @@ EN.update(
             "O{id}` puts them back. Type {count} to edit"
         ),
         "edit.undo_hint": "Put the originals back: tgmirror undo O{id}",
+        "edit.plan_mirror": (
+            "Only the copies the pair '{src}' -> '{dst}' (run R{run}) posted are edited: "
+            "{copies} copies."
+        ),
         "undo.type_count": (
             "This puts the original text back on {count} messages in '{chat}'. Type {count} to "
             "do it"

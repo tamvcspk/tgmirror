@@ -848,7 +848,7 @@ def _relinked_url(url: str, names: Collection[str], links: LinkRewrite) -> str |
     link = parse_message_link(url)
     if link is None or not points_at(link, names):
         return None
-    new_id = dict(links.mapping).get(link.msg_id)
+    new_id = links.lookup().get(link.msg_id)
     return None if new_id is None else relinked(url, new_id, links.prefix)
 
 
@@ -857,6 +857,7 @@ def _op_rewrite_links(
 ) -> tuple[str, list[object]]:
     """``links: rewrite``: a hyperlink gets a new address and keeps its words; a visible link is
     rewritten in the text, and the entities that covered it follow (formatting included)."""
+    names = links.names or names  # ``edit --mirror``: the links are into the pair's source
     edits: list[_Edit] = []
     out: list[object] = []
     for entity in entities:

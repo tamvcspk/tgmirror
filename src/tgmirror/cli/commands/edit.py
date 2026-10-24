@@ -15,7 +15,8 @@ copying, and ``topics``/``repost`` are the tools that move messages.
 """
 
 import asyncio
-from dataclasses import replace
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from typing import Annotated
 
 import typer
@@ -53,17 +54,22 @@ from tgmirror.cli.selection_options import (
     narrowed,
 )
 from tgmirror.cli.transform_options import TransformOption, resolve
-from tgmirror.core.gateway import CaptionPolicy
-from tgmirror.engine.ops import UndoError, plan_edit, plan_undo, resolve_op
+from tgmirror.core.errors import GatewayError
+from tgmirror.core.gateway import CaptionPolicy, ChannelInfo, LinkRewrite, TelegramGateway
+from tgmirror.engine.endpoints import find_channel
+from tgmirror.engine.ops import MirrorScope, UndoError, plan_edit, plan_undo, resolve_op
+from tgmirror.engine.runs import resolve_run
 from tgmirror.engine.transform import Transform
+from tgmirror.filters.model import FilterSpec
 from tgmirror.store.db import Store
 from tgmirror.store.ops import Op, OpKind
 from tgmirror.ui.lines import edit_plan_lines, undo_plan_lines
 from tgmirror.ui.messages import t
 
 
-def unsupported_in_edit(transform: Transform) -> str | None:
-    """What in ``transform`` an edit in place cannot do (``None``: nothing)."""
+def unsupported_in_edit(transform: Transform, *, mirror: bool = False) -> str | None:
+    """What in ``transform`` an edit in place cannot do (``None``: nothing). ``links: rewrite`` is
+    about the copies of a pair, so it is only for ``--mirror`` (phase 20.5)."""
     found = []
     if not transform.topics.is_empty:
         found.append("`topics`")
@@ -71,14 +77,57 @@ def unsupported_in_edit(transform: Transform) -> str | None:
         found.append("`reply: keep`")
     if transform.keep_forward_header:
         found.append("`forward_header: keep`")
-    if transform.rewrite_links:
+    if transform.rewrite_links and not mirror:
         found.append("`links: rewrite`")
     return ", ".join(found) or None
 
 
-def policy_of(transform: Transform) -> CaptionPolicy:
-    """The caption operations of a transform as the policy the gateway applies to a live text."""
-    return CaptionPolicy(ops=transform.caption, text_too=transform.text_too)
+def policy_of(transform: Transform, links: LinkRewrite | None = None) -> CaptionPolicy:
+    """The caption operations of a transform as the policy the gateway applies to a live text
+    (``links``: the rewrite of a ``--mirror`` edit, built from the pair's ``msg_map``)."""
+    return CaptionPolicy(ops=transform.caption, text_too=transform.text_too, links=links)
+
+
+@dataclass(frozen=True, slots=True)
+class MirrorTarget:
+    """What ``--mirror R<n>`` stands for (phase 20.5): the pair that run belongs to. The edit goes
+    to the destination chat, to the copies the pair made (and only those)."""
+
+    run_id: int
+    src_title: str
+    dst: ChannelInfo
+    scope: MirrorScope
+    links: LinkRewrite | None
+
+
+def _bare(chat_id: int) -> str:
+    return str(chat_id).removeprefix("-100").removeprefix("-")
+
+
+async def mirror_target(
+    store: Store,
+    gateway: TelegramGateway,
+    channels: Sequence[ChannelInfo],
+    ref: str,
+    transform: Transform,
+) -> MirrorTarget:
+    """The copies of the pair of run ``ref`` (``R12`` or ``12``) and, when the transform rewrites
+    links, the table that sends a link to a source message to its copy in the destination. The
+    source need not be reachable any more: its links are then recognised by its number alone."""
+    run_ = await resolve_run(store, ref.strip().lstrip("Rr"))
+    copies = await store.mirror_copies(run_.mirror_id)
+    dst = find_channel(channels, str(run_.dst_id))
+    names = {_bare(run_.src_id)}
+    try:
+        source = await gateway.get_channel(run_.src_id)
+    except GatewayError:
+        source = None
+    if source is not None and source.username:
+        names.add(source.username.casefold())
+    prefix = f"t.me/{dst.username}" if dst.username else f"t.me/c/{_bare(dst.id)}"
+    links = LinkRewrite(copies, prefix, tuple(sorted(names))) if transform.rewrite_links else None
+    scope = MirrorScope(frozenset(copies.values()), {"mirror": run_.mirror_id, "run": run_.id})
+    return MirrorTarget(run_.id, run_.src_title, dst, scope, links)
 
 
 class EditFlow(DeleteFlow):
@@ -87,22 +136,51 @@ class EditFlow(DeleteFlow):
 
     _kind = "edit"
 
-    def __init__(self, *args: object, transform: Transform, **kwargs: object) -> None:
+    def __init__(
+        self,
+        *args: object,
+        transform: Transform,
+        mirror: MirrorTarget | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self._transform = transform
+        self._mirror = mirror
+
+    async def _pick_chat(self) -> ChannelInfo:
+        return self._mirror.dst if self._mirror is not None else await super()._pick_chat()
+
+    async def _pick_filter(self, chat: ChannelInfo) -> FilterSpec:
+        """With ``--mirror`` the copies of the pair are what is selected: no filter is the usual
+        case, and needs no ``--all``."""
+        if self._mirror is not None and self._o.filters is None:
+            return FilterSpec()
+        return await super()._pick_filter(chat)
 
     async def planned(self) -> Op | None:
         chat = await self._pick_chat()
         spec = await self._pick_filter(chat)
+        mirror = self._mirror
+        if mirror is not None:
+            self._echo(
+                t(
+                    "edit.plan_mirror",
+                    run=mirror.run_id,
+                    src=mirror.src_title,
+                    dst=chat.title,
+                    copies=len(mirror.scope.copies),
+                )
+            )
         plan = await plan_edit(
             self._store,
             self._gateway,
             chat,
             spec,
-            policy_of(self._transform),
+            policy_of(self._transform, mirror.links if mirror else None),
             self._transform.to_json(),
             self._rt.config().limits,
             pushdown=self._o.pushdown,
+            scope=mirror.scope if mirror else None,
         )
         if plan.op is None:
             summary = plan.summary
@@ -145,6 +223,17 @@ def edit(
     ctx: typer.Context,
     src: Annotated[str | None, typer.Argument(help=SOURCE_HELP)] = None,
     transform_file: TransformOption = None,
+    mirror_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--mirror",
+            metavar="R<N>",
+            help="Edit the copies a pair made in its destination instead of a chat of your "
+            "choosing: N is a run of that pair (see `tgmirror history`). Needed for "
+            "`links: rewrite`, which points links to source messages at their copies "
+            "(the links a clone could not rewrite because the target was not copied yet).",
+        ),
+    ] = None,
     all_messages: Annotated[
         bool,
         typer.Option(
@@ -259,6 +348,8 @@ def edit(
             raise UsageProblem(
                 "err.conflicting_flags", flags="--resume / SRC / filter / --all / --transform"
             )
+        if mirror_ref is not None and (src is not None or resume is not None):
+            raise UsageProblem("err.conflicting_flags", flags="--mirror / SRC / --resume")
         options = DeleteOptions(
             src=src,
             all_messages=all_messages,
@@ -292,11 +383,24 @@ def edit(
                         )
                         options = replace(options, filters=narrowed(chosen, filters), src=named)
                     transform = await resolve(transform_file, from_selection)
-                    if unsupported := unsupported_in_edit(transform):
+                    if unsupported := unsupported_in_edit(transform, mirror=mirror_ref is not None):
                         raise UsageProblem("edit.unsupported", what=unsupported)
-                    if not transform.caption:
+                    if not transform.caption and not (mirror_ref and transform.rewrite_links):
                         raise UsageProblem("edit.needs_transform")
-                    flow = EditFlow(rt, store, conn.gateway, channels, options, transform=transform)
+                    target = (
+                        await mirror_target(store, conn.gateway, channels, mirror_ref, transform)
+                        if mirror_ref is not None
+                        else None
+                    )
+                    flow = EditFlow(
+                        rt,
+                        store,
+                        conn.gateway,
+                        channels,
+                        options,
+                        transform=transform,
+                        mirror=target,
+                    )
                     planned = await flow.planned()
                     if planned is None:
                         return

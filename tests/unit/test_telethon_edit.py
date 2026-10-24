@@ -153,3 +153,20 @@ async def test_telegram_saying_it_already_reads_that_is_not_an_error() -> None:
 )
 def test_a_message_that_cannot_be_edited_is_a_per_message_problem(raised: BaseException) -> None:
     assert isinstance(map_exception(raised), PerMessage)
+
+
+def test_links_into_the_pairs_source_are_pointed_at_the_copies_in_another_chat() -> None:
+    """``edit --mirror`` (phase 20.5): the message sits in the destination, the link names the
+    source, so ``LinkRewrite.names`` says which chat the links are into."""
+    from tgmirror.core.gateway import LinkRewrite
+
+    entities = [types.MessageEntityTextUrl(4, 4, url="https://t.me/srcchan/4")]
+    live = message("see docs", entities=entities)
+    policy = CaptionPolicy(links=LinkRewrite({4: 9}, "t.me/c/55", ("srcchan",)))
+
+    rewrite = _rewrite_message(live, policy)
+
+    assert rewrite.before == 'see <a href="https://t.me/srcchan/4">docs</a>'
+    assert rewrite.after == 'see <a href="https://t.me/c/55/9">docs</a>'
+    unnamed = CaptionPolicy(links=LinkRewrite({4: 9}, "t.me/c/55"))  # then only its own chat counts
+    assert _rewrite_message(live, unnamed).after == rewrite.before
