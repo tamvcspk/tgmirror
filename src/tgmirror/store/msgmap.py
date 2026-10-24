@@ -220,6 +220,27 @@ async def copies(db: aiosqlite.Connection, mirror_id: int) -> dict[int, int]:
     return {int(r[0]): int(r[1]) for r in await cur.fetchall()}
 
 
+@dataclass(frozen=True, slots=True)
+class CopyRow:
+    """One message of the destination that stands for a source message (phase 17): ``done`` is the
+    copy itself, otherwise the placeholder text posted in its place."""
+
+    src_id: int
+    dst_id: int
+    grouped_id: int | None
+    done: bool
+
+
+async def copy_rows(db: aiosqlite.Connection, mirror_id: int) -> list[CopyRow]:
+    """``copies`` with what ``sync-changes`` needs to judge each one, ascending by source id."""
+    cur = await db.execute(
+        "SELECT src_msg_id, dst_msg_id, grouped_id, status FROM msg_map WHERE mirror_id = ? "
+        "AND status IN ('done', 'skipped') AND dst_msg_id IS NOT NULL ORDER BY src_msg_id",
+        (mirror_id,),
+    )
+    return [CopyRow(int(r[0]), int(r[1]), r[2], r[3] == "done") for r in await cur.fetchall()]
+
+
 async def last_done_dst_id(db: aiosqlite.Connection, mirror_id: int) -> int:
     cur = await db.execute(
         "SELECT COALESCE(MAX(dst_msg_id), 0) FROM msg_map WHERE mirror_id = ? AND status = 'done'",

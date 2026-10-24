@@ -341,6 +341,11 @@ class Store:
         async with self._lock:
             return await msgmap.copies(self._conn, mirror_id)
 
+    async def mirror_copy_rows(self, mirror_id: int) -> list[msgmap.CopyRow]:
+        """``mirror_copies`` with each copy's album and whether it is a placeholder (phase 17)."""
+        async with self._lock:
+            return await msgmap.copy_rows(self._conn, mirror_id)
+
     async def count_copied(self, src_id: int, dst_id: int) -> int:
         """Messages the pair has copied so far (0 for a pair never cloned)."""
         async with self._lock:

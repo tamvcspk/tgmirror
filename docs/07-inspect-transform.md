@@ -272,6 +272,8 @@ tgmirror undo O12                                        # chỉ cho edit (mục
 
 Phase 17 cần đúng máy của Phase 20: sửa/xoá tin ở đích theo `msg_map`, có write-ahead và reconcile. Đề xuất làm Phase 20 trước rồi Phase 17 thành một lệnh mỏng ("tin nguồn đã đổi/xoá → plan edit/delete trên đích"), dùng chỉ mục metadata (`edit_date`, tin vắng mặt khi `--refresh`) để biết cái gì đổi. Cần đổi số thứ tự phase — mục 10, Q7.
 
+*Đã cài ở Phase 17 (2026-10-24) là `tgmirror sync-changes`, khác đề xuất ở một điểm: nó **không** dùng chỉ mục metadata mà đọc lại nguồn theo id, vì chỉ mục là tiện ích dựng lại được và không bao giờ là cơ sở của một lần ghi (Phase 18b); "đọc không thấy" cũng được kiểm lại ở lúc áp dụng trước khi xoá. Xem `06-lo-trinh.md`, "Phase 17 — ghi chú", và `02-cli-ux.md`, "Đồng bộ thay đổi của nguồn".*
+
 ## 7. Ảnh hưởng tới kiến trúc và luật cứng
 
 - **Gateway** thêm: `delete_messages`, `edit_message`, `search_counters`; `SrcMessage` thêm trường (mục 3.3). `FakeGateway` cài cả ba, cùng `poison`/`fail_next`.

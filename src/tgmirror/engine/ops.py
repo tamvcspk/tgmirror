@@ -761,11 +761,12 @@ class OpRunner:
     ) -> Op:
         ids = [item.msg_id for unit in batch for item in unit]
         live = {m.id: m for m in await reader.get_messages(op.chat_id, ids)}
+        back = await self._back_at_source(op, reader, batch)
         keep: list[int] = []
-        changed: list[int] = []
+        changed: list[int] = [i for i in ids if i in back and i in live]
         gone: list[int] = []
         for unit in batch:
-            members = [live[i.msg_id] for i in unit if i.msg_id in live]
+            members = [live[i.msg_id] for i in unit if i.msg_id in live and i.msg_id not in back]
             gone.extend(i.msg_id for i in unit if i.msg_id not in live)
             if not members:
                 continue
@@ -789,6 +790,24 @@ class OpRunner:
             op = await self._delete(op, guard, keep)
         self._reporter.progress(op)
         return op
+
+    @staticmethod
+    async def _back_at_source(
+        op: Op, reader: MessageReader, batch: Sequence[Sequence[OpItem]]
+    ) -> set[int]:
+        """``sync-changes`` (phase 17): the copies in ``batch`` that must not go. The plan took a
+        copy because its source message was not there; that is read once more now, and a copy
+        whose source is found (or that never noted which source it stood for) stays. Empty for
+        any other delete."""
+        if (source := op.sync_src) is None:
+            return set()
+        items = [item for unit in batch for item in unit]
+        by_source = {i.src_id: i.msg_id for i in items if i.src_id is not None}
+        back = {i.msg_id for i in items if i.src_id is None}
+        if by_source:
+            found = await reader.get_messages(source, list(by_source))
+            back.update(by_source[m.id] for m in found)
+        return back
 
     @staticmethod
     def _still_selected(members: list[SrcMessage], matcher: Matcher | None) -> bool:

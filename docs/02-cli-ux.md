@@ -371,7 +371,7 @@ tgmirror delete "@kenh_cua_toi" --hashtag "#ads" --yes --expect 412 --backup-to 
 
 **Giao diện full-screen**: mục "Xoá tin trong kênh của mình…" chạy đúng các câu hỏi trên (chọn kênh mình quản trị → bộ lọc → xem kế hoạch → gõ lại số tin → có backup không / lưu ở đâu) rồi một màn hình tiến độ hai chặng (backup, rồi xoá) với `p`/`r`/`q`; ở màn hình "Khám phá" phím `d` mở cùng wizard với kênh và bộ lọc đã chọn sẵn (bộ lọc rỗng bị từ chối, như dòng lệnh không có `--all`).
 
-Chưa có (lát sau của Phase 20, xem `06-lo-trinh.md`): sửa theo `msg_map` (20.5).
+Sửa các bản sao của một cặp theo `msg_map` là `edit --mirror` (20.5, xem "Sửa tin tại chỗ" dưới); đồng bộ xoá/sửa theo nguồn là `tgmirror sync-changes` (Phase 17).
 
 ## Đăng lại tin (`tgmirror repost`, Phase 20.4, D10)
 
@@ -412,6 +412,23 @@ tgmirror undo --resume O10 --yes --expect 37
 - Transform có `topics`, `reply: keep`, `forward_header: keep` bị từ chối (mã 2; `links: rewrite` chỉ đi với `--mirror`): những thứ đó chỉ có nghĩa khi sao chép, hoặc là việc của `repost`/`topics split` (sửa tin không đổi được topic). Thiếu `--transform` hay không có thao tác `caption` cũng mã 2.
 - Telegram đánh nhãn "đã sửa" lên tin đã sửa (thấy trên app) nhưng không gửi thông báo cho người theo dõi.
 - Chưa có: mục menu full-screen "Sửa tin".
+
+## Đồng bộ thay đổi của nguồn (`tgmirror sync-changes`, Phase 17, D10)
+
+Một lần clone chỉ sao chép một lần: sau đó nguồn có thể bị sửa chữ hay bị xoá tin, còn bản sao vẫn như cũ. `tgmirror sync-changes [R<n>]` đưa hai loại thay đổi đó sang bản sao ở kênh đích (kênh bạn quản trị), qua đúng plan → xác nhận → áp dụng của `edit`/`delete`:
+
+```bash
+tgmirror sync-changes                     # cặp của lần chạy mới nhất: plan → gõ lại TỔNG số thay đổi → áp dụng
+tgmirror sync-changes R12 --backup-to ./truoc-khi-xoa --yes --expect 5   # không tương tác; backup các bản sao sắp xoá trước
+tgmirror sync-changes R12                 # không terminal, không --yes: lưu hai plan O<a> (sửa) và O<b> (xoá), in cách áp từng cái
+tgmirror sync-changes --no-deletes        # chỉ phần sửa (hoặc --no-edits)
+```
+
+- **Cái được xét**: mọi bản sao mà cặp đã đăng (`msg_map`); nguồn được **đọc lại theo id** (qua `FloodGuard`, như `inspect`; không dùng chỉ mục metadata). Tin nguồn **đã sửa** (`edit_date`) mà chữ của bản sao khác với chữ mà transform của cặp tạo ra từ nguồn bây giờ → một mục của plan **sửa** (kèm diff trước/sau, `tgmirror undo O<n>` trả lại). Tin nguồn **không còn** mà bản sao vẫn còn → một mục của plan **xoá** (mẫu in ra dùng id ở đích; chỉ các tin nguồn đã mất của một album bị xoá bản sao). Bản sao đã bị sửa tay mà nguồn chưa từng sửa thì không bị đụng.
+- **Hai plan, một xác nhận** (luật 11): ở terminal gõ lại **tổng** sửa + xoá (câu hỏi nói rõ cả hai con số); không có terminal thì `--yes --expect N` với N là tổng (sai/thiếu → mã 2 và huỷ cả hai plan). Không có cả hai thì hai plan được giữ và lệnh in `tgmirror edit --resume O<a> --yes --expect …` và `tgmirror delete --resume O<b> --yes --expect …`.
+- **Xoá là nguy hiểm hơn sửa**: bản sao có thể là bản duy nhất còn lại của tin đã bị xoá ở nguồn, và xoá không hoàn tác được. Plan nói thẳng điều đó, cảnh báo khi ≥ 50% bản sao của cặp sắp bị xoá (có thể tài khoản không còn xem được lịch sử của nguồn), và có lưới an toàn như `delete`: ở terminal hỏi backup các bản sao sắp xoá, không terminal thì `--backup-to DIR`/`--no-backup` (kênh đích bật «Restrict saving content» cần thêm `--yes-i-administer-this-channel`, D3). Nguồn phải đọc được: không đọc được thì lệnh lỗi, không lập plan nào ("không thấy" không bao giờ bị coi là "đã xoá"). Trước mỗi lô xoá nguồn được **đọc lại một lần nữa**; bản sao mà tin nguồn lại xuất hiện thì giữ.
+- **Thứ tự**: backup (nếu có) → sửa → xoá; phần xoá chỉ bắt đầu khi phần sửa xong (không thì mã 1 và in cách làm tiếp). Mỗi bản sao được đọc lại ngay trước khi đụng tới; bản sao bị người khác sửa sau plan thì để nguyên.
+- **Không đồng bộ được**: media đã đổi, reaction, thứ tự; cặp thêm hashtag topic vào bản sao (`topic_as_hashtag`) không được sửa; bản sao forward giữ header Telegram không cho sửa (báo `failed` từng tin). `history O<n>` có dòng «Đồng bộ: theo nguồn …». Chưa có: mục menu full-screen, lọc các bản sao theo `--since`/`--hashtag`.
 
 ## Khám phá nguồn (`tgmirror inspect`, Phase 18a)
 

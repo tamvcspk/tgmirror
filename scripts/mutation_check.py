@@ -553,6 +553,24 @@ MUTATIONS = [
         "    except TgMirrorError as exc:",
         "    except TgMirrorError as exc:",
     ),
+    Mutation(
+        "sync: a copy whose source reappeared is deleted anyway",
+        "src/tgmirror/engine/ops.py",
+        "        if (source := op.sync_src) is None:\n            return set()\n",
+        "        if True:\n            return set()\n",
+    ),
+    Mutation(
+        "sync: a source message that is there counts as gone",
+        "src/tgmirror/engine/sync.py",
+        "            if found is None:\n                gone.append(row)",
+        "            if found is not None:\n                gone.append(row)",
+    ),
+    Mutation(
+        "sync: a copy that already matches its source is edited again",
+        "src/tgmirror/engine/sync.py",
+        "            elif want.after == have.before:\n                counts.in_sync += 1",
+        "            elif False:\n                counts.in_sync += 1",
+    ),
 ]
 
 

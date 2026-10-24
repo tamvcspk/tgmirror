@@ -2445,6 +2445,122 @@ EN.update(
 )
 
 
+VI.update(
+    {
+        "sync.nothing_asked": "Tắt cả --edits lẫn --deletes thì không còn gì để đồng bộ.",
+        "sync.plan_header": (
+            "Đồng bộ thay đổi của cặp «{src}» → «{dst}» (lần chạy R{run}): đã xét {copies} bản sao."
+        ),
+        "sync.plan_edits": (
+            "Sửa O{id}: {count} bản sao có chữ khác với nguồn bây giờ (nguồn đã sửa). Giữ được "
+            "bản gốc: `tgmirror undo O{id}`."
+        ),
+        "sync.plan_deletes": (
+            "Xoá O{id}: {count} bản sao có tin nguồn đã bị xoá (id dưới đây là id ở đích). Xoá "
+            "bản sao có thể là xoá bản duy nhất còn lại của tin đó, và không hoàn tác được."
+        ),
+        "sync.plan_left": (
+            "  để nguyên: {in_sync} bản sao đã khớp nguồn, {lossy} có định dạng không viết lại "
+            "nguyên vẹn được (không bao giờ sửa), {missing} bản sao đã mất ở đích; {already} tin "
+            "nguồn đã xoá mà bản sao cũng đã mất."
+        ),
+        "sync.plan_many_gone": (
+            "  Chú ý: {percent}% bản sao của cặp sắp bị xoá vì không còn thấy tin nguồn. Nếu tài "
+            "khoản không còn xem được lịch sử của nguồn thì đó không phải tin bị xoá — xem kỹ mẫu "
+            "rồi mới xác nhận."
+        ),
+        "sync.edits_off_topic_hashtag": (
+            "Cặp này thêm hashtag topic vào bản sao nên không tính lại được chữ của chúng: phần "
+            "sửa bị bỏ qua (phần xoá vẫn xét)."
+        ),
+        "sync.nothing": (
+            "Không có gì để đồng bộ vào «{dst}»: {copies} bản sao đã khớp nguồn ({in_sync} tin "
+            "đã sửa nhưng bản sao đã đúng, {lossy} có định dạng không viết lại nguyên vẹn được, "
+            "{missing} bản sao đã mất, {already} tin nguồn đã xoá mà bản sao cũng đã mất)."
+        ),
+        "sync.type_count": (
+            "Việc này sửa {edits} bản sao và XOÁ {deletes} bản sao trong «{chat}» (phần xoá không "
+            "hoàn tác được). Gõ {total} để làm"
+        ),
+        "sync.needs_expect": (
+            "--yes cần đi cùng --expect N: kế hoạch có {count} thay đổi (sửa cộng xoá). Chưa đổi "
+            "gì; kế hoạch đã bỏ."
+        ),
+        "sync.expect_mismatch": (
+            "Kế hoạch có {count} thay đổi, không phải {expected}: chưa đổi gì, kế hoạch đã bỏ."
+        ),
+        "sync.needs_yes": (
+            "Chưa đổi gì: cần xác nhận {count} thay đổi (kế hoạch {ids} đã lưu). Làm tiếp bằng: "
+            "{commands} — hoặc chạy lại lệnh này với --yes --expect {count}."
+        ),
+        "sync.cancelled": "Đã bỏ kế hoạch {ids}; chưa đổi gì.",
+        "sync.edits_unfinished": (
+            "Phần sửa O{id} chưa xong ({status}), nên phần xoá chưa bắt đầu. Làm tiếp: {commands}."
+        ),
+        "history.line_sync": "Đồng bộ:     theo nguồn {src}, lần chạy R{run}",
+    }
+)
+EN.update(
+    {
+        "sync.nothing_asked": "With both --edits and --deletes off there is nothing left to sync.",
+        "sync.plan_header": (
+            "Syncing the changes of the pair '{src}' -> '{dst}' (run R{run}): looked at {copies} "
+            "copies."
+        ),
+        "sync.plan_edits": (
+            "Edit O{id}: {count} copies read differently from their source now (it was edited). "
+            "The originals are kept: `tgmirror undo O{id}`."
+        ),
+        "sync.plan_deletes": (
+            "Delete O{id}: {count} copies whose source message was deleted (the ids below are the "
+            "destination's). Deleting a copy can mean deleting the last one left of that message, "
+            "and it cannot be undone."
+        ),
+        "sync.plan_left": (
+            "  left as they are: {in_sync} copies already match their source, {lossy} have "
+            "formatting that cannot be written back exactly (never edited), {missing} copies are "
+            "gone from the destination; {already} deleted source messages whose copy is gone too."
+        ),
+        "sync.plan_many_gone": (
+            "  Careful: {percent}% of the pair's copies would be deleted because their source "
+            "message is not found. If the account can no longer see the source's history that "
+            "does not mean they were deleted — look closely at the sample before confirming."
+        ),
+        "sync.edits_off_topic_hashtag": (
+            "This pair adds a topic hashtag to its copies, so their text cannot be worked out "
+            "again: the edits are skipped (the deletes are still looked at)."
+        ),
+        "sync.nothing": (
+            "Nothing to sync into '{dst}': {copies} copies already match their source ({in_sync} "
+            "edited ones whose copy is right, {lossy} with formatting that cannot be written "
+            "back exactly, {missing} copies gone, {already} deleted source messages whose copy is "
+            "gone too)."
+        ),
+        "sync.type_count": (
+            "This edits {edits} copies and DELETES {deletes} copies in '{chat}' (the deletes "
+            "cannot be undone). Type {total} to do it"
+        ),
+        "sync.needs_expect": (
+            "--yes needs --expect N: the plan has {count} changes (edits plus deletes). Nothing "
+            "changed; the plan is dropped."
+        ),
+        "sync.expect_mismatch": (
+            "The plan has {count} changes, not {expected}: nothing changed, the plan is dropped."
+        ),
+        "sync.needs_yes": (
+            "Nothing changed: {count} changes need confirming (plan {ids} is saved). Carry on "
+            "with: {commands} — or run this command again with --yes --expect {count}."
+        ),
+        "sync.cancelled": "Plan {ids} dropped; nothing changed.",
+        "sync.edits_unfinished": (
+            "Edit O{id} did not finish ({status}), so the deletes have not started. Carry on "
+            "with: {commands}."
+        ),
+        "history.line_sync": "Synced:      from source {src}, run R{run}",
+    }
+)
+
+
 def t(key: str, env: Mapping[str, str] | None = None, **params: object) -> str:
     """Look up ``key`` in the active language, falling back to English, then format it."""
     lang = (os.environ if env is None else env).get(ENV_LANG, "vi").lower()

@@ -90,6 +90,12 @@ class OpItem:
     new_msg_id: int | None = None  # ``repost``: the id of the copy at the end of the chat
 
     @property
+    def src_id(self) -> int | None:
+        """``sync-changes`` delete items: the source message this copy stood for."""
+        found = json.loads(self.before_json or "{}").get("src")
+        return found if isinstance(found, int) else None
+
+    @property
     def texts(self) -> tuple[str, str]:
         """``(before, after)`` of an ``edit``/``undo`` item: what the message read when the plan was
         made, and what it is to read afterwards."""
@@ -176,6 +182,19 @@ class Op:
         return found if isinstance(found, str) else None
 
     @property
+    def sync_src(self) -> int | None:
+        """``sync-changes`` (phase 17): the source chat whose deleted messages this ``delete``
+        removes the copies of; read again right before each copy goes."""
+        found = json.loads(self.options_json).get(SYNC_SRC)
+        return found if isinstance(found, int) else None
+
+    @property
+    def sync_run(self) -> int | None:
+        """The run of the pair a ``sync-changes`` plan was made for (``None`` for any other)."""
+        found = json.loads(self.options_json).get("run")
+        return found if self.sync_src is not None and isinstance(found, int) else None
+
+    @property
     def backup_dir(self) -> str | None:
         """The directory the plan is backed up into before it is applied (phase 20.2): set when
         the person asked for the safety net, whether or not that backup finished yet."""
@@ -194,6 +213,7 @@ UNDO_OF = "undo_of"  # phase 20.3
 DELETE_ORIGINAL = "delete_original"  # phase 20.4
 SILENT = "silent"
 TRANSFORM = "transform"
+SYNC_SRC = "sync_src"  # phase 17: the source chat of a `sync-changes` plan (an `int`)
 
 OP_SELECT = (
     "SELECT id, account, kind, chat_id, chat_title, chat_kind, filters_json, options_json, status, "

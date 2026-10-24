@@ -7,6 +7,7 @@ list of lines) never drift apart from writing the same thing twice.
 
 from tgmirror.engine.ops import EditSample, EditSummary, PlanSummary, Sample, UndoPlan
 from tgmirror.engine.status import StatusReport, rest_hours
+from tgmirror.engine.sync import SyncPlan
 from tgmirror.store.backups import Backup
 from tgmirror.store.ops import Op, OpKind, OpStatus
 from tgmirror.store.runs import FilterChange, FloodEvent, Run, RunStatus, StartedRun
@@ -188,6 +189,16 @@ def _counts(counts: dict[str, int]) -> str:
     return ", ".join(f"{name} {amount:,}" for name, amount in counts.items())
 
 
+def _sample_line(item: Sample) -> str:
+    return t(
+        "delete.plan_sample",
+        id=item.id,
+        date=item.date.astimezone().strftime("%Y-%m-%d"),
+        media=item.media,
+        text=item.text,
+    )
+
+
 def delete_plan_lines(op: Op, summary: PlanSummary) -> list[str]:
     """The frozen plan of a ``delete`` or a ``repost`` (phases 20, 20.4), for the person to judge
     before confirming; a repost says plainly what it costs the messages."""
@@ -210,19 +221,10 @@ def delete_plan_lines(op: Op, summary: PlanSummary) -> list[str]:
     else:
         lines.append(t("delete.plan_months", items=_counts(summary.by_month)))
 
-    def sample(item: Sample) -> str:
-        return t(
-            "delete.plan_sample",
-            id=item.id,
-            date=item.date.astimezone().strftime("%Y-%m-%d"),
-            media=item.media,
-            text=item.text,
-        )
-
-    lines.extend(sample(item) for item in summary.first)
+    lines.extend(_sample_line(item) for item in summary.first)
     if summary.last:
         lines.append(t("delete.plan_gap"))
-        lines.extend(sample(item) for item in summary.last)
+        lines.extend(_sample_line(item) for item in summary.last)
     if op.kind is OpKind.REPOST:
         how = t("repost.plan_silent" if op.silent else "repost.plan_notify")
         lines.append(t("repost.plan_how", notify=how))
@@ -271,6 +273,43 @@ def edit_plan_lines(op: Op, summary: EditSummary) -> list[str]:
 
 def _diff(item: EditSample) -> str:
     return t("edit.plan_diff", id=item.id, before=item.before, after=item.after)
+
+
+SYNC_MANY_GONE = 0.5  # a plan deleting this share of a pair's copies gets a warning
+
+
+def sync_plan_lines(run: Run, plan: SyncPlan) -> list[str]:
+    """The frozen plans of ``sync-changes`` (phase 17): the edits as a diff, the deletes as a
+    sample of the copies that would go, and what is left alone and why."""
+    s = plan.summary
+    lines = [t("sync.plan_header", src=s.src_title, dst=run.dst_title, run=run.id, copies=s.copies)]
+    if s.edits_off is not None:
+        lines.append(t(f"sync.edits_off_{s.edits_off}"))
+    if plan.edit is not None:
+        lines.append(t("sync.plan_edits", id=plan.edit.id, count=s.edits))
+        lines.extend(_diff(item) for item in s.edit_first)
+        if s.edit_last:
+            lines.append(t("delete.plan_gap"))
+            lines.extend(_diff(item) for item in s.edit_last)
+    if plan.delete is not None:
+        lines.append(t("sync.plan_deletes", id=plan.delete.id, count=s.deletes))
+        lines.extend(_sample_line(item) for item in s.delete_first)
+        if s.delete_last:
+            lines.append(t("delete.plan_gap"))
+            lines.extend(_sample_line(item) for item in s.delete_last)
+    if s.in_sync or s.lossy or s.copy_missing or s.already_gone:
+        lines.append(
+            t(
+                "sync.plan_left",
+                in_sync=s.in_sync,
+                lossy=s.lossy,
+                missing=s.copy_missing,
+                already=s.already_gone,
+            )
+        )
+    if s.delete_share >= SYNC_MANY_GONE:
+        lines.append(t("sync.plan_many_gone", percent=round(s.delete_share * 100)))
+    return lines
 
 
 def undo_plan_lines(plan: UndoPlan, edit_id: int) -> list[str]:

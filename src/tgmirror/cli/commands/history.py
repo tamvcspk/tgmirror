@@ -280,6 +280,8 @@ async def _detail_op(store: Store, item: Op, as_json: bool) -> None:
     say(op_counts_line(item))
     if item.undo_of is not None:
         say(t("history.line_undo_of", id=item.undo_of))
+    if item.sync_src is not None:
+        say(t("history.line_sync", src=item.sync_src, run=item.sync_run or "?"))
     if item.failed:
         failed = await store.op_items_in(item.id, ItemStatus.FAILED)
         say(t("history.failed_items", count=len(failed)))

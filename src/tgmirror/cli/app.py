@@ -27,6 +27,7 @@ from tgmirror.cli.commands import (
     retry,
     run,
     status,
+    sync,
     topics,
 )
 from tgmirror.cli.errors import run as run_command
@@ -134,6 +135,7 @@ app.command("delete", cls=SourceCommand)(delete.delete)
 app.command("edit", cls=SourceCommand)(edit.edit)
 app.command("repost", cls=SourceCommand)(repost.repost)
 app.command("undo")(edit.undo)
+app.command("sync-changes")(sync.sync_changes)
 app.command("inspect", cls=SourceCommand)(inspect.inspect_command)
 app.command("pause")(control.pause)
 app.command("stop")(control.stop)
