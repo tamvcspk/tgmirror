@@ -385,7 +385,7 @@ tgmirror repost --resume O11 --yes --expect 37                                  
 ```
 
 - **Plan** giống `delete` (số tin, đơn vị/album, loại, tháng, mẫu 5 + 5) rồi nói thẳng cái giá: tin mới **mất lượt xem, reaction, bình luận và ngày gốc**; link và reply trỏ tới id cũ không còn đúng; poll/game/hoá đơn không đăng lại được (để nguyên, và **không bao giờ bị xoá**). Xác nhận bằng cách gõ lại số tin (câu hỏi nói rõ bản gốc được giữ hay bị xoá) hoặc `--yes --expect N`; không có thì plan được giữ (`O<n>`, mã 2). Filter rỗng cần `--all`.
-- **Im lặng mặc định** (không thông báo cho người theo dõi — đăng lại hàng loạt trên kênh sống là một trận thông báo); `--notify` để có thông báo.
+- **Im lặng mặc định** (không thông báo cho người theo dõi — đăng lại hàng loạt trên kênh sống là một trận thông báo); `--notify` để có thông báo. Đã kiểm trên Telegram qua cờ `silent` của tin (mặc định `True`, `--notify` thì `False`); chủ kênh không tự thấy thông báo của tin mình đăng nên chưa kiểm bằng điện thoại.
 - **`--delete-original`**: sau khi bản mới đã có, bản gốc bị **xoá** (không hoàn tác được); không bao giờ xoá tin chưa có bản mới. Có cờ này thì hỏi **backup** như `delete` (Có/Không ở terminal; `--backup-to DIR`/`--no-backup` không có terminal). Không có cờ thì bản gốc còn nguyên và không có câu hỏi backup.
 - **D3**: đăng lại là một lần tải xuống, nên kênh bật «Restrict saving content» cần `--yes-i-administer-this-channel` (hoặc, có terminal, câu Có/Không — tài khoản đã là admin vì plan đòi quyền đó); kiểm mỗi lần bắt đầu hay tiếp tục.
 - **File id**: Telegram có thể dùng lại một file có nội dung trùng; khi đó lệnh báo "N tin mới vẫn mang file id cũ" (dòng cảnh báo khi chạy và trong kết quả), không giấu.
